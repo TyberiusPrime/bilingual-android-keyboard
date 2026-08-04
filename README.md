@@ -46,3 +46,10 @@ via `local.properties` (`sdk.dir=/path/to/android-sdk`) or `ANDROID_HOME`.
 ```
 
 The APK lands in `app/build/outputs/apk/debug/`.
+
+## Licence
+
+GPLv3. Relicensed from MIT early in the project (decision D13) so that
+AOSP-lineage keyboard source and GPL wordlists — the good German ones in
+particular — are usable. Dictionary and model files carry their own provenance
+and licence notes.

@@ -1,7 +1,8 @@
 # Design document
 
-**Status: empty on purpose.** This gets filled in from the interview; see
-`docs/android-ime-api.md` for what the platform allows.
+**Status: decisions D1–D15 settled in interview; architecture drafted from
+them. Not yet built.** See `docs/android-ime-api.md` for what the platform
+allows and what it withholds.
 
 ## Problem statement
 
@@ -19,14 +20,14 @@ Existing Android keyboards, on a Fairphone running /e/OS:
 Tracked here as they come up in the interview, and resolved into decisions
 below.
 
-- [ ] One multilingual model, or two monolingual models plus an arbiter?
-- [ ] Where do the dictionaries and the model come from, and under what licence?
-      The project is MIT; most good wordlists and every AOSP-derived keyboard
-      are GPL.
-- [ ] What is the confidence threshold for auto-replace, and how is undo
-      surfaced?
-- [ ] Does correction ever cross language boundaries within one sentence?
-- [ ] One-handed mode, or reachability handled purely by touch modelling?
+- [ ] What is the starting confidence threshold for auto-replace, in numbers?
+      Cannot be answered before there is something to measure.
+- [ ] Which concrete model and corpus. D12 sets the shape, not the artefact.
+- [ ] Does the umlaut correction from D5 apply inside English words too
+      (`uber` → `über`)? Probably not, but it is a real ambiguity.
+- [ ] Does the keyboard need to be `directBootAware` — i.e. do you unlock the
+      phone with a password rather than a PIN or fingerprint?
+- [ ] Emoji: search, recents, skin tones — entirely unaddressed so far.
 
 ## Decisions
 
@@ -159,8 +160,7 @@ The debug indicator from D4 becomes more important under this decision, not
 less — when a neural model corrects something wrongly, the visible belief state
 is the only cheap diagnostic available.
 
-Open: whether this is one multilingual model or two monolingual models with an
-arbiter. See open questions.
+Model shape is decided separately in D12.
 
 ### D11 — One-thumb use is common
 
@@ -168,3 +168,166 @@ Not exclusive, but frequent enough to be a constraint. Notably *not* chosen:
 a dedicated number row, and a taller-than-stock keyboard. So reach has to be
 solved without extra height — which points at touch-target biasing and
 reachability rather than at geometry.
+
+### D12 — One multilingual model over a shared subword vocabulary
+
+Asked as "one model or two", answered "whatever is most practical to get
+working". Taking that as licence to decide on engineering grounds: **one
+multilingual model.**
+
+The reasoning is D2. Two monolingual models plus an arbiter is genuinely easier
+to source and debug, and it fails at exactly the case this project exists for:
+in *"das ist ein total edge case"*, the English model scoring `edge` has never
+seen the German context that makes it predictable, and the German model scoring
+`total` cannot use the English continuation. An arbiter choosing between two
+context-blind scores cannot recover information that neither model ever had.
+A single model over a shared subword vocabulary treats code-switching as
+ordinary context, which is what it is for this user.
+
+Costs, accepted: harder to source (few off-the-shelf small DE+EN LMs; likely
+means training one on a mixed corpus), and no per-language scores to inspect
+when it misbehaves — which raises the value of the D4 indicator again.
+
+Practicality hedge, and the reason D7's interface boundary matters: the scorer
+is defined by an interface, not by the model. If a trained multilingual model
+turns out not to be reachable in reasonable time, two monolingual scorers can
+sit behind the same interface as a fallback without changing anything above it.
+
+### D13 — GPLv3
+
+Relicensed from MIT. Opens up AOSP-lineage keyboard source (LatinIME,
+OpenBoard, HeliBoard) as reference and as code, and the good GPL wordlists —
+which for German is close to a requirement. Also the norm for this category:
+essentially every FOSS keyboard is GPL.
+
+Practical consequence: dictionary and model artefacts need their provenance and
+licence recorded per file as they are added, not reconstructed later.
+
+### D14 — Backspace reverts an auto-correction; the strip offers "add word"
+
+Immediately after a silent auto-replace, backspace restores exactly what was
+typed rather than deleting a character, and the suggestion strip turns into a
+one-tap "keep this word" affordance.
+
+This is the mechanism D8 makes load-bearing: with no implicit learning, this is
+the *only* path by which the keyboard ever learns anything. Two requirements
+follow:
+
+- The revert window must be unambiguous — it applies only to the keystroke
+  immediately after the replacement, and any other input cancels it. A
+  backspace that sometimes deletes a character and sometimes restores a word is
+  worse than either.
+- The "keep this word" affordance is the entire feedback channel, so it appears
+  at the moment of annoyance and takes one tap. No settings screen.
+
+### D15 — Reach handled by touch modelling, no one-handed mode
+
+No compact mode, no visible change. The hit-tester learns that one-thumb taps
+drift predictably and compensates.
+
+Concretely this means the touch layer must not be a rectangle test. Each key
+carries a spatial likelihood, taps produce a distribution over keys rather than
+a single key, and that distribution is one input to the candidate scorer
+alongside the language model — which is the same architecture D7 requires for
+gesture typing later. Both decisions point at the same boundary.
+
+---
+
+## Architecture
+
+Falls out of the decisions above, particularly D7, D12 and D15.
+
+```
+      touch points
+           │
+           ▼
+   ┌───────────────┐   spatial likelihood per key, not a hit test (D15)
+   │  TouchModel   │   learns one-thumb drift; later, gesture paths (D7)
+   └───────┬───────┘
+           │  P(key | touch) distribution per tap
+           ▼
+   ┌───────────────┐   word candidates consistent with the tap sequence,
+   │  Candidates   │   from both languages, plus the personal store (D8)
+   └───────┬───────┘
+           │  candidate set
+           ▼
+   ┌───────────────┐   one multilingual subword LM (D12) scores candidates
+   │    Scorer     │   in sentence context; emits CALIBRATED confidence (D3)
+   └───────┬───────┘
+           │  ranked candidates + confidence
+           ▼
+   ┌───────────────┐   above threshold → silent replace (D3)
+   │    Policy     │   below → offer in strip (D9); never learns (D8)
+   └───────┬───────┘
+           │
+           ▼
+   ┌───────────────┐   composing-region bookkeeping, undo window (D14),
+   │  Editor I/O   │   reconciliation with onUpdateSelection
+   └───────────────┘
+           │
+           ▼
+     InputConnection
+```
+
+Notes on the layers that are not obvious:
+
+**TouchModel** is where complaint 3 is actually solved. Making the space bar
+wide (already done) helps; making the hit test probabilistic and letting the
+language model break ties is what removes the class of error. A tap landing
+between two keys should not be resolved by geometry alone when the sentence
+context makes one of them far more likely.
+
+**Scorer** must emit calibrated confidence, not just a ranking (D3). This is a
+distinct engineering task from getting good rankings, it is usually skipped,
+and skipping it is why other keyboards auto-correct confidently and wrongly.
+
+**Editor I/O** is the bookkeeping layer described in the API notes: it owns the
+composing region, tracks what was committed versus what the app reports, and
+handles `onUpdateSelection` contradicting it. Most "text got scrambled in app
+X" bugs live here. It is also where the D14 undo window lives, since that
+window is defined in terms of committed-text state.
+
+**Language inference is not a layer.** There is no component that decides "we
+are in German now". Per D2 and D12, language identity is a property of a
+candidate, resolved per word by the scorer. The D4 indicator reads out the
+scorer's belief; it does not drive anything.
+
+## Roadmap
+
+1. **Scaffold** — service, layout, CI, sideloadable APK. *Done.*
+2. **Typing that is pleasant without any intelligence** — final layout, umlaut
+   long-press with tuned timing (D5), double-space period (D6), suggestion
+   strip present but empty (D9). Daily-drivable, dumb.
+3. **Editor I/O done properly** — composing regions, selection reconciliation,
+   undo window (D14). No model yet. This is the layer that makes everything
+   above it trustworthy, and the one most likely to be underestimated.
+4. **Dictionaries and personal store** — GPL DE/EN wordlists with provenance
+   (D13), the add-word path (D8/D14), plain lookup-based suggestions.
+5. **TouchModel** — probabilistic hit testing, one-thumb drift compensation
+   (D15). Measurable against step 2 on typo rate.
+6. **The multilingual model** (D10/D12) — source or train, quantise, integrate
+   behind the scorer interface, measure latency on the actual Fairphone.
+7. **Calibration and threshold tuning** (D3) — the point at which auto-replace
+   is allowed to turn on at all.
+
+Steps 2–5 are worth having on their own; a keyboard with a stable layout, a
+generous space bar and no autocorrect is already better than what is being used
+today. Step 6 is where the project either delivers or does not, and it should
+not be started before step 3 is solid.
+
+## Risks
+
+- **Step 3 is underestimated.** Editor I/O looks like plumbing and is where
+  keyboards actually break. Budget accordingly.
+- **No suitable small DE+EN model exists off the shelf**, making step 6 a
+  training project rather than an integration one. Mitigated by the D12 hedge.
+- **Latency on real hardware.** A model that is fine on a laptop may not hold a
+  per-keystroke budget on a Fairphone. Measure early, on the device, not in an
+  emulator.
+- **No implicit learning (D8) caps the ceiling.** If the add-word path has any
+  friction at all, the keyboard will stay wrong about this user's vocabulary
+  indefinitely. This is the accepted cost of the chosen privacy posture, and it
+  makes step 4's UX unusually important.
+- **Daily-driver risk.** A crash makes the phone untypeable. Keep a second
+  keyboard installed; consider a crash guard that disables the fancy path
+  rather than the service.

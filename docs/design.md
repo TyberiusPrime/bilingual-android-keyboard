@@ -320,8 +320,8 @@ and neither has a long-press alternate to collide with.
 **Backspace**
 - Fires on press rather than release, and auto-repeats after 400ms at ~18/s.
   Repeating keys have to act on press or they feel broken.
-- **Swiping left** deletes a word per ~26dp of travel, and keeps going as long
-  as the swipe does.
+- **Swiping left ~30dp** deletes one word — once per swipe, not once per step.
+  Lift and swipe again for the next word.
 
   This started as a double tap and was changed after a day of use: two quick
   taps on backspace is exactly what you do when you want two letters gone, so
@@ -330,16 +330,25 @@ and neither has a long-press alternate to collide with.
   deletion. **Space keeps its double tap**, because there is no competing
   reason to hit space twice quickly.
 
+  Repeating per unit of travel was tried and removed the same day: a swipe that
+  keeps deleting takes out whole clauses before the finger stops, and a
+  destructive gesture wants a fixed, predictable cost.
+
 Auto-repeat ticks are delivered on a separate callback from real presses, so
 the machine gun is never mistaken for a deliberate gesture.
 
-**Both drags need the system to keep its hands off.** With edge-to-edge, the
-platform's back gesture claims the screen edges, and back while an IME is
-showing hides the keyboard — so dragging the space bar rightwards dismissed it.
-The keyboard claims its whole area via `setSystemGestureExclusionRects`. The
-symptom's asymmetry was the diagnosis: only rightward drags were stolen,
-because the space bar's right edge is near the screen edge while its left is
-shielded by the layer toggle and the globe.
+**Cursor drag must not walk off the end.** A `DPAD_LEFT`/`DPAD_RIGHT` that the
+text field cannot consume — because the cursor is already at the start or the
+end — is not swallowed. It falls through to Android's focus navigation, focus
+leaves the field, the input connection ends, and the keyboard vanishes. So each
+step checks there is a character to move past before asking to move.
+
+This was originally misdiagnosed as the platform's back gesture claiming the
+screen edge, on the strength of the symptom being rightward-only. The report
+that it happened *whenever the cursor reached the end of the text* is what
+identified it. The keyboard still claims its area via
+`setSystemGestureExclusionRects`, which is correct hygiene for a surface whose
+own gestures run to the screen edge, but it was not the cause.
 
 
 ---

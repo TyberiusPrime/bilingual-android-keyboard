@@ -492,10 +492,10 @@ class KeyboardView @JvmOverloads constructor(
                     continue
                 }
 
-                DragMode.DELETE_WORD -> {
-                    emitDeleteWordSteps(touch, x)
-                    continue
-                }
+                // One word per swipe, deliberately. Repeating on continued
+                // travel took whole clauses out before the finger stopped.
+                // Lift and swipe again for the next word.
+                DragMode.DELETE_WORD -> continue
 
                 DragMode.NONE -> Unit
             }
@@ -519,13 +519,12 @@ class KeyboardView @JvmOverloads constructor(
             // directional gesture matching the direction of deletion, and
             // rightward on backspace should stay inert.
             if (touch.placed.key.action == KeyAction.Backspace &&
-                touch.downX - x >= DELETE_WORD_STEP_DP * density
+                touch.downX - x >= DELETE_WORD_TRIGGER_DP * density
             ) {
                 touch.dragMode = DragMode.DELETE_WORD
                 touch.fired = true
-                touch.stepAnchorX = touch.downX
                 stopRepeat()
-                emitDeleteWordSteps(touch, x)
+                onDeleteWord?.invoke()
                 continue
             }
 
@@ -553,14 +552,6 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
-    /** One word per [DELETE_WORD_STEP_DP] of further leftward travel. */
-    private fun emitDeleteWordSteps(touch: Touch, x: Float) {
-        val step = DELETE_WORD_STEP_DP * density
-        while (touch.stepAnchorX - x >= step) {
-            touch.stepAnchorX -= step
-            onDeleteWord?.invoke()
-        }
-    }
 
     private fun startRepeat(pointerId: Int) {
         stopRepeat()
@@ -606,10 +597,12 @@ class KeyboardView @JvmOverloads constructor(
         const val CURSOR_STEP_DP = 12f
 
         /**
-         * Leftward travel on backspace per word deleted. Replaces the earlier
-         * double tap, which fired when two quick single deletes were meant.
+         * Leftward travel on backspace before a word is deleted. Fires once per
+         * swipe, not per step: repeating on continued travel removed whole
+         * clauses before the finger stopped. Replaces the earlier double tap,
+         * which fired when two quick single deletes were meant.
          */
-        const val DELETE_WORD_STEP_DP = 26f
+        const val DELETE_WORD_TRIGGER_DP = 30f
         val TRAIL_STRONG = Color.parseColor("#8B5CF6")
         val KEY_BG = Color.parseColor("#3A3A3C")
         val SPECIAL_BG = Color.parseColor("#2A2A2C")

@@ -229,6 +229,19 @@ class BilingualKeyboardService : InputMethodService() {
     /** Space-bar drag. One step per character, in either direction. */
     private fun moveCursor(direction: Int) {
         val ic = currentInputConnection ?: return
+
+        // A DPAD event the text field cannot consume — because the cursor is
+        // already at the end, or at the start — is not swallowed. It falls
+        // through to focus navigation, focus leaves the field, the input
+        // connection ends and the keyboard disappears. So check there is
+        // somewhere to move to before asking to move.
+        val canMove = if (direction > 0) {
+            !ic.getTextAfterCursor(1, 0).isNullOrEmpty()
+        } else {
+            !ic.getTextBeforeCursor(1, 0).isNullOrEmpty()
+        }
+        if (!canMove) return
+
         val code = if (direction > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))

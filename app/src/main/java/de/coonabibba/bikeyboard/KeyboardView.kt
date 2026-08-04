@@ -11,7 +11,16 @@ import android.os.Looper
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.graphics.ColorUtils
 import kotlin.math.max
+
+/**
+ * One entry in the recent-keypress trail.
+ *
+ * [alternate] records that the press produced a long-press alternate rather
+ * than the key's own label, which is drawn differently.
+ */
+data class TrailEntry(val key: Key, val alternate: Boolean)
 
 /**
  * Draws a [KeyboardLayout] and reports touches as key presses.
@@ -32,8 +41,11 @@ class KeyboardView @JvmOverloads constructor(
     /** Called when a key is released. */
     var onKey: ((Key) -> Unit)? = null
 
-    /** Called when a long-press alternate is chosen. Text is already shifted. */
-    var onAlternate: ((String) -> Unit)? = null
+    /**
+     * Called when a long-press alternate is chosen, with the key it came from
+     * and the text to insert. The text is already shifted.
+     */
+    var onAlternate: ((Key, String) -> Unit)? = null
 
     var layout: KeyboardLayout = Layouts.letters
         set(value) {
@@ -51,6 +63,40 @@ class KeyboardView @JvmOverloads constructor(
             field = value
             invalidate()
         }
+
+    /**
+     * Recently pressed keys, most recent first. The service owns the stack;
+     * this view only renders it.
+     */
+    var trail: List<TrailEntry> = emptyList()
+        set(value) {
+            field = value
+            trailDepths = buildTrailDepths(value)
+            invalidate()
+        }
+
+    /**
+     * Depth and alternate-ness per key, resolved once per trail change.
+     *
+     * A key can appear in the trail more than once; only its most recent
+     * occurrence counts, so a letter typed twice shows the stronger colour
+     * rather than blending the two.
+     */
+    private var trailDepths: Map<Key, Pair<Int, Boolean>> = emptyMap()
+
+    private fun buildTrailDepths(entries: List<TrailEntry>): Map<Key, Pair<Int, Boolean>> {
+        val depths = HashMap<Key, Pair<Int, Boolean>>()
+        entries.forEachIndexed { depth, entry ->
+            if (depth < TRAIL_STEPS && entry.key !in depths) {
+                depths[entry.key] = depth to entry.alternate
+            }
+        }
+        return depths
+    }
+
+    /** Full purple at depth 0, fading to the resting key colour by [TRAIL_STEPS]. */
+    private fun trailColor(depth: Int): Int =
+        ColorUtils.blendARGB(TRAIL_STRONG, KEY_BG, depth.toFloat() / TRAIL_STEPS)
 
     /**
      * [bounds] is what gets drawn; [hitBounds] is what gets touched. They differ
@@ -95,6 +141,7 @@ class KeyboardView @JvmOverloads constructor(
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = KEY_BG }
     private val specialKeyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SPECIAL_BG }
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
+    private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val popupPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = POPUP_BG }
     private val popupSelectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = POPUP_SELECTED_BG }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -164,12 +211,36 @@ class KeyboardView @JvmOverloads constructor(
 
         val heldKeys = activePointers.values
         placedKeys.forEach { placed ->
-            val paint = when {
-                heldKeys.any { it === placed } -> pressedPaint
+            val held = heldKeys.any { it === placed }
+            val basePaint = when {
+                held -> pressedPaint
                 placed.key.action is KeyAction.Text -> keyPaint
                 else -> specialKeyPaint
             }
-            canvas.drawRoundRect(placed.bounds, keyRadius, keyRadius, paint)
+            canvas.drawRoundRect(placed.bounds, keyRadius, keyRadius, basePaint)
+
+            // A finger currently on the key outranks its trail colour.
+            if (!held) {
+                trailDepths[placed.key]?.let { (depth, alternate) ->
+                    trailPaint.color = trailColor(depth)
+                    if (alternate) {
+                        // Only the top half, matching where the alternate's
+                        // hint is drawn — so "I typed the ü, not the u" reads
+                        // off the key without a second glance.
+                        canvas.save()
+                        canvas.clipRect(
+                            placed.bounds.left,
+                            placed.bounds.top,
+                            placed.bounds.right,
+                            placed.bounds.centerY(),
+                        )
+                        canvas.drawRoundRect(placed.bounds, keyRadius, keyRadius, trailPaint)
+                        canvas.restore()
+                    } else {
+                        canvas.drawRoundRect(placed.bounds, keyRadius, keyRadius, trailPaint)
+                    }
+                }
+            }
 
             val label = displayLabel(placed.key)
             if (label.isNotEmpty()) {
@@ -297,11 +368,12 @@ class KeyboardView @JvmOverloads constructor(
                 val pointerId = event.getPointerId(index)
                 val released = activePointers.remove(pointerId)
 
-                if (alternatesFor != null && pointerId == longPressPointer) {
+                val openPopup = alternatesFor
+                if (openPopup != null && pointerId == longPressPointer) {
                     val chosen = alternateLabels.getOrNull(selectedAlternate)
                     dismissLongPress()
                     invalidate()
-                    chosen?.let { onAlternate?.invoke(it) }
+                    chosen?.let { onAlternate?.invoke(openPopup.key, it) }
                 } else {
                     if (pointerId == longPressPointer) dismissLongPress()
                     invalidate()
@@ -371,6 +443,10 @@ class KeyboardView @JvmOverloads constructor(
         const val LONG_PRESS_MS = 280L
         const val SLOP_DP = 8f
         const val MIN_POPUP_CELL_DP = 40f
+
+        /** Trail entries beyond this depth are drawn as ordinary keys. */
+        const val TRAIL_STEPS = 5
+        val TRAIL_STRONG = Color.parseColor("#8B5CF6")
         val KEY_BG = Color.parseColor("#3A3A3C")
         val SPECIAL_BG = Color.parseColor("#2A2A2C")
         val PRESSED_BG = Color.parseColor("#5A5A5E")

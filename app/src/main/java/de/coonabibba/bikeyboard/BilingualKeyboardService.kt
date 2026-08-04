@@ -75,6 +75,10 @@ class BilingualKeyboardService : InputMethodService() {
         shifted = !isPassword && shouldAutoCapitalise(info)
         keyboardView.layout = Layouts.forLayer(layer)
         keyboardView.shifted = shifted
+
+        // A new field is a new context: nothing typed here yet.
+        expectedCursor = info.initialSelEnd
+        clearTrail()
     }
 
     private fun handleKey(key: Key) {
@@ -83,21 +87,28 @@ class BilingualKeyboardService : InputMethodService() {
             is KeyAction.Text -> {
                 val text = if (shifted) action.text.uppercase() else action.text
                 ic.commitText(text, 1)
+                noteInsertion(key, alternate = false, length = text.length)
                 if (shifted) {
                     shifted = false
                     keyboardView.shifted = false
                 }
             }
 
-            KeyAction.Space -> ic.commitText(" ", 1)
+            KeyAction.Space -> {
+                ic.commitText(" ", 1)
+                noteInsertion(key, alternate = false, length = 1)
+            }
 
             KeyAction.Backspace -> {
                 val selected = ic.getSelectedText(0)
                 if (selected.isNullOrEmpty()) {
                     ic.deleteSurroundingText(1, 0)
+                    if (expectedCursor > 0) expectedCursor -= 1
                 } else {
                     ic.commitText("", 1)
+                    expectedCursor = -1
                 }
+                popTrail()
             }
 
             KeyAction.Enter -> {
@@ -131,13 +142,74 @@ class BilingualKeyboardService : InputMethodService() {
      * commits verbatim — but it still consumes a one-shot shift, so holding
      * `a` for `Ä` does not leave the next letter capitalised too.
      */
-    private fun handleAlternate(text: String) {
+    private fun handleAlternate(key: Key, text: String) {
         val ic = currentInputConnection ?: return
         ic.commitText(text, 1)
+        noteInsertion(key, alternate = true, length = text.length)
         if (shifted) {
             shifted = false
             keyboardView.shifted = false
         }
+    }
+
+    // -- recent keypress trail ----------------------------------------------
+
+    /**
+     * The last [TRAIL_CAPACITY] insertions, most recent first.
+     *
+     * Only insertions go on the stack: backspace pops it rather than pushing,
+     * and modifiers (shift, layer toggle, globe) are not things you "typed".
+     * Enter is excluded too — it usually submits the field rather than adding
+     * to the text you are looking at.
+     */
+    private val trail = ArrayDeque<TrailEntry>()
+
+    private fun noteInsertion(key: Key, alternate: Boolean, length: Int) {
+        trail.addFirst(TrailEntry(key, alternate))
+        while (trail.size > TRAIL_CAPACITY) trail.removeLast()
+        if (expectedCursor >= 0) expectedCursor += length
+        publishTrail()
+    }
+
+    private fun popTrail() {
+        trail.removeFirstOrNull()
+        publishTrail()
+    }
+
+    private fun clearTrail() {
+        if (trail.isEmpty()) return
+        trail.clear()
+        publishTrail()
+    }
+
+    private fun publishTrail() {
+        keyboardView.trail = trail.toList()
+    }
+
+    /**
+     * Where the cursor should be if the only thing that moved it was us.
+     * -1 means "unknown", in which case no self-edit claim can be made.
+     *
+     * This is the smallest useful piece of the editor-I/O bookkeeping the
+     * design document defers to roadmap step 3, and it is deliberately
+     * conservative: anything it cannot account for clears the trail.
+     */
+    private var expectedCursor = -1
+
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
+        )
+        val ourOwnEdit = newSelStart == newSelEnd && newSelStart == expectedCursor
+        if (!ourOwnEdit) clearTrail()
+        expectedCursor = newSelEnd
     }
 
     private fun isPasswordField(info: EditorInfo): Boolean {
@@ -157,6 +229,15 @@ class BilingualKeyboardService : InputMethodService() {
             InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_PHONE, InputType.TYPE_CLASS_DATETIME -> true
             else -> false
         }
+
+    private companion object {
+        /**
+         * Deeper than the five steps the trail actually colours, so that
+         * backspacing past the visible gradient keeps revealing older presses
+         * instead of running out.
+         */
+        const val TRAIL_CAPACITY = 10
+    }
 
     private fun shouldAutoCapitalise(info: EditorInfo): Boolean {
         if (info.inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false

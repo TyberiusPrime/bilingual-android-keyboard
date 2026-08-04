@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D18 settled in interview; architecture drafted from
+**Status: decisions D1–D19 settled in interview; architecture drafted from
 them. Roadmap step 2 partially built.** See `docs/android-ime-api.md` for what
 the platform allows and what it withholds.
 
@@ -269,6 +269,35 @@ The keyboard is not available before first unlock. Confirmed as fine, which
 removes a real constraint: the personal store, dictionaries and model can live
 in ordinary credential-encrypted storage rather than device-encrypted storage,
 and nothing has to be split across the two.
+### D19 — Recent-keypress trail on the keys
+
+The last ten insertions are kept as a stack; the five most recent are drawn as
+a colour gradient on the keys themselves — full purple for the most recent,
+fading to the resting key colour by the fifth.
+
+Rules:
+
+- **Backspace pops the stack** rather than pushing to it, so deleting walks the
+  highlight backwards through what you typed. The stack is deeper than the
+  gradient (ten versus five) so backspacing past the visible colours keeps
+  revealing older presses instead of running out.
+- **Cursor movement clears it.** A trail is only meaningful for a contiguous
+  run of typing.
+- **A repeated key shows only its most recent depth.** Otherwise a doubled
+  letter would compete with itself.
+- **A long-press alternate colours only the top half of the key**, matching
+  where its hint is drawn — so "I typed the ü, not the u" is readable without
+  a second glance.
+- Only insertions are on the stack. Modifiers are not things you typed, and
+  Enter usually submits rather than adding to the text in front of you.
+
+Detecting "cursor moved" requires distinguishing our own edits from the app's,
+which is the editor-I/O bookkeeping that roadmap step 3 exists for. What is
+implemented here is the smallest useful piece of it — an expected cursor
+position, maintained across insertions and deletions — and it is deliberately
+conservative: anything it cannot account for clears the trail. It is a
+down payment on step 3, not a substitute for it.
+
 
 ---
 

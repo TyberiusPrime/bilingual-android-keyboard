@@ -96,6 +96,25 @@ class LayoutsTest {
         }
     }
 
+    /**
+     * Punctuation is reachable from the letter layer by long-press only. D6
+     * bars it as a tap target beside the space bar; a long-press cannot be hit
+     * by accident, so it does not reopen complaint 3.
+     */
+    @Test
+    fun `punctuation is on long-press but never a tap target on the letter layer`() {
+        val byLabel = Layouts.letters.rows.flatten().associateBy { it.label }
+        mapOf("v" to "'", "b" to ",", "n" to "!", "m" to "?").forEach { (key, expected) ->
+            assertEquals("long-press on $key", listOf(expected), byLabel.getValue(key).longPress)
+        }
+
+        val tapped = Layouts.letters.rows.flatten()
+            .mapNotNull { (it.action as? KeyAction.Text)?.text }
+        listOf(".", ",", "!", "?", "'").forEach {
+            assertTrue("$it is a tap target on the letter layer", it !in tapped)
+        }
+    }
+
     @Test
     fun `long-press alternates are never empty strings`() {
         Layer.entries.forEach { layer ->

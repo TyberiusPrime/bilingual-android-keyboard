@@ -83,6 +83,13 @@ object Layouts {
         's' to listOf("ß"),
         'j' to listOf("7"),
         'l' to listOf("9"),
+        // Punctuation reachable without the symbol layer. This does not
+        // reopen complaint 3: D6 bars punctuation as a *tap target* beside the
+        // space bar, and a long-press cannot be hit by accident.
+        'v' to listOf("'"),
+        'b' to listOf(","),
+        'n' to listOf("!"),
+        'm' to listOf("?"),
     )
 
     private fun letterRow(chars: String): List<Key> = chars.map { char ->

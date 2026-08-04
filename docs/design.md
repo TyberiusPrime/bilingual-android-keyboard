@@ -19,12 +19,14 @@ Existing Android keyboards, on a Fairphone running /e/OS:
 Tracked here as they come up in the interview, and resolved into decisions
 below.
 
-- [ ] Prediction engine: dictionary + n-gram, or something heavier?
-- [ ] What is the confidence threshold for auto-replace, and how is it undone?
+- [ ] One multilingual model, or two monolingual models plus an arbiter?
+- [ ] Where do the dictionaries and the model come from, and under what licence?
+      The project is MIT; most good wordlists and every AOSP-derived keyboard
+      are GPL.
+- [ ] What is the confidence threshold for auto-replace, and how is undo
+      surfaced?
 - [ ] Does correction ever cross language boundaries within one sentence?
-- [ ] **Unresolved conflict between D3 and D8** — see D8.
-- [ ] Is there a suggestion strip at all, given D3 and D8?
-- [ ] Keyboard height, number row, one- vs two-thumb use.
+- [ ] One-handed mode, or reachability handled purely by touch modelling?
 
 ## Decisions
 
@@ -124,9 +126,45 @@ project codeword gets silently corrected to a dictionary word — forever,
 because nothing in the loop ever teaches it otherwise. That is precisely the
 behaviour listed as complaint 4.
 
-The reconciliation on the table: **treat rejecting a correction as an explicit
-accept.** If the keyboard auto-replaces a word and the user immediately undoes
-it, that is an unambiguous signal about a specific word, given deliberately —
-it satisfies the spirit of "only what I explicitly accept" while closing the
-loop that otherwise stays open forever. Needs confirmation before it becomes a
-decision.
+**Resolved, after the conflict was put explicitly:** no implicit learning of
+any kind. The personal store changes only through an "add word" action. Undo
+is undo; it teaches the keyboard nothing.
+
+The accepted consequence is that a word the keyboard corrects wrongly will keep
+being corrected wrongly until it is added by hand. Two things follow, and they
+are now load-bearing rather than nice-to-have:
+
+- **Adding a word must be trivially reachable from the moment of annoyance** —
+  ideally one tap at the point where the bad correction happened, not a trip
+  into a settings screen. Under this policy it is the *only* feedback channel,
+  so its friction sets the ceiling on how good the keyboard ever gets for this
+  user.
+- **The auto-replace confidence threshold should start conservative**, because
+  the self-correcting mechanism that would normally excuse an aggressive
+  threshold does not exist here.
+
+### D9 — Always-visible suggestion strip
+
+A permanently present strip, so keyboard height never changes while typing. It
+carries below-threshold corrections (which under D3 are offered rather than
+applied) and next-word predictions.
+
+### D10 — Small on-device neural model from the start
+
+Not an n-gram-first approach. Accepted costs: tens of MB of APK, per-keystroke
+inference latency to budget for, and correction failures that are much harder
+to explain than a dictionary lookup's.
+
+The debug indicator from D4 becomes more important under this decision, not
+less — when a neural model corrects something wrongly, the visible belief state
+is the only cheap diagnostic available.
+
+Open: whether this is one multilingual model or two monolingual models with an
+arbiter. See open questions.
+
+### D11 — One-thumb use is common
+
+Not exclusive, but frequent enough to be a constraint. Notably *not* chosen:
+a dedicated number row, and a taller-than-stock keyboard. So reach has to be
+solved without extra height — which points at touch-target biasing and
+reachability rather than at geometry.

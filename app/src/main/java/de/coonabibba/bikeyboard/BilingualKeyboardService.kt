@@ -8,6 +8,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
@@ -41,6 +42,9 @@ class BilingualKeyboardService : InputMethodService() {
         // gesture pill are drawn on top of the bottom row — and swallow taps
         // meant for it.
         val root = FrameLayout(this).apply {
+            // Also opaque, so the navigation-bar padding below the keys is part
+            // of the keyboard rather than a window onto the app.
+            setBackgroundColor(ContextCompat.getColor(context, R.color.keyboard_background))
             addView(
                 keyboardView,
                 FrameLayout.LayoutParams(

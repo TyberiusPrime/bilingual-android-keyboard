@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#2A5D8F</color>
+
+    <!--
+        The keyboard surface. Must be opaque: nothing else paints behind an IME
+        window, so any transparency shows the app being typed into through the
+        gaps between keys.
+    -->
+    <color name="keyboard_background">#1A1A1C</color>
 </resources>

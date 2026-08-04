@@ -13,6 +13,7 @@ import android.os.Looper
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import kotlin.math.abs
 import kotlin.math.max
@@ -197,6 +198,13 @@ class KeyboardView @JvmOverloads constructor(
         color = HINT_FG
         textAlign = Paint.Align.RIGHT
         textSize = 10f * density
+    }
+
+    init {
+        // Nothing paints behind an IME window. Without an opaque surface of our
+        // own, the app being typed into shows through the gaps between keys and
+        // through the gutter.
+        setBackgroundColor(ContextCompat.getColor(context, R.color.keyboard_background))
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

@@ -21,6 +21,7 @@ class BilingualKeyboardService : InputMethodService() {
         keyboardView = KeyboardView(this).apply {
             layout = Layouts.forLayer(layer)
             onKey = ::handleKey
+            onAlternate = ::handleAlternate
         }
         return keyboardView
     }
@@ -76,12 +77,26 @@ class BilingualKeyboardService : InputMethodService() {
                 keyboardView.shifted = shifted
             }
 
-            is KeyAction.SwitchLayer -> {
-                layer = if (layer == action.layer) Layer.LETTERS else action.layer
+            KeyAction.ToggleLayer -> {
+                layer = Layouts.other(layer)
                 keyboardView.layout = Layouts.forLayer(layer)
             }
 
             KeyAction.NextInputMethod -> switchToNextInputMethod(false)
+        }
+    }
+
+    /**
+     * A long-press alternate. The view has already applied shift, so this
+     * commits verbatim — but it still consumes a one-shot shift, so holding
+     * `a` for `Ä` does not leave the next letter capitalised too.
+     */
+    private fun handleAlternate(text: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(text, 1)
+        if (shifted) {
+            shifted = false
+            keyboardView.shifted = false
         }
     }
 

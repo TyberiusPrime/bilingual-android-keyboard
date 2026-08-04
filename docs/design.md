@@ -1,8 +1,8 @@
 # Design document
 
-**Status: decisions D1–D15 settled in interview; architecture drafted from
-them. Not yet built.** See `docs/android-ime-api.md` for what the platform
-allows and what it withholds.
+**Status: decisions D1–D18 settled in interview; architecture drafted from
+them. Roadmap step 2 partially built.** See `docs/android-ime-api.md` for what
+the platform allows and what it withholds.
 
 ## Problem statement
 
@@ -25,9 +25,10 @@ below.
 - [ ] Which concrete model and corpus. D12 sets the shape, not the artefact.
 - [ ] Does the umlaut correction from D5 apply inside English words too
       (`uber` → `über`)? Probably not, but it is a real ambiguity.
-- [ ] Does the keyboard need to be `directBootAware` — i.e. do you unlock the
-      phone with a password rather than a PIN or fingerprint?
 - [ ] Emoji: search, recents, skin tones — entirely unaddressed so far.
+- [ ] **Are `7` on `j` and `9` on `l` acceptable?** See D17; this is the one
+      arbitrary placement in the layout and the likeliest thing to want changed
+      after a week of real use.
 
 ## Decisions
 
@@ -231,6 +232,44 @@ a single key, and that distribution is one input to the candidate scorer
 alongside the language model — which is the same architecture D7 requires for
 gesture typing later. Both decisions point at the same boundary.
 
+### D16 — The layer toggle never moves
+
+The layer-toggle key occupies the identical row, position and width on every
+layer. Enforced by `LayoutsTest`, and enforced structurally by the action being
+`ToggleLayer` rather than `SwitchLayer(target)` — with a toggle there is nothing
+for a second layer-switch key elsewhere to *mean*, so the shape of the type
+makes the constraint hard to violate by accident.
+
+Direct consequence: **there is no third "more symbols" layer.** The rarer glyphs
+(`_ [ ] { } < > \ | € § …`) hang off long-press on the symbol layer instead. A
+third layer would need either a second toggle position or a three-way cycle,
+and both break the rule.
+
+### D17 — Digits on long-press; umlauts win the keys they share
+
+Digits sit on the top row in positional order — `q`=1, `w`=2, … `p`=0, matching
+a number row — reachable by long-press.
+
+The collision: positionally `u`=7 and `o`=9, and those are exactly the ü/ö keys.
+Per the constraint, umlauts win. The two displaced digits move to the nearest
+keys below them on a staggered QWERTY: **7 on `j`, 9 on `l`**. `a` and `s` carry
+`ä` and `ß` and no digits.
+
+This keeps all ten digits reachable without the symbol layer, which is the point
+of the constraint, at the cost of two of them not being where the positional
+rule would put them. Flagged as an open question because it is a guess about a
+habit, and habits are measured rather than reasoned about.
+
+The first alternate of every key is drawn small in its corner, so the digits and
+umlauts are discoverable without holding each key to find out.
+
+### D18 — Not `directBootAware`
+
+The keyboard is not available before first unlock. Confirmed as fine, which
+removes a real constraint: the personal store, dictionaries and model can live
+in ordinary credential-encrypted storage rather than device-encrypted storage,
+and nothing has to be split across the two.
+
 ---
 
 ## Architecture
@@ -295,9 +334,11 @@ scorer's belief; it does not drive anything.
 ## Roadmap
 
 1. **Scaffold** — service, layout, CI, sideloadable APK. *Done.*
-2. **Typing that is pleasant without any intelligence** — final layout, umlaut
-   long-press with tuned timing (D5), double-space period (D6), suggestion
-   strip present but empty (D9). Daily-drivable, dumb.
+2. **Typing that is pleasant without any intelligence** — layout constraints
+   (D16, D17), umlaut and digit long-press with tuned timing (D5), double-space
+   period (D6), suggestion strip present but empty (D9). Daily-drivable, dumb.
+   *Long-press and the layout constraints are done; double-space period and the
+   strip itself are not.*
 3. **Editor I/O done properly** — composing regions, selection reconciliation,
    undo window (D14). No model yet. This is the layer that makes everything
    above it trustworthy, and the one most likely to be underestimated.

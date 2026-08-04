@@ -15,6 +15,11 @@ data class Key(
     val action: KeyAction,
     val widthWeight: Float = 1f,
     val longPress: List<String> = emptyList(),
+    /**
+     * Whether holding the key repeats it. Repeating keys fire on press rather
+     * than on release, so they respond immediately.
+     */
+    val repeats: Boolean = false,
 )
 
 sealed interface KeyAction {
@@ -120,7 +125,7 @@ object Layouts {
             buildList {
                 add(Key("⇧", KeyAction.Shift, widthWeight = 1.5f))
                 addAll(letterRow("zxcvbnm"))
-                add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f))
+                add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
             bottomRow("?123"),
         ),
@@ -165,7 +170,7 @@ object Layouts {
                         "?" to listOf("¿"),
                     ),
                 )
-                add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f))
+                add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
             bottomRow("ABC"),
         ),

@@ -1,10 +1,12 @@
 package de.coonabibba.bikeyboard
 
 import android.inputmethodservice.InputMethodService
+import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -27,6 +29,8 @@ class BilingualKeyboardService : InputMethodService() {
             layout = Layouts.forLayer(layer)
             onKey = ::handleKey
             onAlternate = ::handleAlternate
+            onRepeat = ::handleRepeat
+            onCursorStep = ::moveCursor
         }
 
         // The keys live inside a container that carries the navigation-bar
@@ -95,20 +99,11 @@ class BilingualKeyboardService : InputMethodService() {
             }
 
             KeyAction.Space -> {
-                ic.commitText(" ", 1)
-                noteInsertion(key, alternate = false, length = 1)
+                if (isDoubleTap(key)) sentenceEnd(ic, key) else insertSpace(ic, key)
             }
 
             KeyAction.Backspace -> {
-                val selected = ic.getSelectedText(0)
-                if (selected.isNullOrEmpty()) {
-                    ic.deleteSurroundingText(1, 0)
-                    if (expectedCursor > 0) expectedCursor -= 1
-                } else {
-                    ic.commitText("", 1)
-                    expectedCursor = -1
-                }
-                popTrail()
+                if (isDoubleTap(key)) deleteWordBefore(ic) else deleteOne(ic)
             }
 
             KeyAction.Enter -> {
@@ -150,6 +145,102 @@ class BilingualKeyboardService : InputMethodService() {
             shifted = false
             keyboardView.shifted = false
         }
+    }
+
+    /** Auto-repeat ticks from a held key. Never counts towards a double tap. */
+    private fun handleRepeat(key: Key) {
+        val ic = currentInputConnection ?: return
+        if (key.action == KeyAction.Backspace) deleteOne(ic)
+    }
+
+    // -- space and backspace -------------------------------------------------
+
+    private fun insertSpace(ic: InputConnection, key: Key) {
+        ic.commitText(" ", 1)
+        noteInsertion(key, alternate = false, length = 1)
+    }
+
+    /**
+     * Double-tapping space ends the sentence: the space just typed becomes
+     * `". "`, and capitalisation re-arms (D6).
+     *
+     * Only when a word actually precedes the space — after punctuation, a
+     * newline, or nothing at all, a second space is just a space.
+     */
+    private fun sentenceEnd(ic: InputConnection, key: Key) {
+        if (!TextEdits.endsSentenceOnDoubleSpace(ic.getTextBeforeCursor(2, 0))) {
+            insertSpace(ic, key)
+            return
+        }
+
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(1, 0)
+        ic.commitText(". ", 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += 1
+        popTrail()
+        trail.addFirst(TrailEntry(key, alternate = false))
+        publishTrail()
+
+        shifted = true
+        keyboardView.shifted = true
+    }
+
+    private fun deleteOne(ic: InputConnection) {
+        val selected = ic.getSelectedText(0)
+        if (selected.isNullOrEmpty()) {
+            ic.deleteSurroundingText(1, 0)
+            if (expectedCursor > 0) expectedCursor -= 1
+        } else {
+            ic.commitText("", 1)
+            expectedCursor = -1
+        }
+        popTrail()
+    }
+
+    /**
+     * Double-tapping backspace removes the rest of the word. The first tap has
+     * already taken one character, so what is left is everything back to the
+     * preceding whitespace — trailing whitespace first, so deleting from just
+     * after a word does not merely eat the gap.
+     */
+    private fun deleteWordBefore(ic: InputConnection) {
+        val before = ic.getTextBeforeCursor(WORD_LOOKBEHIND, 0)
+        if (before.isNullOrEmpty()) return
+
+        val count = TextEdits.wordDeletionCount(before)
+        if (count <= 0) return
+
+        ic.deleteSurroundingText(count, 0)
+        if (expectedCursor >= count) expectedCursor -= count else expectedCursor = -1
+        repeat(count) { trail.removeFirstOrNull() }
+        publishTrail()
+    }
+
+    /** Space-bar drag. One step per character, in either direction. */
+    private fun moveCursor(direction: Int) {
+        val ic = currentInputConnection ?: return
+        val code = if (direction > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        // The resulting onUpdateSelection will not match expectedCursor, which
+        // clears the trail — correct per D19, since the run of typing is over.
+    }
+
+    // -- double tap ----------------------------------------------------------
+
+    private var lastTapKey: Key? = null
+    private var lastTapAt = 0L
+
+    private fun isDoubleTap(key: Key): Boolean {
+        val now = SystemClock.uptimeMillis()
+        val isRepeat = key == lastTapKey && now - lastTapAt <= DOUBLE_TAP_MS
+        // Consumed either way, so a third tap starts a fresh pair rather than
+        // chaining another word deletion off the same gesture.
+        lastTapKey = if (isRepeat) null else key
+        lastTapAt = now
+        return isRepeat
     }
 
     // -- recent keypress trail ----------------------------------------------
@@ -237,6 +328,12 @@ class BilingualKeyboardService : InputMethodService() {
          * instead of running out.
          */
         const val TRAIL_CAPACITY = 10
+
+        /** Window for a second tap to count as a double tap rather than a new one. */
+        const val DOUBLE_TAP_MS = 350L
+
+        /** How far back to read when deleting a word. Longer than any real word. */
+        const val WORD_LOOKBEHIND = 64
     }
 
     private fun shouldAutoCapitalise(info: EditorInfo): Boolean {

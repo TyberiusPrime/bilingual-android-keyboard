@@ -12,6 +12,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.graphics.ColorUtils
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -47,10 +48,21 @@ class KeyboardView @JvmOverloads constructor(
      */
     var onAlternate: ((Key, String) -> Unit)? = null
 
+    /**
+     * Called on each auto-repeat tick of a held [Key.repeats] key. Kept
+     * separate from [onKey] so the service can tell a deliberate second tap
+     * from the machine gun.
+     */
+    var onRepeat: ((Key) -> Unit)? = null
+
+    /** Called per character step while dragging on the space bar: +1 right, -1 left. */
+    var onCursorStep: ((Int) -> Unit)? = null
+
     var layout: KeyboardLayout = Layouts.letters
         set(value) {
             field = value
             dismissLongPress()
+            stopRepeat()
             activePointers.clear()
             placedKeys = placeKeys(width.toFloat(), height.toFloat())
             requestLayout()
@@ -105,6 +117,21 @@ class KeyboardView @JvmOverloads constructor(
      */
     private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
+    /**
+     * State of one finger currently on the keyboard.
+     *
+     * [fired] marks that this touch has already produced its output — a
+     * repeating key fires on press, and a space-bar drag produces cursor steps
+     * instead of a space — so release must not emit anything more.
+     */
+    private class Touch(
+        var placed: PlacedKey,
+        val downX: Float,
+        var stepAnchorX: Float,
+        var fired: Boolean = false,
+        var cursorMode: Boolean = false,
+    )
+
     private var placedKeys: List<PlacedKey> = emptyList()
 
     /**
@@ -114,7 +141,7 @@ class KeyboardView @JvmOverloads constructor(
      * overlaps touches — the next finger lands before the previous one lifts,
      * and a single-pointer model silently drops one of them.
      */
-    private val activePointers = mutableMapOf<Int, PlacedKey>()
+    private val activePointers = mutableMapOf<Int, Touch>()
 
     /** Non-null while a long-press popup is open. */
     private var alternatesFor: PlacedKey? = null
@@ -125,6 +152,15 @@ class KeyboardView @JvmOverloads constructor(
 
     private val handler = Handler(Looper.getMainLooper())
     private val longPressRunnable = Runnable { openAlternates() }
+
+    private var repeatPointer: Int = MotionEvent.INVALID_POINTER_ID
+    private val repeatRunnable = object : Runnable {
+        override fun run() {
+            val touch = activePointers[repeatPointer] ?: return
+            onRepeat?.invoke(touch.placed.key)
+            handler.postDelayed(this, REPEAT_INTERVAL_MS)
+        }
+    }
 
     private val density = resources.displayMetrics.density
     private val keyGap = 3f * density
@@ -169,6 +205,7 @@ class KeyboardView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         dismissLongPress()
+        stopRepeat()
         activePointers.clear()
     }
 
@@ -211,7 +248,7 @@ class KeyboardView @JvmOverloads constructor(
 
         val heldKeys = activePointers.values
         placedKeys.forEach { placed ->
-            val held = heldKeys.any { it === placed }
+            val held = heldKeys.any { it.placed === placed }
             val basePaint = when {
                 held -> pressedPaint
                 placed.key.action is KeyAction.Text -> keyPaint
@@ -310,7 +347,7 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun openAlternates() {
-        val target = activePointers[longPressPointer] ?: return
+        val target = activePointers[longPressPointer]?.placed ?: return
         val labels = target.key.longPress.map(::shiftAlternate)
         if (labels.isEmpty()) return
 
@@ -348,13 +385,22 @@ class KeyboardView @JvmOverloads constructor(
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val index = event.actionIndex
                 val pointerId = event.getPointerId(index)
-                val hit = keyAt(event.getX(index), event.getY(index))
+                val x = event.getX(index)
+                val hit = keyAt(x, event.getY(index))
                 if (hit != null) {
-                    activePointers[pointerId] = hit
-                    // A second finger means fast typing, not a deliberate hold.
-                    if (activePointers.size == 1) {
+                    val touch = Touch(placed = hit, downX = x, stepAnchorX = x)
+                    activePointers[pointerId] = touch
+
+                    if (hit.key.repeats) {
+                        // Repeating keys act on press, so the first delete lands
+                        // immediately rather than waiting for the release.
+                        touch.fired = true
+                        onKey?.invoke(hit.key)
+                        startRepeat(pointerId)
+                    } else if (activePointers.size == 1) {
                         scheduleLongPress(hit, pointerId)
                     } else {
+                        // A second finger means fast typing, not a deliberate hold.
                         dismissLongPress()
                     }
                     invalidate()
@@ -367,6 +413,7 @@ class KeyboardView @JvmOverloads constructor(
                 val index = event.actionIndex
                 val pointerId = event.getPointerId(index)
                 val released = activePointers.remove(pointerId)
+                if (pointerId == repeatPointer) stopRepeat()
 
                 val openPopup = alternatesFor
                 if (openPopup != null && pointerId == longPressPointer) {
@@ -380,12 +427,15 @@ class KeyboardView @JvmOverloads constructor(
                     // Commit the key this finger is on, not whatever happens to
                     // be under the release point — a tap that drifts off the
                     // keyboard entirely must still type what it started on.
-                    released?.let { onKey?.invoke(it.key) }
+                    if (released != null && !released.fired) {
+                        onKey?.invoke(released.placed.key)
+                    }
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 dismissLongPress()
+                stopRepeat()
                 activePointers.clear()
                 invalidate()
             }
@@ -399,6 +449,7 @@ class KeyboardView @JvmOverloads constructor(
             val pointerId = event.getPointerId(index)
             val x = event.getX(index)
             val y = event.getY(index)
+            val touch = activePointers[pointerId] ?: continue
 
             if (alternatesFor != null && pointerId == longPressPointer) {
                 val alternate = alternateAt(x)
@@ -409,18 +460,59 @@ class KeyboardView @JvmOverloads constructor(
                 continue
             }
 
+            if (touch.cursorMode) {
+                emitCursorSteps(touch, x)
+                continue
+            }
+
+            // Dragging sideways on the space bar steers the cursor. Entry is by
+            // distance rather than a hold timer: requiring a delay first would
+            // make the gesture feel stuck, and horizontal travel on the space
+            // bar is unambiguous on its own.
+            if (touch.placed.key.action == KeyAction.Space &&
+                abs(x - touch.downX) > CURSOR_DRAG_START_DP * density
+            ) {
+                touch.cursorMode = true
+                touch.fired = true
+                touch.stepAnchorX = touch.downX
+                dismissLongPress()
+                emitCursorSteps(touch, x)
+                continue
+            }
+
             // Only reassign when the finger is genuinely over another key.
             // Leaving it unchanged otherwise is what keeps a drifting tap from
             // being dropped.
             val moved = keyAt(x, y) ?: continue
-            val current = activePointers[pointerId]
-            if (moved !== current) {
-                activePointers[pointerId] = moved
+            if (moved !== touch.placed) {
+                touch.placed = moved
+                if (pointerId == repeatPointer) stopRepeat()
                 if (pointerId == longPressPointer) scheduleLongPress(moved, pointerId)
                 changed = true
             }
         }
         if (changed) invalidate()
+    }
+
+    /** Emits one step per [CURSOR_STEP_DP] of travel since the last one. */
+    private fun emitCursorSteps(touch: Touch, x: Float) {
+        val step = CURSOR_STEP_DP * density
+        while (abs(x - touch.stepAnchorX) >= step) {
+            val direction = if (x > touch.stepAnchorX) 1 else -1
+            touch.stepAnchorX += direction * step
+            onCursorStep?.invoke(direction)
+        }
+    }
+
+    private fun startRepeat(pointerId: Int) {
+        stopRepeat()
+        repeatPointer = pointerId
+        handler.postDelayed(repeatRunnable, REPEAT_INITIAL_MS)
+    }
+
+    private fun stopRepeat() {
+        handler.removeCallbacks(repeatRunnable)
+        repeatPointer = MotionEvent.INVALID_POINTER_ID
     }
 
     private fun keyAt(x: Float, y: Float): PlacedKey? =
@@ -446,6 +538,14 @@ class KeyboardView @JvmOverloads constructor(
 
         /** Trail entries beyond this depth are drawn as ordinary keys. */
         const val TRAIL_STEPS = 5
+
+        /** Auto-repeat: long enough that a normal tap never triggers it. */
+        const val REPEAT_INITIAL_MS = 400L
+        const val REPEAT_INTERVAL_MS = 55L
+
+        /** Sideways travel on the space bar before it becomes cursor steering. */
+        const val CURSOR_DRAG_START_DP = 10f
+        const val CURSOR_STEP_DP = 12f
         val TRAIL_STRONG = Color.parseColor("#8B5CF6")
         val KEY_BG = Color.parseColor("#3A3A3C")
         val SPECIAL_BG = Color.parseColor("#2A2A2C")

@@ -126,6 +126,20 @@ class LayoutsTest {
         }
     }
 
+    /** Backspace is the only key that should machine-gun when held. */
+    @Test
+    fun `backspace repeats and nothing else does`() {
+        Layer.entries.forEach { layer ->
+            Layouts.forLayer(layer).rows.flatten().forEach { key ->
+                assertEquals(
+                    "${key.label} on $layer",
+                    key.action == KeyAction.Backspace,
+                    key.repeats,
+                )
+            }
+        }
+    }
+
     @Test
     fun `every layer can be reached and every row has keys`() {
         Layer.entries.forEach { layer ->

@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D19 settled in interview; architecture drafted from
+**Status: decisions D1–D20 settled in interview; architecture drafted from
 them. Roadmap step 2 partially built.** See `docs/android-ime-api.md` for what
 the platform allows and what it withholds.
 
@@ -298,6 +298,36 @@ position, maintained across insertions and deletions — and it is deliberately
 conservative: anything it cannot account for clears the trail. It is a
 down payment on step 3, not a substitute for it.
 
+### D20 — Space and backspace carry gestures
+
+Both keys do more than one thing, which is affordable because both are large
+and neither has a long-press alternate to collide with.
+
+**Space**
+- Tap inserts a space.
+- Double tap ends the sentence: the space just typed becomes `". "` and
+  capitalisation re-arms. This is the second half of D6 — with no `.` on the
+  letter layer, this is how a period gets typed in ordinary prose. It applies
+  only when a word actually precedes the space; after punctuation, a newline or
+  nothing at all, a second space stays a space.
+- Dragging sideways steers the cursor, one character per ~12dp.
+
+  Entry into cursor mode is by **distance, not by a hold timer**. Requiring a
+  delay first makes the gesture feel stuck, and horizontal travel on the space
+  bar is unambiguous on its own. Once steering, the touch no longer types a
+  space on release.
+
+**Backspace**
+- Fires on press rather than release, and auto-repeats after 400ms at ~18/s.
+  Repeating keys have to act on press or they feel broken.
+- Double tap deletes the rest of the word. The first tap has already taken a
+  character, so the second removes back to the preceding whitespace — trailing
+  whitespace first, so deleting from just after a word does not merely eat the
+  gap.
+
+Auto-repeat ticks are delivered on a separate callback from real presses, so
+the machine gun can never be mistaken for a deliberate second tap.
+
 
 ---
 
@@ -384,9 +414,9 @@ scorer's belief; it does not drive anything.
 1. **Scaffold** — service, layout, CI, sideloadable APK. *Done.*
 2. **Typing that is pleasant without any intelligence** — layout constraints
    (D16, D17), umlaut and digit long-press with tuned timing (D5), double-space
-   period (D6), suggestion strip present but empty (D9). Daily-drivable, dumb.
-   *Long-press and the layout constraints are done; double-space period and the
-   strip itself are not.*
+   period (D6), space and backspace gestures (D20), keypress trail (D19),
+   suggestion strip present but empty (D9). Daily-drivable, dumb.
+   *Done apart from the strip itself, which is still only reserved space.*
 3. **Editor I/O done properly** — composing regions, selection reconciliation,
    undo window (D14). No model yet. This is the layer that makes everything
    above it trustworthy, and the one most likely to be underestimated.

@@ -5,6 +5,10 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.widget.FrameLayout
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 
 /**
  * The IME. Everything the keyboard is allowed to know about the app it is
@@ -14,6 +18,7 @@ import android.view.inputmethod.EditorInfo
 class BilingualKeyboardService : InputMethodService() {
 
     private lateinit var keyboardView: KeyboardView
+    private var inputRoot: FrameLayout? = null
     private var layer = Layer.LETTERS
     private var shifted = false
 
@@ -23,11 +28,46 @@ class BilingualKeyboardService : InputMethodService() {
             onKey = ::handleKey
             onAlternate = ::handleAlternate
         }
-        return keyboardView
+
+        // The keys live inside a container that carries the navigation-bar
+        // inset as bottom padding. targetSdk 35 means edge-to-edge is mandatory
+        // and the system no longer insets the IME window for us, so without
+        // this the system's own hide-keyboard chevron, IME-switcher globe and
+        // gesture pill are drawn on top of the bottom row — and swallow taps
+        // meant for it.
+        val root = FrameLayout(this).apply {
+            addView(
+                keyboardView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            view.updatePadding(bottom = insets.navigationBarBottom())
+            insets
+        }
+        inputRoot = root
+        return root
     }
+
+    /**
+     * The inset listener above is not reliably dispatched to an IME's input
+     * view, so the value is also read directly whenever input starts.
+     */
+    private fun applyNavigationBarInset() {
+        val root = inputRoot ?: return
+        val insets = window?.window?.decorView?.rootWindowInsets ?: return
+        root.updatePadding(bottom = WindowInsetsCompat.toWindowInsetsCompat(insets).navigationBarBottom())
+    }
+
+    private fun WindowInsetsCompat.navigationBarBottom(): Int =
+        getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        applyNavigationBarInset()
         // A password field must never reach prediction, logging or a learned
         // dictionary. Recorded here so later stages can honour it.
         val isPassword = isPasswordField(info)

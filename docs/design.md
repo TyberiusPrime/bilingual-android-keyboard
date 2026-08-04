@@ -316,6 +316,25 @@ language model break ties is what removes the class of error. A tap landing
 between two keys should not be resolved by geometry alone when the sentence
 context makes one of them far more likely.
 
+Three invariants, learned from the first round of device testing, that hold
+regardless of how clever the model later becomes:
+
+- **Touches are per-pointer.** Fast typing overlaps them — the next finger
+  lands before the previous lifts. A single "currently pressed key" field drops
+  one of every overlapping pair, which reads as random missed keystrokes.
+- **A press commits the key it started on.** Not the key under the release
+  point. A tap that drifts off the keyboard entirely must still type what it
+  began on; resolving at release time turns drift into silence.
+- **There are no gaps.** Hit areas tile the whole surface — they meet in the
+  middle of the visual gaps and run to the view edges — rather than matching
+  the drawn key rectangles with slop bolted on.
+
+**Window insets.** `targetSdk 35` makes edge-to-edge mandatory, so the system
+stops insetting the IME window. Unhandled, the system's own hide-keyboard
+chevron, IME-switcher globe and gesture pill are composited over the bottom row
+and take its taps. The input view is wrapped in a container carrying the
+navigation-bar inset as bottom padding.
+
 **Scorer** must emit calibrated confidence, not just a ranking (D3). This is a
 distinct engineering task from getting good rankings, it is usually skipped,
 and skipping it is why other keyboards auto-correct confidently and wrongly.

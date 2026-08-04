@@ -20,7 +20,7 @@ import kotlin.math.max
  * created and destroyed on every focus change, and touch-to-glyph latency is
  * the whole product. This can be revisited, but the bar is "no worse".
  *
- * Hit testing here is still a rectangle test. Per D15 it eventually becomes a
+ * Hit testing here is still deterministic. Per D15 it eventually becomes a
  * spatial likelihood feeding the candidate scorer; the touch-point handling is
  * kept in one place so that swap does not spread.
  */
@@ -29,7 +29,7 @@ class KeyboardView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
 
-    /** Called when a key is released inside its own bounds. */
+    /** Called when a key is released. */
     var onKey: ((Key) -> Unit)? = null
 
     /** Called when a long-press alternate is chosen. Text is already shifted. */
@@ -39,6 +39,7 @@ class KeyboardView @JvmOverloads constructor(
         set(value) {
             field = value
             dismissLongPress()
+            activePointers.clear()
             placedKeys = placeKeys(width.toFloat(), height.toFloat())
             requestLayout()
             invalidate()
@@ -51,16 +52,30 @@ class KeyboardView @JvmOverloads constructor(
             invalidate()
         }
 
-    private data class PlacedKey(val key: Key, val bounds: RectF)
+    /**
+     * [bounds] is what gets drawn; [hitBounds] is what gets touched. They differ
+     * by half the inter-key gap, so the gaps between keys belong to their
+     * neighbours instead of being dead.
+     */
+    private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
     private var placedKeys: List<PlacedKey> = emptyList()
-    private var pressed: PlacedKey? = null
+
+    /**
+     * Which key each active finger is on, by pointer id.
+     *
+     * Keyed by pointer rather than a single "pressed" field because fast typing
+     * overlaps touches — the next finger lands before the previous one lifts,
+     * and a single-pointer model silently drops one of them.
+     */
+    private val activePointers = mutableMapOf<Int, PlacedKey>()
 
     /** Non-null while a long-press popup is open. */
     private var alternatesFor: PlacedKey? = null
     private var alternateBounds: List<RectF> = emptyList()
     private var alternateLabels: List<String> = emptyList()
     private var selectedAlternate: Int = -1
+    private var longPressPointer: Int = MotionEvent.INVALID_POINTER_ID
 
     private val handler = Handler(Looper.getMainLooper())
     private val longPressRunnable = Runnable { openAlternates() }
@@ -107,12 +122,15 @@ class KeyboardView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         dismissLongPress()
+        activePointers.clear()
     }
 
     private fun placeKeys(width: Float, height: Float): List<PlacedKey> {
         if (width <= 0f || layout.rows.isEmpty()) return emptyList()
         val usableHeight = height - gutterHeight - keyGap * 2
         val perRow = usableHeight / layout.rows.size
+        val half = keyGap / 2f
+        val lastRow = layout.rows.lastIndex
         val placed = mutableListOf<PlacedKey>()
 
         layout.rows.forEachIndexed { rowIndex, row ->
@@ -120,12 +138,21 @@ class KeyboardView @JvmOverloads constructor(
             val usableWidth = width - keyGap * (row.size + 1)
             var x = keyGap
             val y = gutterHeight + keyGap + rowIndex * perRow
-            row.forEach { key ->
+            row.forEachIndexed { keyIndex, key ->
                 val keyWidth = usableWidth * (key.widthWeight / totalWeight)
-                placed += PlacedKey(
-                    key = key,
-                    bounds = RectF(x, y, x + keyWidth, y + perRow - keyGap),
+                val bounds = RectF(x, y, x + keyWidth, y + perRow - keyGap)
+
+                // Grow into the gaps, and all the way to the view edge for the
+                // outermost keys and the last row — a thumb landing a few pixels
+                // past the edge of `m` still means `m`.
+                val hitBounds = RectF(
+                    if (keyIndex == 0) 0f else bounds.left - half,
+                    if (rowIndex == 0) gutterHeight else bounds.top - half,
+                    if (keyIndex == row.lastIndex) width else bounds.right + half,
+                    if (rowIndex == lastRow) height else bounds.bottom + half,
                 )
+
+                placed += PlacedKey(key, bounds, hitBounds)
                 x += keyWidth + keyGap
             }
         }
@@ -135,9 +162,10 @@ class KeyboardView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        val heldKeys = activePointers.values
         placedKeys.forEach { placed ->
             val paint = when {
-                placed === pressed -> pressedPaint
+                heldKeys.any { it === placed } -> pressedPaint
                 placed.key.action is KeyAction.Text -> keyPaint
                 else -> specialKeyPaint
             }
@@ -191,14 +219,16 @@ class KeyboardView @JvmOverloads constructor(
 
     // -- long press ---------------------------------------------------------
 
-    private fun scheduleLongPress(placed: PlacedKey) {
+    private fun scheduleLongPress(placed: PlacedKey, pointerId: Int) {
         dismissLongPress()
         if (placed.key.longPress.isEmpty()) return
+        longPressPointer = pointerId
         handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
     }
 
     private fun dismissLongPress() {
         handler.removeCallbacks(longPressRunnable)
+        longPressPointer = MotionEvent.INVALID_POINTER_ID
         if (alternatesFor != null) {
             alternatesFor = null
             alternateBounds = emptyList()
@@ -209,7 +239,7 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun openAlternates() {
-        val target = pressed ?: return
+        val target = activePointers[longPressPointer] ?: return
         val labels = target.key.longPress.map(::shiftAlternate)
         if (labels.isEmpty()) return
 
@@ -244,60 +274,87 @@ class KeyboardView @JvmOverloads constructor(
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                pressed = keyAt(event.x, event.y)
-                pressed?.let(::scheduleLongPress)
-                invalidate()
-            }
-
-            MotionEvent.ACTION_MOVE -> {
-                if (alternatesFor != null) {
-                    val index = alternateAt(event.x)
-                    if (index >= 0 && index != selectedAlternate) {
-                        selectedAlternate = index
-                        invalidate()
-                    }
-                } else {
-                    val moved = keyAt(event.x, event.y)
-                    if (moved !== pressed) {
-                        pressed = moved
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                val pointerId = event.getPointerId(index)
+                val hit = keyAt(event.getX(index), event.getY(index))
+                if (hit != null) {
+                    activePointers[pointerId] = hit
+                    // A second finger means fast typing, not a deliberate hold.
+                    if (activePointers.size == 1) {
+                        scheduleLongPress(hit, pointerId)
+                    } else {
                         dismissLongPress()
-                        pressed?.let(::scheduleLongPress)
-                        invalidate()
                     }
+                    invalidate()
                 }
             }
 
-            MotionEvent.ACTION_UP -> {
-                val openPopup = alternatesFor
-                if (openPopup != null) {
+            MotionEvent.ACTION_MOVE -> handleMove(event)
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val index = event.actionIndex
+                val pointerId = event.getPointerId(index)
+                val released = activePointers.remove(pointerId)
+
+                if (alternatesFor != null && pointerId == longPressPointer) {
                     val chosen = alternateLabels.getOrNull(selectedAlternate)
                     dismissLongPress()
-                    pressed = null
                     invalidate()
                     chosen?.let { onAlternate?.invoke(it) }
                 } else {
-                    val hit = keyAt(event.x, event.y)
-                    dismissLongPress()
-                    pressed = null
+                    if (pointerId == longPressPointer) dismissLongPress()
                     invalidate()
-                    hit?.let { onKey?.invoke(it.key) }
+                    // Commit the key this finger is on, not whatever happens to
+                    // be under the release point — a tap that drifts off the
+                    // keyboard entirely must still type what it started on.
+                    released?.let { onKey?.invoke(it.key) }
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 dismissLongPress()
-                pressed = null
+                activePointers.clear()
                 invalidate()
             }
         }
         return true
     }
 
+    private fun handleMove(event: MotionEvent) {
+        var changed = false
+        for (index in 0 until event.pointerCount) {
+            val pointerId = event.getPointerId(index)
+            val x = event.getX(index)
+            val y = event.getY(index)
+
+            if (alternatesFor != null && pointerId == longPressPointer) {
+                val alternate = alternateAt(x)
+                if (alternate >= 0 && alternate != selectedAlternate) {
+                    selectedAlternate = alternate
+                    changed = true
+                }
+                continue
+            }
+
+            // Only reassign when the finger is genuinely over another key.
+            // Leaving it unchanged otherwise is what keeps a drifting tap from
+            // being dropped.
+            val moved = keyAt(x, y) ?: continue
+            val current = activePointers[pointerId]
+            if (moved !== current) {
+                activePointers[pointerId] = moved
+                if (pointerId == longPressPointer) scheduleLongPress(moved, pointerId)
+                changed = true
+            }
+        }
+        if (changed) invalidate()
+    }
+
     private fun keyAt(x: Float, y: Float): PlacedKey? =
-        placedKeys.firstOrNull { it.bounds.contains(x, y) }
-            ?: placedKeys.minByOrNull { distanceTo(it.bounds, x, y) }
-                ?.takeIf { distanceTo(it.bounds, x, y) < SLOP_DP * density }
+        placedKeys.firstOrNull { it.hitBounds.contains(x, y) }
+            ?: placedKeys.minByOrNull { distanceTo(it.hitBounds, x, y) }
+                ?.takeIf { distanceTo(it.hitBounds, x, y) < SLOP_DP * density }
 
     private fun distanceTo(rect: RectF, x: Float, y: Float): Float {
         val dx = max(max(rect.left - x, 0f), x - rect.right)

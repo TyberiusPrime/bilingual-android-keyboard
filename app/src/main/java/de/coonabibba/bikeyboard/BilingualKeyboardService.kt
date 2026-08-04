@@ -31,6 +31,7 @@ class BilingualKeyboardService : InputMethodService() {
             onAlternate = ::handleAlternate
             onRepeat = ::handleRepeat
             onCursorStep = ::moveCursor
+            onDeleteWord = ::handleDeleteWord
         }
 
         // The keys live inside a container that carries the navigation-bar
@@ -102,9 +103,10 @@ class BilingualKeyboardService : InputMethodService() {
                 if (isDoubleTap(key)) sentenceEnd(ic, key) else insertSpace(ic, key)
             }
 
-            KeyAction.Backspace -> {
-                if (isDoubleTap(key)) deleteWordBefore(ic) else deleteOne(ic)
-            }
+            // No double tap here: two quick taps are what you do when you want
+            // two letters gone, so it fired constantly by accident. Deleting a
+            // word is a leftward swipe instead (D20).
+            KeyAction.Backspace -> deleteOne(ic)
 
             KeyAction.Enter -> {
                 val action1 = currentInputEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
@@ -145,6 +147,12 @@ class BilingualKeyboardService : InputMethodService() {
             shifted = false
             keyboardView.shifted = false
         }
+    }
+
+    /** Leftward swipe on backspace, one call per word. */
+    private fun handleDeleteWord() {
+        val ic = currentInputConnection ?: return
+        deleteWordBefore(ic)
     }
 
     /** Auto-repeat ticks from a held key. Never counts towards a double tap. */
@@ -200,7 +208,7 @@ class BilingualKeyboardService : InputMethodService() {
     }
 
     /**
-     * Double-tapping backspace removes the rest of the word. The first tap has
+     * Removes the word before the cursor. The press that began the swipe has
      * already taken one character, so what is left is everything back to the
      * preceding whitespace — trailing whitespace first, so deleting from just
      * after a word does not merely eat the gap.

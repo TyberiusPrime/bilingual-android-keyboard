@@ -5,7 +5,9 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
@@ -57,6 +59,9 @@ class KeyboardView @JvmOverloads constructor(
 
     /** Called per character step while dragging on the space bar: +1 right, -1 left. */
     var onCursorStep: ((Int) -> Unit)? = null
+
+    /** Called per word while swiping left on backspace. */
+    var onDeleteWord: (() -> Unit)? = null
 
     var layout: KeyboardLayout = Layouts.letters
         set(value) {
@@ -117,19 +122,22 @@ class KeyboardView @JvmOverloads constructor(
      */
     private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
+    /** What a sideways drag off a key has turned into, if anything. */
+    private enum class DragMode { NONE, CURSOR, DELETE_WORD }
+
     /**
      * State of one finger currently on the keyboard.
      *
      * [fired] marks that this touch has already produced its output — a
-     * repeating key fires on press, and a space-bar drag produces cursor steps
-     * instead of a space — so release must not emit anything more.
+     * repeating key fires on press, and a drag produces cursor steps or word
+     * deletions instead — so release must not emit anything more.
      */
     private class Touch(
         var placed: PlacedKey,
         val downX: Float,
         var stepAnchorX: Float,
         var fired: Boolean = false,
-        var cursorMode: Boolean = false,
+        var dragMode: DragMode = DragMode.NONE,
     )
 
     private var placedKeys: List<PlacedKey> = emptyList()
@@ -200,6 +208,24 @@ class KeyboardView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         placedKeys = placeKeys(w.toFloat(), h.toFloat())
+        excludeFromSystemGestures(w, h)
+    }
+
+    /**
+     * Claim the whole keyboard from the system's edge gestures.
+     *
+     * Without this, dragging along the space bar towards the right edge is
+     * taken as the back gesture, and back while an IME is showing hides the
+     * keyboard. The asymmetry gives it away: the space bar's right edge is
+     * close to the screen edge, while its left edge is shielded by the layer
+     * toggle and the globe key, so only rightward drags were being stolen.
+     *
+     * The platform caps how much of each edge a window may claim and keeps the
+     * part nearest the bottom, which is the part that matters here.
+     */
+    private fun excludeFromSystemGestures(w: Int, h: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        systemGestureExclusionRects = listOf(Rect(0, 0, w, h))
     }
 
     override fun onDetachedFromWindow() {
@@ -460,9 +486,18 @@ class KeyboardView @JvmOverloads constructor(
                 continue
             }
 
-            if (touch.cursorMode) {
-                emitCursorSteps(touch, x)
-                continue
+            when (touch.dragMode) {
+                DragMode.CURSOR -> {
+                    emitCursorSteps(touch, x)
+                    continue
+                }
+
+                DragMode.DELETE_WORD -> {
+                    emitDeleteWordSteps(touch, x)
+                    continue
+                }
+
+                DragMode.NONE -> Unit
             }
 
             // Dragging sideways on the space bar steers the cursor. Entry is by
@@ -472,11 +507,25 @@ class KeyboardView @JvmOverloads constructor(
             if (touch.placed.key.action == KeyAction.Space &&
                 abs(x - touch.downX) > CURSOR_DRAG_START_DP * density
             ) {
-                touch.cursorMode = true
+                touch.dragMode = DragMode.CURSOR
                 touch.fired = true
                 touch.stepAnchorX = touch.downX
                 dismissLongPress()
                 emitCursorSteps(touch, x)
+                continue
+            }
+
+            // Swiping left on backspace eats words. Leftward only — it is a
+            // directional gesture matching the direction of deletion, and
+            // rightward on backspace should stay inert.
+            if (touch.placed.key.action == KeyAction.Backspace &&
+                touch.downX - x >= DELETE_WORD_STEP_DP * density
+            ) {
+                touch.dragMode = DragMode.DELETE_WORD
+                touch.fired = true
+                touch.stepAnchorX = touch.downX
+                stopRepeat()
+                emitDeleteWordSteps(touch, x)
                 continue
             }
 
@@ -501,6 +550,15 @@ class KeyboardView @JvmOverloads constructor(
             val direction = if (x > touch.stepAnchorX) 1 else -1
             touch.stepAnchorX += direction * step
             onCursorStep?.invoke(direction)
+        }
+    }
+
+    /** One word per [DELETE_WORD_STEP_DP] of further leftward travel. */
+    private fun emitDeleteWordSteps(touch: Touch, x: Float) {
+        val step = DELETE_WORD_STEP_DP * density
+        while (touch.stepAnchorX - x >= step) {
+            touch.stepAnchorX -= step
+            onDeleteWord?.invoke()
         }
     }
 
@@ -546,6 +604,12 @@ class KeyboardView @JvmOverloads constructor(
         /** Sideways travel on the space bar before it becomes cursor steering. */
         const val CURSOR_DRAG_START_DP = 10f
         const val CURSOR_STEP_DP = 12f
+
+        /**
+         * Leftward travel on backspace per word deleted. Replaces the earlier
+         * double tap, which fired when two quick single deletes were meant.
+         */
+        const val DELETE_WORD_STEP_DP = 26f
         val TRAIL_STRONG = Color.parseColor("#8B5CF6")
         val KEY_BG = Color.parseColor("#3A3A3C")
         val SPECIAL_BG = Color.parseColor("#2A2A2C")

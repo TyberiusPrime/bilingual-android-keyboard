@@ -320,13 +320,26 @@ and neither has a long-press alternate to collide with.
 **Backspace**
 - Fires on press rather than release, and auto-repeats after 400ms at ~18/s.
   Repeating keys have to act on press or they feel broken.
-- Double tap deletes the rest of the word. The first tap has already taken a
-  character, so the second removes back to the preceding whitespace — trailing
-  whitespace first, so deleting from just after a word does not merely eat the
-  gap.
+- **Swiping left** deletes a word per ~26dp of travel, and keeps going as long
+  as the swipe does.
+
+  This started as a double tap and was changed after a day of use: two quick
+  taps on backspace is exactly what you do when you want two letters gone, so
+  the gesture fired constantly by accident. A direction has no such collision —
+  nothing else on backspace is horizontal — and it matches the direction of
+  deletion. **Space keeps its double tap**, because there is no competing
+  reason to hit space twice quickly.
 
 Auto-repeat ticks are delivered on a separate callback from real presses, so
-the machine gun can never be mistaken for a deliberate second tap.
+the machine gun is never mistaken for a deliberate gesture.
+
+**Both drags need the system to keep its hands off.** With edge-to-edge, the
+platform's back gesture claims the screen edges, and back while an IME is
+showing hides the keyboard — so dragging the space bar rightwards dismissed it.
+The keyboard claims its whole area via `setSystemGestureExclusionRects`. The
+symptom's asymmetry was the diagnosis: only rightward drags were stolen,
+because the space bar's right edge is near the screen edge while its left is
+shielded by the layer toggle and the globe.
 
 
 ---

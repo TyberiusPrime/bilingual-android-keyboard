@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Subtype declaration.
+
+    Deliberately ONE subtype, not one per language. Android's per-subtype model is
+    what makes stock keyboards swap layouts when you switch language; we want a
+    single stable layout that is simultaneously aware of several languages, so we
+    expose a single subtype and handle multilingual behaviour internally.
+
+    imeSubtypeMode="keyboard" is required for the subtype to be offered as a
+    text input method.
+-->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="de.coonabibba.bikeyboard.SettingsActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+
+    <subtype
+        android:icon="@mipmap/ic_launcher"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard"
+        android:isAsciiCapable="true"
+        android:label="@string/subtype_label" />
+
+</input-method>

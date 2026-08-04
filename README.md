@@ -24,17 +24,26 @@ Every pull request builds a debug APK and posts a download link as a PR
 comment. GitHub serves it as a zip; unzip and:
 
 ```sh
-adb install -r bilingual-keyboard-<sha>.apk
+scripts/install.sh bilingual-keyboard-<sha>.apk
 ```
 
-Debug builds from different CI runs are signed with different debug keys, so
-installing over an older build fails with a signature mismatch — `adb uninstall
-de.coonabibba.bikeyboard.debug` first. The debug build uses a `.debug`
-application ID suffix, so it coexists with a locally built copy.
+No uninstall step. Two things used to make one necessary, and both are handled:
 
-Then: open **Bilingual Keyboard** from the launcher, enable it in system
-settings, and select it as the active input method. Keep a second keyboard
-installed — if this one crashes, the phone becomes untypeable.
+- **Signature mismatch.** AGP generates a debug keystore per machine, so every
+  CI runner signed with a different key and Android refused the update.
+  `app/debug.keystore` is committed and shared by every build instead. It signs
+  debug builds only and is not a trust anchor — releases must never use it.
+- **The system keeps running the old keyboard.** Replacing the package kills
+  the process, but `InputMethodManagerService` does not reliably rebind to the
+  new service, so the update looks like it did nothing. The script re-selects
+  the input method to force the rebind.
+
+The debug build uses a `.debug` application ID suffix, so it coexists with a
+locally built copy.
+
+First time only: open **Bilingual Keyboard** from the launcher and enable it in
+system settings. Keep a second keyboard installed — if this one crashes, the
+phone becomes untypeable.
 
 ## Building locally
 

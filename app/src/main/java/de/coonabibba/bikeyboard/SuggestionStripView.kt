@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Handler
+import android.os.Looper
 import android.text.TextPaint
 import android.text.TextUtils
 import android.util.AttributeSet
@@ -38,8 +40,11 @@ class SuggestionStripView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
 
-    /** Called when a slot is chosen. */
-    var onPick: ((StripEntry) -> Unit)? = null
+    /**
+     * Called when a slot is chosen, with how: a tap finishes the word, a long
+     * press joins it to whatever is typed next (D26).
+     */
+    var onPick: ((StripEntry, PickStyle) -> Unit)? = null
 
     /**
      * What each slot holds, `null` for an empty one.
@@ -62,6 +67,21 @@ class SuggestionStripView @JvmOverloads constructor(
         }
 
     private var pressedSlot = -1
+
+    /**
+     * A long press fires as soon as the timer does, rather than on release,
+     * because the point of it is to keep typing immediately afterwards. The
+     * release then has nothing left to do.
+     */
+    private var longPressFired = false
+    private val handler = Handler(Looper.getMainLooper())
+    private val longPressRunnable = Runnable {
+        val entry = slots.getOrNull(pressedSlot) ?: return@Runnable
+        longPressFired = true
+        pressedSlot = -1
+        invalidate()
+        onPick?.invoke(entry, PickStyle.JOINED)
+    }
 
     private val density = resources.displayMetrics.density
 
@@ -174,10 +194,15 @@ class SuggestionStripView @JvmOverloads constructor(
             MotionEvent.ACTION_DOWN -> {
                 val slot = SuggestionSlots.indexAt(width.toFloat(), event.x)
                 pressedSlot = if (slot >= 0 && slots[slot] != null) slot else -1
-                if (pressedSlot >= 0) invalidate()
+                longPressFired = false
+                if (pressedSlot >= 0) {
+                    invalidate()
+                    handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                }
             }
 
             MotionEvent.ACTION_UP -> {
+                handler.removeCallbacks(longPressRunnable)
                 // Commits the slot the press started on, not the one under the
                 // release point — the same rule the keys follow, for the same
                 // reason: a thumb that rolls sideways meant the thing it landed
@@ -187,10 +212,11 @@ class SuggestionStripView @JvmOverloads constructor(
                     pressedSlot = -1
                     invalidate()
                 }
-                chosen?.let { onPick?.invoke(it) }
+                if (!longPressFired) chosen?.let { onPick?.invoke(it, PickStyle.SPACED) }
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                handler.removeCallbacks(longPressRunnable)
                 if (pressedSlot >= 0) {
                     pressedSlot = -1
                     invalidate()
@@ -200,7 +226,19 @@ class SuggestionStripView @JvmOverloads constructor(
         return true
     }
 
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        handler.removeCallbacks(longPressRunnable)
+    }
+
     private companion object {
+        /**
+         * Longer than a key's long press (D5 shortened that one, because it is
+         * on the path of ordinary typing). Nothing here is, and holding a
+         * suggestion by accident inserts a word.
+         */
+        const val LONG_PRESS_MS = 400L
+
         const val DIVIDER_WIDTH_DP = 1f
         const val SLOT_PADDING_DP = 8f
 

@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D25 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D27 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -604,6 +604,46 @@ field is next focused, which is the next time it is visible anyway.
 The general point, worth keeping: **a value that can only be judged by looking
 at it belongs to whoever is looking.** The threshold in D3 is the opposite
 case — that one has to be measured, and a slider for it would be an abdication.
+
+### D26 — A long press on a suggestion joins it to the next word
+
+German runs words together. `Haus` and `Tür` are `Haustür`, and a keyboard that
+puts a space after every accepted suggestion is useless for exactly the half of
+the vocabulary that is longest and most worth completing.
+
+So a **tap** finishes the word — space after it, predictions chain, as before —
+and a **long press** hands the word over bare. What is typed next continues it,
+and the strip keeps completing the whole thing rather than starting over: after
+joining `Haus`, typing `tür` looks up `Haustür`.
+
+The hold is 400ms, longer than a key's (D5 shortened that one, because a key
+long-press is on the path of ordinary typing). Nothing on the strip is, and the
+cost of triggering this by accident is a word inserted without a space rather
+than a missing umlaut.
+
+Not offered for the add-word slot: remembering a word is the same act however
+long the finger stays down, and there is no second meaning available for it.
+
+### D27 — `letvs` means `let's`
+
+The apostrophe is a long-press on `v` (D17), so the way to miss it is to tap the
+key rather than hold it — and what follows an apostrophe is, overwhelmingly, an
+`s`. A word ending in `vs` is otherwise almost nonexistent, which is what makes
+this safe to apply without evidence: when the letters before it are a word, the
+strip offers that word with `'s` on the end. `letvs` → `let's`, `gehtvs` →
+`geht's`, `wievs` → `wie's`.
+
+The candidate has to be **built rather than looked up**, and that is the
+interesting part: the wordlists contain no contractions at all. The frequency
+corpus behind them was tokenised by a tool that split `don't` into `don` and
+`t`, so no contraction ever survived the intersection with the spelling lists
+(recorded in the wordlists' `PROVENANCE.md` as a known gap). Looking `let's` up
+would find nothing; looking `let` up and adding the apostrophe finds it every
+time, and inherits a sensible frequency while it is there.
+
+It covers only `'s`. The other contractions — `don't`, `can't` — need the
+apostrophe in the middle, where there is no such unambiguous signal, and would
+need the wordlists to know the results.
 
 ---
 

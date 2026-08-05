@@ -114,6 +114,34 @@ class DictionarySuggestionsTest {
         assertEquals("Hauswurz", suggestions.first().text)
     }
 
+    // -- the apostrophe on `v` (D27) -----------------------------------------
+
+    /**
+     * The apostrophe is a long-press on `v`, so missing it types `v` — and
+     * what follows is nearly always an `s`.
+     */
+    @Test
+    fun `a word ending in vs offers the apostrophe`() {
+        assertTrue("have's" in texts("havevs"))
+        assertTrue("haben's" in texts("habenvs"))
+    }
+
+    @Test
+    fun `the apostrophe candidate follows the case that was typed`() {
+        assertTrue("Have's" in texts("Havevs"))
+    }
+
+    /** Built rather than looked up, since the wordlists carry no contractions. */
+    @Test
+    fun `the stem has to be a word`() {
+        assertFalse(texts("xyzvs").any { it.endsWith("'s") })
+    }
+
+    @Test
+    fun `a bare vs is not a contraction of anything`() {
+        assertFalse(texts("vs").any { it.endsWith("'s") })
+    }
+
     // -- corrections (D23) ----------------------------------------------------
 
     /** A typo is not a prefix of anything, so completion alone says nothing. */

@@ -72,6 +72,20 @@ object NoSuggestions : SuggestionSource {
 }
 
 /**
+ * How a slot was chosen, which decides what happens to the space after it.
+ *
+ * German runs words together — `Haus` plus `tür` is one word, not two — so the
+ * strip has to be able to hand a word over without ending it (D26).
+ */
+enum class PickStyle {
+    /** A tap: the word is finished, and a space follows it. */
+    SPACED,
+
+    /** A long press: the word is a piece of a longer one, so nothing follows it. */
+    JOINED,
+}
+
+/**
  * What one slot of the strip holds.
  *
  * Two kinds, because the strip does two jobs: it offers words, and it is where

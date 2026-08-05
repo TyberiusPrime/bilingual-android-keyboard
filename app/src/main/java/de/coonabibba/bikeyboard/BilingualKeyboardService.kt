@@ -596,9 +596,11 @@ class BilingualKeyboardService : InputMethodService() {
         return StripEntry.AddWord(typed)
     }
 
-    private fun pickEntry(entry: StripEntry) {
+    private fun pickEntry(entry: StripEntry, style: PickStyle) {
         when (entry) {
-            is StripEntry.Word -> pickSuggestion(entry.suggestion)
+            is StripEntry.Word -> pickSuggestion(entry.suggestion, style)
+            // Remembering a word is the same act however long the finger stays
+            // down; there is no second meaning for it to have.
             is StripEntry.AddWord -> addWord(entry.word)
         }
     }
@@ -623,7 +625,7 @@ class BilingualKeyboardService : InputMethodService() {
      * suggestion is offered while it does, so there is nothing to count
      * backwards through here.
      */
-    private fun pickSuggestion(suggestion: Suggestion) {
+    private fun pickSuggestion(suggestion: Suggestion, style: PickStyle) {
         val ic = currentInputConnection ?: return
         val replaced = word.text.length
         // Whatever of the word sits on the far side of the cursor goes too: the
@@ -634,9 +636,12 @@ class BilingualKeyboardService : InputMethodService() {
         // What follows the word decides whether a space is wanted: at the end
         // of the text yes, in front of an existing space or comma no. Without
         // this, correcting a word in a finished sentence doubles its space.
+        // A long press says the word is half of a compound, and skips it
+        // regardless (D26).
         val following = ic.getTextAfterCursor(replacedAfter + 1, 0)
         val next = following?.getOrNull(replacedAfter)
-        val committed = if (TextEdits.needsTrailingSpace(next)) "$text " else text
+        val spaced = style == PickStyle.SPACED && TextEdits.needsTrailingSpace(next)
+        val committed = if (spaced) "$text " else text
 
         ic.beginBatchEdit()
         if (replaced > 0 || replacedAfter > 0) ic.deleteSurroundingText(replaced, replacedAfter)
@@ -649,6 +654,9 @@ class BilingualKeyboardService : InputMethodService() {
         // there is nothing for the trail to colour (D19).
         clearTrail()
         word.reset(known = true)
+        // Joined on, the word is still in progress: what comes next is more of
+        // it, and the strip should be completing `Haus` + `tür` as one.
+        if (!spaced) word.insert(text)
         // A space just committed is the first half of the double-space full
         // stop, so one more tap on space ends the sentence (D6). If no space
         // was added, there is nothing to be the first half of.

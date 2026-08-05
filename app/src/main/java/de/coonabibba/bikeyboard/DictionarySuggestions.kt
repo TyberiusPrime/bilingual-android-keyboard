@@ -52,6 +52,8 @@ class DictionarySuggestions(
             }
         }
 
+        addApostropheS(typed, candidates)
+
         // Completions only answer a word that was begun correctly. When there
         // are few or none — a typo, or a whole word the cursor jumped back to
         // (D23) — look for words a small number of edits away instead.
@@ -77,6 +79,42 @@ class DictionarySuggestions(
             .distinctBy { it.text }
             .take(SuggestionSlots.CAPACITY)
             .toList()
+    }
+
+    /**
+     * `letvs` means `let's`, and so does `gehtvs` mean `geht's` (D27).
+     *
+     * The apostrophe is the long-press alternate on `v` (D17), so the way to
+     * miss it is to tap the key instead of holding it — and the letters that
+     * follow are almost always `s`. A word ending in `vs` is otherwise close to
+     * nonexistent, which is what makes the rule safe enough to apply blindly.
+     *
+     * It has to *build* the candidate rather than look it up: the wordlists
+     * carry no contractions at all, because the corpus their frequencies come
+     * from split `don't` into `don` and `t` before counting (see
+     * PROVENANCE.md). So the stem is looked up, and the apostrophe is added to
+     * the spelling the dictionary has.
+     */
+    private fun addApostropheS(typed: String, into: MutableList<Candidate>) {
+        if (typed.length < STEM_MIN + 2) return
+        if (!typed.regionMatches(typed.length - 2, "vs", 0, 2, ignoreCase = true)) return
+        val stem = typed.substring(0, typed.length - 2)
+
+        personal.completions(Folding.fold(stem))
+            .firstOrNull { Folding.fold(it) == Folding.fold(stem) }
+            ?.let { into += Candidate("$it's", PERSONAL_WEIGHT, language = null) }
+
+        lexicons.forEach { lexicon ->
+            val index = lexicon.indexOf(stem)
+            if (index < 0) return@forEach
+            // The stem's own weight: `let's` is about as likely as `let` was,
+            // and it should out-rank anything the typo search turns up.
+            into += Candidate(
+                "${lexicon.wordAt(index)}'s",
+                lexicon.weightAt(index),
+                lexicon.language,
+            )
+        }
     }
 
     /**
@@ -142,6 +180,9 @@ class DictionarySuggestions(
          * beat ordinary vocabulary, not enough to displace `the` or `ich`.
          */
         const val PERSONAL_WEIGHT = 1e-3f
+
+        /** A one-letter stem in front of an apostrophe is a typo, not a word. */
+        const val STEM_MIN = 2
 
         /**
          * Below this, a word is too short to correct: nearly every three-letter

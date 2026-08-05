@@ -46,11 +46,17 @@ class Lexicon(
      * store, and an accent variant of a word already in the dictionary is not a
      * new word.
      */
-    fun knows(word: CharSequence): Boolean {
+    fun knows(word: CharSequence): Boolean = indexOf(word) >= 0
+
+    /**
+     * Where [word] sits in this lexicon, or -1 if it is not a word here.
+     * Folded, so `strasse` finds `Straße` — see [knows].
+     */
+    fun indexOf(word: CharSequence): Int {
         val folded = Folding.fold(word)
-        if (folded.isEmpty()) return false
+        if (folded.isEmpty()) return -1
         val index = lowerBound(folded)
-        return index < words.size && Folding.fold(words[index]) == folded
+        return if (index < words.size && Folding.fold(words[index]) == folded) index else -1
     }
 
     /**

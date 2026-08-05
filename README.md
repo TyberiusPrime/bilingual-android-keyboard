@@ -18,6 +18,7 @@ is being worked out in [`docs/design.md`](docs/design.md).
 | `app/src/main/java/.../KeyboardLayout.kt` | layout definitions |
 | `app/src/main/java/.../SuggestionStripView.kt` | the suggestion strip |
 | `app/src/main/java/.../DictionarySuggestions.kt` | both languages, one ranking |
+| `app/src/main/java/.../SetupActivity.kt` | setup, and the learned-word list |
 | `app/src/main/assets/wordlists/` | the wordlists, and where they came from |
 | `scripts/build-wordlists.py` | how the wordlists are regenerated |
 | `app/src/main/res/xml/method.xml` | one subtype, deliberately |

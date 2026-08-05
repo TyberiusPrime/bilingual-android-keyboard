@@ -65,6 +65,60 @@ class PersonalStoreTest {
         assertEquals(emptyList<String>(), store.completions(""))
     }
 
+    /** A store that only grows fills up with half-typed mistakes. */
+    @Test
+    fun `a word can be taken back out`() {
+        val (store, file) = store()
+        store.add("Coonabibba")
+        store.add("Fairphone")
+        assertTrue(store.remove("Coonabibba"))
+        assertFalse("removing it twice changes nothing", store.remove("Coonabibba"))
+        assertFalse(store.knows("Coonabibba"))
+        store.persist()
+
+        val reopened = PersonalStore(file)
+        reopened.load()
+        assertEquals(listOf("Fairphone"), reopened.all())
+    }
+
+    /**
+     * The keyboard service and the launcher screen each hold a copy of the same
+     * file, and the screen can rewrite it while the keyboard is alive.
+     */
+    @Test
+    fun `an edit made elsewhere is picked up`() {
+        val (store, file) = store()
+        store.add("Coonabibba")
+        store.persist()
+
+        val keyboardsCopy = PersonalStore(file)
+        keyboardsCopy.load()
+        assertTrue(keyboardsCopy.knows("Coonabibba"))
+
+        // Something else rewrites the file. The timestamp has one-second
+        // granularity on some filesystems, so make the change unmistakable.
+        file.writeText("Fairphone\n")
+        file.setLastModified(file.lastModified() + 2_000)
+
+        keyboardsCopy.reloadIfChanged()
+        assertFalse(keyboardsCopy.knows("Coonabibba"))
+        assertTrue(keyboardsCopy.knows("Fairphone"))
+    }
+
+    @Test
+    fun `nothing is re-read while the file is untouched`() {
+        val (store, file) = store()
+        store.add("Coonabibba")
+        store.persist()
+
+        // A word added but not yet written must survive a reload check, or the
+        // keyboard would forget words between the tap and the disk write.
+        store.add("Fairphone")
+        store.reloadIfChanged()
+        assertTrue(store.knows("Fairphone"))
+        assertTrue(file.exists())
+    }
+
     @Test
     fun `blank lines in the file are ignored`() {
         val (_, file) = store()

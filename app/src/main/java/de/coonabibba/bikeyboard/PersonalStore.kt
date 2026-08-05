@@ -12,38 +12,71 @@ import java.io.File
  * the ceiling on how good this keyboard ever gets for this user, so the ask is
  * one tap in the suggestion strip at the moment the word is typed.
  *
+ * It is also the only thing the user can be *wrong* about, so the launcher
+ * screen lists what is in here and can take words back out. A store that only
+ * grows would eventually be full of half-typed mistakes with no way to say so.
+ *
  * Stored as one word per line in the app's own files directory: ordinary
  * credential-encrypted storage, which D18 makes available by giving up
  * pre-unlock availability.
  *
- * The in-memory set is the truth during a session; [persist] is handed to the
- * caller so the write can happen off the main thread.
+ * **Read from the typing thread, written from a disk thread, and edited from
+ * another activity entirely.** The word list is therefore replaced wholesale
+ * rather than mutated, so a reader always sees one complete version or another;
+ * and [reloadIfChanged] exists because the keyboard service and the review
+ * screen each hold their own copy of a file the other one may have rewritten.
  */
 class PersonalStore(private val file: File) {
 
-    private val words = LinkedHashSet<String>()
+    @Volatile
+    private var words: List<String> = emptyList()
 
-    /** Reads the file, if it exists. Cheap: this is a user's own vocabulary. */
+    /** The file's modification time when [words] was read, to notice edits elsewhere. */
+    @Volatile
+    private var loadedAt = NEVER
+
+    /** Reads the file, if it exists. Cheap: this is one person's vocabulary. */
     fun load() {
-        words.clear()
-        if (!file.exists()) return
-        file.forEachLine { line ->
-            val word = line.trim()
-            if (word.isNotEmpty()) words.add(word)
+        words = if (file.exists()) {
+            file.readLines().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        } else {
+            emptyList()
         }
+        loadedAt = file.lastModified()
     }
 
-    fun all(): List<String> = words.toList()
+    /**
+     * Re-reads the file if something else has written it since. A stat, in the
+     * common case where nothing has.
+     */
+    fun reloadIfChanged() {
+        if (file.lastModified() != loadedAt) load()
+    }
+
+    fun all(): List<String> = words
 
     /**
      * Adds [word], returning whether it was new. Does not write anything —
      * [persist] does that, on whatever thread the caller likes.
      */
-    fun add(word: String): Boolean = words.add(word)
+    fun add(word: String): Boolean {
+        if (words.contains(word)) return false
+        words = words + word
+        return true
+    }
+
+    /** Removes [word], returning whether it was there. Also does not write. */
+    fun remove(word: String): Boolean {
+        if (!words.contains(word)) return false
+        words = words - word
+        return true
+    }
 
     fun persist() {
         file.parentFile?.mkdirs()
         file.writeText(words.joinToString(separator = "\n", postfix = "\n"))
+        // Our own write is not a change to notice later.
+        loadedAt = file.lastModified()
     }
 
     /** Whether the store holds [word], ignoring case and accents — see [Lexicon.knows]. */
@@ -56,5 +89,16 @@ class PersonalStore(private val file: File) {
     fun completions(foldedPrefix: String): List<String> {
         if (foldedPrefix.isEmpty()) return emptyList()
         return words.filter { Folding.fold(it).startsWith(foldedPrefix) }
+    }
+
+    companion object {
+        /**
+         * Where the store lives inside the app's files directory. Shared by the
+         * keyboard, which writes it, and the launcher screen, which edits it.
+         */
+        const val FILE_NAME = "personal-words.txt"
+
+        /** `File.lastModified` returns 0 for a file that does not exist. */
+        private const val NEVER = -1L
     }
 }

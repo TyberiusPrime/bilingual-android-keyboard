@@ -72,9 +72,10 @@ class SuggestionStripView @JvmOverloads constructor(
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        // Nearly the size of a key label. A suggestion you have to squint at is
-        // slower to read than retyping the word.
-        textSize = 19f * density
+        // Larger than a key label, deliberately. The keys are hit by muscle
+        // memory; the strip is the only thing here that has to be *read*, and
+        // read in the middle of typing something else.
+        textSize = 24f * density
     }
 
     private val surface = ContextCompat.getColor(context, R.color.keyboard_background)
@@ -87,16 +88,15 @@ class SuggestionStripView @JvmOverloads constructor(
      * not to the keyboard. Gold for German and blue for English is a mnemonic
      * from the flags and nothing deeper; what matters is that it stays the same.
      *
-     * Kept at [TINT_STRENGTH] of the way from the keyboard surface to the hue,
-     * so it reads as a tint rather than as a highlight — the highlight means
-     * something else here.
+     * A word from the personal store belongs to no language and gets a neutral
+     * wash rather than nothing at all. An untinted slot beside two tinted ones
+     * reads as a bug rather than as a third case — it did, the first time this
+     * was tried on a phone.
      */
     private fun tintFor(language: Language?): Int = when (language) {
         Language.GERMAN -> ColorUtils.blendARGB(surface, GERMAN_HUE, TINT_STRENGTH)
         Language.ENGLISH -> ColorUtils.blendARGB(surface, ENGLISH_HUE, TINT_STRENGTH)
-        // The personal store belongs to no language, and looking different is
-        // the honest thing for it to do.
-        null -> surface
+        null -> ColorUtils.blendARGB(surface, PERSONAL_HUE, TINT_STRENGTH)
     }
 
     init {
@@ -123,9 +123,7 @@ class SuggestionStripView @JvmOverloads constructor(
                 canvas.drawRect(left, 0f, right, height.toFloat(), pressedPaint)
             } else if (entry is StripEntry.Word) {
                 tintPaint.color = tintFor(entry.suggestion.language)
-                if (tintPaint.color != surface) {
-                    canvas.drawRect(left, 0f, right, height.toFloat(), tintPaint)
-                }
+                canvas.drawRect(left, 0f, right, height.toFloat(), tintPaint)
             }
 
             // A divider only between two occupied slots, never trailing off
@@ -208,8 +206,12 @@ class SuggestionStripView @JvmOverloads constructor(
          */
         const val HIGH_CONFIDENCE = 0.5f
 
-        /** How far from the keyboard surface towards a language's hue. Slight, deliberately. */
-        const val TINT_STRENGTH = 0.10f
+        /**
+         * How far from the keyboard surface towards a language's hue. Slight,
+         * but the first attempt at half this was invisible on a phone in
+         * daylight — which for an indicator is the same as not being there.
+         */
+        const val TINT_STRENGTH = 0.20f
 
         val PRESSED_BG = Color.parseColor("#3A3A3C")
         val DIVIDER = Color.parseColor("#3A3A3C")
@@ -222,5 +224,8 @@ class SuggestionStripView @JvmOverloads constructor(
 
         val GERMAN_HUE = Color.parseColor("#F2B233")
         val ENGLISH_HUE = Color.parseColor("#3B82F6")
+
+        /** Neutral, for a word that came from the user rather than from a language. */
+        val PERSONAL_HUE = Color.parseColor("#B0B0B8")
     }
 }

@@ -82,12 +82,16 @@ correction goes wrong, the indicator should make it obvious *why*. A separate,
 louder debug overlay is expected during tuning.
 
 **Built, as a tint behind each suggestion** (D22): gold for German, blue for
-English, a tenth of the way from the keyboard surface to the hue, and nothing
-at all behind a word from the personal store. Deliberately per candidate rather
-than per keyboard — under D2 the language belongs to the word, so a strip
-showing a German and an English candidate side by side, differently tinted, is
-the honest picture. There is nowhere else it could go without inventing a
-current language for it to describe.
+English, a fifth of the way from the keyboard surface to the hue, and a neutral
+wash behind a word from the personal store, which belongs to no language. Half
+that strength was tried first and could not be seen on the phone at all, which
+for an indicator is the same as not existing; an untinted slot next to two
+tinted ones was read as a rendering bug rather than as a third case.
+
+Deliberately per candidate rather than per keyboard — under D2 the language
+belongs to the word, so a strip showing a German and an English candidate side
+by side, differently tinted, is the honest picture. There is nowhere else it
+could go without inventing a current language for it to describe.
 
 ### D5 — QWERTY letter positions, umlauts on long-press
 
@@ -156,6 +160,11 @@ are now load-bearing rather than nice-to-have:
   into a settings screen. Under this policy it is the *only* feedback channel,
   so its friction sets the ceiling on how good the keyboard ever gets for this
   user.
+- **And it must be reviewable.** A one-tap add with no way back fills up with
+  half-typed mistakes — `+ purp` is one tap away from being learned forever. The
+  launcher screen lists everything the store holds and can take any of it out
+  again. That is the only screen the keyboard has, and it is the right one:
+  seen on the way to the keyboard rather than gone looking for.
 - **The auto-replace confidence threshold should start conservative**, because
   the self-correcting mechanism that would normally excuse an aggressive
   threshold does not exist here.
@@ -457,6 +466,11 @@ part-of-speech signal that no GPL-compatible source here carries, and guessing
 it would capitalise adjectives instead. Recorded in the wordlists' own
 `PROVENANCE.md` alongside the other gaps.
 
+The store is also the only thing here the user can be *wrong* about, so the
+launcher screen lists it and can forget any word in it. Keyboard and screen hold
+separate copies of the same file; each stats it on the way in and re-reads only
+when the other has written.
+
 **The personal store is a lexicon with a fixed weight** — about that of the
 two-hundredth most common word, so an added word beats ordinary vocabulary but
 not `the` or `ich`. It is reached by the add-word offer, which occupies the
@@ -555,7 +569,10 @@ regardless of how clever the model later becomes:
   the drawn key rectangles with slop bolted on.
 
 **Window insets.** `targetSdk 35` makes edge-to-edge mandatory, so the system
-stops insetting the IME window. Unhandled, the system's own hide-keyboard
+stops insetting the IME window — nor the launcher screen's, where the same
+oversight put the status text underneath the clock and the first button behind
+the action bar. The action bar is gone and both screens now pad themselves by
+the system-bar insets. Unhandled, the system's own hide-keyboard
 chevron, IME-switcher globe and gesture pill are composited over the bottom row
 and take its taps. The input view is wrapped in a container carrying the
 navigation-bar inset as bottom padding.

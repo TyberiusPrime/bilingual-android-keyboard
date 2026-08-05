@@ -9,4 +9,8 @@
     <string name="action_select">2. Select as active keyboard</string>
     <string name="status_enabled">Status: enabled.</string>
     <string name="status_not_enabled">Status: not enabled yet.</string>
+    <string name="learned_title">Learned words (%1$d)</string>
+    <string name="learned_empty">Nothing learned yet. When the keyboard does not know a word you are typing, the suggestion strip offers to remember it.</string>
+    <string name="action_forget">Forget</string>
+    <string name="action_forget_word">Forget %1$s</string>
 </resources>

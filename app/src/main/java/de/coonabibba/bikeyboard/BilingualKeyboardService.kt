@@ -132,6 +132,10 @@ class BilingualKeyboardService : InputMethodService() {
         // where the cursor is, is not that.
         word.reset(known = info.initialSelStart == 0)
         spaceGesture.otherInput()
+        // The launcher screen can take words back out of the store while this
+        // service is alive. A stat per focus, and a read only when the file
+        // really did change under us.
+        personalStore.reloadIfChanged()
         refreshSuggestions()
     }
 
@@ -394,7 +398,7 @@ class BilingualKeyboardService : InputMethodService() {
     private var suggestionSource: SuggestionSource = NoSuggestions
 
     /** The user's own words. The only thing that ever teaches this keyboard (D8). */
-    private val personalStore by lazy { PersonalStore(File(filesDir, PERSONAL_WORDS_FILE)) }
+    private val personalStore by lazy { PersonalStore(File(filesDir, PersonalStore.FILE_NAME)) }
 
     /** Disk work — reading the wordlists, appending a word — never on the typing thread. */
     private val diskThread = Executors.newSingleThreadExecutor { runnable ->
@@ -565,9 +569,6 @@ class BilingualKeyboardService : InputMethodService() {
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64
-
-        /** Where the personal store lives, in ordinary credential-encrypted storage (D18). */
-        const val PERSONAL_WORDS_FILE = "personal-words.txt"
 
         /**
          * Below this, the word in progress is the start of typing rather than a

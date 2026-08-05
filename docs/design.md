@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D24 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D25 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -117,7 +117,10 @@ engine rather than the layout:
 
 The letter layer carries no `.` or `,` at all. Instead:
 
-- double-space inserts `. ` (period, space) and re-arms capitalisation,
+- double-space inserts `. ` (period, space) and re-arms capitalisation, and
+  **repeats**: the second double tap swallows both the space it just made and
+  the one it typed, so `word. ` becomes `word.. ` and three of them spell an
+  ellipsis without a trip to the symbol layer,
 - the symbol layer keeps the full punctuation set for everything else,
 - correction is expected to place apostrophes in contractions unprompted.
 
@@ -550,9 +553,16 @@ budget is what makes it acceptable: **once per cursor jump, never per
 keystroke.** A read that comes back null is still a refusal to guess.
 
 The same recovery covers a backspace that eats past the start of what was being
-tracked — and separately, a backspace with nothing in front of the cursor no
-longer counts as losing track at all. It used to, which left the strip dead
-after clearing a field, which is precisely the moment the next word starts.
+tracked — delete a word and start retyping it, and the strip stays awake — and
+separately, a backspace with nothing in front of the cursor no longer counts as
+losing track at all. It used to, which left the strip dead after clearing a
+field, which is precisely the moment the next word starts.
+
+**A correction only adds a space if the text does not already have one.** At
+the end of the text it does, and in front of another word it does, so
+predictions still chain; in front of an existing space or a comma it does not.
+Without that check, correcting a word inside a finished sentence left two spaces
+behind it every time.
 
 Measured on a laptop, not the Fairphone: a completion costs ~0.2ms, a correction
 ~3ms. The device numbers are the ones that matter and are not in yet.
@@ -577,6 +587,23 @@ casing per word, so a German noun typed without shift is offered lowercase.
 Fixing it afterwards was four keystrokes and is now one gesture — and it works
 on a word jumped back to, using D23's recovery, as much as on the one being
 typed.
+
+### D25 — How large the suggestions are is a setting
+
+Not a decision anyone made: a number that was guessed at three times from a
+laptop and was fine print, then correct, then shouting, on a phone nobody here
+is holding. It depends on eyesight, on screen size, and on the system font
+scale, which the strip now follows as well.
+
+So the size lives in a slider on the settings screen with a live preview, and
+the band above the keys follows it — larger suggestions make room for
+themselves rather than clipping — down to a floor, because the band is also the
+headroom a long-press popup needs (D21). The keyboard notices the change when a
+field is next focused, which is the next time it is visible anyway.
+
+The general point, worth keeping: **a value that can only be judged by looking
+at it belongs to whoever is looking.** The threshold in D3 is the opposite
+case — that one has to be measured, and a slider for it would be an abdication.
 
 ---
 

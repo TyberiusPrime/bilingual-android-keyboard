@@ -205,7 +205,7 @@ class KeyboardView @JvmOverloads constructor(
      * alternative, clamping the popup to this view's top edge, puts it directly
      * under the finger holding the key.
      */
-    private val popupHeadroom = resources.getDimension(R.dimen.suggestion_strip_height)
+    private val popupHeadroom = KeyboardPrefs.stripHeightPx(context)
 
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = KEY_BG }
     private val specialKeyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SPECIAL_BG }

@@ -39,20 +39,47 @@ class TextEditsTest {
     }
 
     @Test
-    fun `double space ends a sentence after a word`() {
-        assertTrue(TextEdits.endsSentenceOnDoubleSpace("hi "))
-        assertTrue(TextEdits.endsSentenceOnDoubleSpace("ende "))
-        assertTrue(TextEdits.endsSentenceOnDoubleSpace("was 2024 "))
+    fun `double space ends a sentence after a word, swallowing its space`() {
+        assertEquals(1, TextEdits.spacesBeforeSentenceEnd("hi "))
+        assertEquals(1, TextEdits.spacesBeforeSentenceEnd("ende "))
+        assertEquals(1, TextEdits.spacesBeforeSentenceEnd("was 2024 "))
+    }
+
+    /**
+     * The repeat: a previous double tap left `. `, so the next one has two
+     * spaces in front of it and has to take both. Three of them spell `...`.
+     */
+    @Test
+    fun `after a full stop it swallows both spaces, so the gesture repeats`() {
+        assertEquals(2, TextEdits.spacesBeforeSentenceEnd("word.  "))
+        assertEquals(2, TextEdits.spacesBeforeSentenceEnd("word..  "))
     }
 
     @Test
     fun `double space does not end a sentence without a word before it`() {
-        assertFalse("nothing at all", TextEdits.endsSentenceOnDoubleSpace(null))
-        assertFalse("too short", TextEdits.endsSentenceOnDoubleSpace(" "))
-        assertFalse("run of spaces", TextEdits.endsSentenceOnDoubleSpace("  "))
-        assertFalse("already punctuated", TextEdits.endsSentenceOnDoubleSpace(". "))
-        assertFalse("after a newline", TextEdits.endsSentenceOnDoubleSpace("\n "))
-        assertFalse("cursor not after a space", TextEdits.endsSentenceOnDoubleSpace("hi"))
+        assertEquals("nothing at all", 0, TextEdits.spacesBeforeSentenceEnd(null))
+        assertEquals("too short", 0, TextEdits.spacesBeforeSentenceEnd(" "))
+        assertEquals("run of spaces", 0, TextEdits.spacesBeforeSentenceEnd("  "))
+        assertEquals("deliberate run", 0, TextEdits.spacesBeforeSentenceEnd("hi   "))
+        assertEquals("other punctuation", 0, TextEdits.spacesBeforeSentenceEnd("hi!  "))
+        assertEquals("after a newline", 0, TextEdits.spacesBeforeSentenceEnd("\n "))
+        assertEquals("cursor not after a space", 0, TextEdits.spacesBeforeSentenceEnd("hi"))
+    }
+
+    // -- the space after an accepted suggestion (D23) -------------------------
+
+    @Test
+    fun `a suggestion at the end of the text gets its space`() {
+        assertTrue(TextEdits.needsTrailingSpace(null))
+        assertTrue("in front of another word", TextEdits.needsTrailingSpace('w'))
+    }
+
+    @Test
+    fun `a suggestion in finished text does not double the space`() {
+        assertFalse(TextEdits.needsTrailingSpace(' '))
+        assertFalse(TextEdits.needsTrailingSpace(','))
+        assertFalse(TextEdits.needsTrailingSpace('.'))
+        assertFalse(TextEdits.needsTrailingSpace('\n'))
     }
 
     // -- the word the cursor landed in (D23) ---------------------------------

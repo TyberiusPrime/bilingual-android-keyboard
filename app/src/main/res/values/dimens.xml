@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        The band above the keys. It is the suggestion strip (D9), and it is also
-        the headroom a long-press popup on the top row overhangs into, so both
-        views read the same value: the keyboard's total height must not depend
-        on which of the two is asking.
+        The floor under the band above the keys.
 
-        One key row tall. It started at 40dp, which was room enough for the
-        popups but left the suggestions reading as fine print beside the keys —
-        and they are the one thing here meant to be read rather than aimed at.
+        The band itself follows the suggestion text size, which is a setting
+        (see KeyboardPrefs) — but it can never be shorter than this, because it
+        is also the headroom a long-press popup on the top row overhangs into,
+        and the keys are not allowed to draw over each other however small the
+        suggestions are set.
     -->
-    <dimen name="suggestion_strip_height">52dp</dimen>
+    <dimen name="suggestion_strip_min_height">40dp</dimen>
 </resources>

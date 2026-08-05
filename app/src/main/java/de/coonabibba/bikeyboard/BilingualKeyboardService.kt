@@ -41,7 +41,14 @@ class BilingualKeyboardService : InputMethodService() {
     /** Double-tapping shift latches it; see [DoubleTap]. */
     private val shiftTaps = DoubleTap()
 
+    /**
+     * The suggestion text size the current input view was built for. The views
+     * read the setting once, so a change means building them again.
+     */
+    private var viewsBuiltForTextSp = 0
+
     override fun onCreateInputView(): View {
+        viewsBuiltForTextSp = KeyboardPrefs.suggestionTextSp(this)
         keyboardView = KeyboardView(this).apply {
             layout = Layouts.forLayer(layer)
             onKey = ::handleKey
@@ -121,6 +128,12 @@ class BilingualKeyboardService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // The size of the suggestions is a setting, and the views bake it in
+        // when they are built. Focusing a field is the natural moment to notice
+        // it has been changed.
+        if (viewsBuiltForTextSp != KeyboardPrefs.suggestionTextSp(this)) {
+            setInputView(onCreateInputView())
+        }
         applyNavigationBarInset()
         // A password field must never reach prediction, logging or a learned
         // dictionary. Recorded here so later stages can honour it.
@@ -267,24 +280,25 @@ class BilingualKeyboardService : InputMethodService() {
      * newline, or nothing at all, a second space is just a space.
      */
     private fun sentenceEnd(ic: InputConnection, key: Key) {
-        if (!TextEdits.endsSentenceOnDoubleSpace(ic.getTextBeforeCursor(2, 0))) {
+        val spaces = TextEdits.spacesBeforeSentenceEnd(ic.getTextBeforeCursor(SENTENCE_LOOKBEHIND, 0))
+        if (spaces == 0) {
             insertSpace(ic, key)
             return
         }
 
         ic.beginBatchEdit()
-        ic.deleteSurroundingText(1, 0)
-        ic.commitText(". ", 1)
+        ic.deleteSurroundingText(spaces, 0)
+        ic.commitText(SENTENCE_END, 1)
         ic.endBatchEdit()
 
-        if (expectedCursor >= 0) expectedCursor += 1
+        if (expectedCursor >= 0) expectedCursor += SENTENCE_END.length - spaces
         popTrail()
         trail.addFirst(TrailEntry(key, alternate = false))
         publishTrail()
 
-        // The space that was there is gone and a full stop and space stand in
-        // its place; either way the word ended.
-        word.insert(". ")
+        // The spaces that were there are gone and a full stop and space stand
+        // in their place; either way the word ended.
+        word.insert(SENTENCE_END)
         refreshSuggestions()
 
         shifted = true
@@ -304,6 +318,11 @@ class BilingualKeyboardService : InputMethodService() {
             } else {
                 if (expectedCursor > 0) expectedCursor -= 1
                 word.deleteOne()
+                // Backspacing past the start of what we were tracking used to
+                // silence the strip until the next space — which is exactly
+                // when someone deletes a word and starts retyping it. Ask the
+                // field what is there instead (D23).
+                if (!word.known) recoverWordAtCursor()
             }
         } else {
             ic.commitText("", 1)
@@ -339,6 +358,7 @@ class BilingualKeyboardService : InputMethodService() {
         // unless the read hit its limit, in which case a longer word may still
         // be standing and we no longer know what is in front of the cursor.
         word.deleteWord(complete = count < before.length)
+        if (!word.known) recoverWordAtCursor()
         spaceGesture.otherInput()
         refreshSuggestions()
     }
@@ -611,7 +631,12 @@ class BilingualKeyboardService : InputMethodService() {
         // recently (D23).
         val replacedAfter = word.suffix.length
         val text = if (shifted) suggestion.text.replaceFirstChar { it.uppercase() } else suggestion.text
-        val committed = "$text "
+        // What follows the word decides whether a space is wanted: at the end
+        // of the text yes, in front of an existing space or comma no. Without
+        // this, correcting a word in a finished sentence doubles its space.
+        val following = ic.getTextAfterCursor(replacedAfter + 1, 0)
+        val next = following?.getOrNull(replacedAfter)
+        val committed = if (TextEdits.needsTrailingSpace(next)) "$text " else text
 
         ic.beginBatchEdit()
         if (replaced > 0 || replacedAfter > 0) ic.deleteSurroundingText(replaced, replacedAfter)
@@ -624,9 +649,10 @@ class BilingualKeyboardService : InputMethodService() {
         // there is nothing for the trail to colour (D19).
         clearTrail()
         word.reset(known = true)
-        // The space just committed is the first half of the double-space full
-        // stop, so one more tap on space ends the sentence (D6).
-        spaceGesture.suggestionAccepted()
+        // A space just committed is the first half of the double-space full
+        // stop, so one more tap on space ends the sentence (D6). If no space
+        // was added, there is nothing to be the first half of.
+        if (committed.endsWith(" ")) spaceGesture.suggestionAccepted() else spaceGesture.otherInput()
         refreshSuggestions()
     }
 
@@ -672,6 +698,15 @@ class BilingualKeyboardService : InputMethodService() {
          * instead of running out.
          */
         const val TRAIL_CAPACITY = 10
+
+        /** What a double tap on space writes. */
+        const val SENTENCE_END = ". "
+
+        /**
+         * Enough to see the spaces a double tap should swallow and the
+         * character in front of them.
+         */
+        const val SENTENCE_LOOKBEHIND = 3
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64

@@ -8,7 +8,6 @@ import android.graphics.Paint
 import android.text.TextPaint
 import android.text.TextUtils
 import android.util.AttributeSet
-import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
@@ -65,7 +64,13 @@ class SuggestionStripView @JvmOverloads constructor(
     private var pressedSlot = -1
 
     private val density = resources.displayMetrics.density
-    private val stripHeight = resources.getDimension(R.dimen.suggestion_strip_height)
+
+    /**
+     * Both of these are settings, read once when the view is built. The service
+     * rebuilds its input view when they change — see
+     * [BilingualKeyboardService.onStartInputView].
+     */
+    private val stripHeight = KeyboardPrefs.stripHeightPx(context)
 
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
     private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DIVIDER }
@@ -74,20 +79,10 @@ class SuggestionStripView @JvmOverloads constructor(
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        // In sp rather than dp, unlike the key labels: the keys are a grid to
-        // be aimed at, while this is the one thing on the keyboard meant to be
-        // *read*, so it follows the system font-size preference the way body
-        // text everywhere else does. Capped to the band so that a large
-        // accessibility scale enlarges it up to the point of clipping and no
-        // further.
-        textSize = min(
-            TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_SP,
-                TEXT_SIZE_SP,
-                resources.displayMetrics,
-            ),
-            stripHeight * MAX_TEXT_FRACTION,
-        )
+        // Whatever the reader asked for, in sp so it also follows the system
+        // font scale — and capped to the band, which is the one thing the text
+        // may not outgrow.
+        textSize = min(KeyboardPrefs.suggestionTextPx(context), stripHeight * MAX_TEXT_FRACTION)
     }
 
     private val surface = ContextCompat.getColor(context, R.color.keyboard_background)
@@ -208,9 +203,6 @@ class SuggestionStripView @JvmOverloads constructor(
     private companion object {
         const val DIVIDER_WIDTH_DP = 1f
         const val SLOT_PADDING_DP = 8f
-
-        /** Bigger than a key label, and it follows the system font scale. */
-        const val TEXT_SIZE_SP = 26f
 
         /** Ceiling on the text, as a fraction of the band, so it cannot clip. */
         const val MAX_TEXT_FRACTION = 0.62f

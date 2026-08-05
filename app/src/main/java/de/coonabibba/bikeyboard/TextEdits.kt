@@ -23,17 +23,48 @@ object TextEdits {
     }
 
     /**
-     * Whether a second tap on space should end the sentence rather than insert
-     * another space (D6).
+     * How many trailing spaces a double tap should swallow before writing its
+     * full stop, or zero if this is not a sentence ending at all (D6).
      *
-     * True only when the text is `…<word-character><space>`: after punctuation,
-     * a newline, a run of spaces, or at the very start, a space is just a space.
+     * One space in the ordinary case — `word ` becomes `word. `. **Two when a
+     * full stop is already there**, because the previous double tap left its
+     * own space behind: `word. ` plus a fresh space is `word.  `, and taking
+     * both back gives `word.. `. That is what makes the gesture repeat, and
+     * three double taps spell `...` — otherwise a trip to the symbol layer for
+     * something people type constantly.
+     *
+     * Zero after other punctuation, after a newline, after a deliberate run of
+     * three or more spaces, or at the very start. `!.` is not a thing.
      */
-    fun endsSentenceOnDoubleSpace(before: CharSequence?): Boolean =
-        before != null &&
-            before.length >= 2 &&
-            before[before.length - 1] == ' ' &&
-            before[before.length - 2].isLetterOrDigit()
+    fun spacesBeforeSentenceEnd(before: CharSequence?): Int {
+        if (before == null) return 0
+        var spaces = 0
+        while (spaces < MAX_SWALLOWED_SPACES &&
+            spaces < before.length &&
+            before[before.length - 1 - spaces] == ' '
+        ) {
+            spaces++
+        }
+        if (spaces == 0) return 0
+        val index = before.length - spaces - 1
+        if (index < 0) return 0
+        val preceding = before[index]
+        return if (preceding.isLetterOrDigit() || preceding == '.') spaces else 0
+    }
+
+    /** A run longer than this was typed on purpose and is left alone. */
+    private const val MAX_SWALLOWED_SPACES = 2
+
+    /**
+     * Whether an accepted suggestion should be followed by a space.
+     *
+     * Yes at the end of the text and in front of another word, so that
+     * predictions can be tapped one after another; no when the text already
+     * continues with a space or a comma, which is the case when the cursor has
+     * jumped back into a finished sentence (D23). Getting this wrong inserts a
+     * double space every time an earlier word is corrected.
+     */
+    fun needsTrailingSpace(next: Char?): Boolean = next == null || isWordChar(next)
 
     /**
      * The word the cursor is sitting in, split at the cursor.

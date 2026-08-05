@@ -8,10 +8,12 @@ import android.graphics.Paint
 import android.text.TextPaint
 import android.text.TextUtils
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
+import kotlin.math.min
 
 /**
  * The suggestion strip (D9).
@@ -72,10 +74,20 @@ class SuggestionStripView @JvmOverloads constructor(
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        // Larger than a key label, deliberately. The keys are hit by muscle
-        // memory; the strip is the only thing here that has to be *read*, and
-        // read in the middle of typing something else.
-        textSize = 24f * density
+        // In sp rather than dp, unlike the key labels: the keys are a grid to
+        // be aimed at, while this is the one thing on the keyboard meant to be
+        // *read*, so it follows the system font-size preference the way body
+        // text everywhere else does. Capped to the band so that a large
+        // accessibility scale enlarges it up to the point of clipping and no
+        // further.
+        textSize = min(
+            TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_SP,
+                TEXT_SIZE_SP,
+                resources.displayMetrics,
+            ),
+            stripHeight * MAX_TEXT_FRACTION,
+        )
     }
 
     private val surface = ContextCompat.getColor(context, R.color.keyboard_background)
@@ -196,6 +208,12 @@ class SuggestionStripView @JvmOverloads constructor(
     private companion object {
         const val DIVIDER_WIDTH_DP = 1f
         const val SLOT_PADDING_DP = 8f
+
+        /** Bigger than a key label, and it follows the system font scale. */
+        const val TEXT_SIZE_SP = 26f
+
+        /** Ceiling on the text, as a fraction of the band, so it cannot clip. */
+        const val MAX_TEXT_FRACTION = 0.62f
 
         /**
          * Where a candidate stops being one option among several and starts

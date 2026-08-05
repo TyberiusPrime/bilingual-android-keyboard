@@ -119,7 +119,10 @@ class SetupActivity : AppCompatActivity() {
      */
     private fun showLearnedWords() {
         store.load()
-        val words = store.all()
+        // Alphabetical, ignoring case and accents, so a word is where the eye
+        // looks for it. The store itself keeps the order words were added in,
+        // which is the order they will be least easily found in.
+        val words = store.all().sortedWith(compareBy({ Folding.fold(it) }, { it }))
         learnedHeading.text = getString(R.string.learned_title, words.size)
         learnedList.removeAllViews()
 

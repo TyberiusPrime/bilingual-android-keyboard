@@ -24,8 +24,20 @@ class WordInProgress {
 
     private val builder = StringBuilder()
 
-    /** The partial word before the cursor. Empty at a word boundary. */
+    /** The part of the word in front of the cursor. Empty at a word boundary. */
     val text: CharSequence get() = builder
+
+    /**
+     * The part of the word *after* the cursor, when the cursor is sitting in
+     * the middle of one — which happens when it is put there rather than typed
+     * to (D23). Empty while typing normally, which is why nothing else has to
+     * think about it.
+     */
+    var suffix: String = ""
+        private set
+
+    /** The whole word the cursor is in. What gets looked up, and what gets replaced. */
+    val full: String get() = builder.toString() + suffix
 
     var known: Boolean = true
         private set
@@ -48,6 +60,9 @@ class WordInProgress {
                 builder.append(char)
             } else {
                 builder.setLength(0)
+                // Whatever followed the cursor is on the far side of a
+                // separator now, so it is a different word.
+                suffix = ""
                 known = true
             }
         }
@@ -78,14 +93,30 @@ class WordInProgress {
      */
     fun deleteWord(complete: Boolean) {
         builder.setLength(0)
+        suffix = ""
         if (!complete) known = false
     }
 
     /** Starts over: a new field, or a cursor movement we cannot account for. */
     fun reset(known: Boolean) {
         builder.setLength(0)
+        suffix = ""
         this.known = known
     }
 
-    private fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
+    /**
+     * Adopts a word read back from the app, split at the cursor (D23).
+     *
+     * This is the one place the keyboard learns what is in front of it by
+     * asking rather than by remembering, and it happens once per cursor jump
+     * rather than once per keystroke.
+     */
+    fun adopt(word: WordAtCursor) {
+        builder.setLength(0)
+        builder.append(word.before)
+        suffix = word.after
+        known = true
+    }
+
+    private fun isWordChar(char: Char): Boolean = TextEdits.isWordChar(char)
 }

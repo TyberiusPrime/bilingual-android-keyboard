@@ -5,6 +5,10 @@
         the headroom a long-press popup on the top row overhangs into, so both
         views read the same value: the keyboard's total height must not depend
         on which of the two is asking.
+
+        One key row tall. It started at 40dp, which was room enough for the
+        popups but left the suggestions reading as fine print beside the keys —
+        and they are the one thing here meant to be read rather than aimed at.
     -->
-    <dimen name="suggestion_strip_height">40dp</dimen>
+    <dimen name="suggestion_strip_height">52dp</dimen>
 </resources>

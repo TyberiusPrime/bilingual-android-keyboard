@@ -3,11 +3,13 @@
 An Android keyboard that is aware of two languages at once, instead of making
 you switch between them.
 
-**Status: it types, and it suggests.** German and English wordlists are queried
-together on every keystroke, so a suggestion from either language can win a slot
-mid-sentence without anything switching. Correction proper — replacing what you
-actually typed, at a confidence worth acting on — is not written yet; the design
-is being worked out in [`docs/design.md`](docs/design.md).
+**Status: it types, it suggests, and it corrects when asked.** German and
+English wordlists are queried together on every keystroke, so a suggestion from
+either language can win a slot mid-sentence without anything switching; typos
+are offered corrections, and tapping back into an earlier word picks it up
+again. What is *not* written is auto-correction — nothing is ever replaced
+without a tap, because the confidence behind it is not yet worth acting on. The
+design is being worked out in [`docs/design.md`](docs/design.md).
 
 ## What is here
 

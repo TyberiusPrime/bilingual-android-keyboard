@@ -54,4 +54,40 @@ class TextEditsTest {
         assertFalse("after a newline", TextEdits.endsSentenceOnDoubleSpace("\n "))
         assertFalse("cursor not after a space", TextEdits.endsSentenceOnDoubleSpace("hi"))
     }
+
+    // -- the word the cursor landed in (D23) ---------------------------------
+
+    @Test
+    fun `the word at the cursor is both halves of it`() {
+        val word = TextEdits.wordAtCursor("hello wor", "ld and more")
+        assertEquals("wor", word.before)
+        assertEquals("ld", word.after)
+        assertEquals("world", word.text)
+    }
+
+    @Test
+    fun `at the end of a word there is nothing after it`() {
+        val word = TextEdits.wordAtCursor("hello world", " and more")
+        assertEquals("world", word.before)
+        assertEquals("", word.after)
+    }
+
+    @Test
+    fun `between words there is no word at all`() {
+        val word = TextEdits.wordAtCursor("hello ", " world")
+        assertEquals("", word.text)
+    }
+
+    @Test
+    fun `punctuation bounds the word but an apostrophe does not`() {
+        assertEquals("world", TextEdits.wordAtCursor("(hello, world", ")").text)
+        assertEquals("don't", TextEdits.wordAtCursor("I don't", " think").text)
+    }
+
+    @Test
+    fun `a read that came back empty is no word`() {
+        assertEquals("", TextEdits.wordAtCursor(null, null).text)
+        assertEquals("word", TextEdits.wordAtCursor("word", null).text)
+        assertEquals("word", TextEdits.wordAtCursor(null, "word").text)
+    }
 }

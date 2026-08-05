@@ -34,4 +34,30 @@ object TextEdits {
             before.length >= 2 &&
             before[before.length - 1] == ' ' &&
             before[before.length - 2].isLetterOrDigit()
+
+    /**
+     * The word the cursor is sitting in, split at the cursor.
+     *
+     * Used when the cursor arrives somewhere this keyboard did not put it —
+     * a tap back into an earlier word — where the only way to know what is
+     * there is to ask the app (D23). Both halves are kept because correcting
+     * the word means replacing all of it, not just the part in front of the
+     * cursor.
+     */
+    fun wordAtCursor(before: CharSequence?, after: CharSequence?): WordAtCursor {
+        val prefix = before?.takeLastWhile(::isWordChar)?.toString().orEmpty()
+        val suffix = after?.takeWhile(::isWordChar)?.toString().orEmpty()
+        return WordAtCursor(prefix, suffix)
+    }
+
+    /**
+     * What counts as part of a word. The apostrophe is in, so `don't` is one
+     * word — it is on long-press `v` precisely because contractions need it.
+     */
+    fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
+}
+
+/** A word split at the cursor: [before] it and [after] it. */
+data class WordAtCursor(val before: String, val after: String) {
+    val text: String get() = before + after
 }

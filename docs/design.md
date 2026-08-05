@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D22 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D24 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -34,8 +34,11 @@ below.
 - [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
       shift is pressed (D22). Worth a part-of-speech source, or worth living
       with?
-- [ ] Completion only, no edit distance (D22). Which typos does that leave
-      uncorrected in practice, and is prefix-only enough until the model lands?
+- [ ] Corrections cannot fix a mistyped **first** letter (D23), because the scan
+      is bucketed by it. How often does that bite in real typing?
+- [ ] A correction query costs ~3ms on a laptop and has not been timed on the
+      phone (D23). Per keystroke, on a word with no completions, that is the
+      first thing in this keyboard with a latency budget worth watching.
 
 ## Decisions
 
@@ -361,6 +364,8 @@ and neither has a long-press alternate to collide with.
 Auto-repeat ticks are delivered on a separate callback from real presses, so
 the machine gun is never mistaken for a deliberate gesture.
 
+Shift joined them later; see D24.
+
 **Cursor drag must not walk off the end.** A `DPAD_LEFT`/`DPAD_RIGHT` that the
 text field cannot consume — because the cursor is already at the start or the
 end — is not swallowed. It falls through to Android's focus navigation, focus
@@ -498,16 +503,80 @@ its owner types is a variant of complaint 4, and the corpus is what people
 actually say. The wordlists carry whatever the spelling lists and the subtitle
 corpus agree on.
 
-**What this is not:** it is not correction. There is no edit distance, so a
-typo that is not a prefix of the intended word gets nothing. The confidence on
-each candidate is its share of the matching mass — a unigram
-*P(word | prefix)* — which is honest but is not the calibrated number D3 wants,
-and nothing is ever replaced silently. D3 and step 7 are untouched.
+**What this is not:** it is not *auto*-correction. Typos are found (D23 added
+edit distance), but the confidence on each candidate is still its share of the
+matching mass — a unigram *P(word | prefix)* — which is honest but is not the
+calibrated number D3 wants, and nothing is ever replaced silently. D3 and step
+7 are untouched.
 
 Measured on a laptop, not the Fairphone: 70,000 entries load in ~75ms, and a
 query costs ~0.2ms. The load happens once per service on a background thread,
 so the first moment of a session has an empty strip rather than a stalled one.
 The device numbers are the ones that matter and are not in yet.
+
+### D23 — Corrections, and picking a word back up after a cursor jump
+
+Two halves of the same complaint: the strip went quiet exactly when it was
+wanted. A typo is not the prefix of anything, so completion had nothing to say
+about it; and tapping back into an earlier word left the keyboard with no idea
+what word that was, so it said nothing at all.
+
+**Corrections are edit distance, bounded and scanned.** One edit for a short
+word, two from six letters up, and a transposition counts as one — `teh` for
+`the` is the commonest way a thumb misses, and calling it two edits puts it out
+of reach. There is no index: a deletion index over 70,000 words costs more
+memory than the wordlists themselves. Instead the scan is cut down twice, first
+to words sharing the typed first letter, then to those close enough in length to
+be reachable, which leaves a few hundred words to actually measure. That runs
+only when completion has fewer candidates than the strip has slots, so ordinary
+typing never pays for it.
+
+The limit this accepts: **the first letter has to be right.** A word whose
+first letter was mistyped is not searched at all. That is the price of not
+building the index, and the first letter is the one a thumb gets wrong least
+often.
+
+Corrections rank below completions by construction — a word that was begun
+correctly beats one that has to be repaired — and further-away corrections rank
+below nearer ones.
+
+**A cursor jump is answered by asking the field.** When the cursor arrives
+somewhere the keyboard did not put it, it now reads the word around it back
+over the `InputConnection` instead of giving up (which is what D21's
+conservatism did). Both halves are kept, because correcting a word means
+replacing all of it and not just the part in front of the cursor. This is the
+first place the keyboard reads text back rather than remembering it, and the
+budget is what makes it acceptable: **once per cursor jump, never per
+keystroke.** A read that comes back null is still a refusal to guess.
+
+The same recovery covers a backspace that eats past the start of what was being
+tracked — and separately, a backspace with nothing in front of the cursor no
+longer counts as losing track at all. It used to, which left the strip dead
+after clearing a field, which is precisely the moment the next word starts.
+
+Measured on a laptop, not the Fairphone: a completion costs ~0.2ms, a correction
+~3ms. The device numbers are the ones that matter and are not in yet.
+
+### D24 — Shift carries gestures too
+
+Following D20, which gave space and backspace theirs. Shift is large, has no
+long-press alternate to collide with, and had exactly one behaviour.
+
+- **Double tap locks it.** Caps lock, drawn as a latched shift so the difference
+  between the next letter and every letter is one glance. A single tap unlocks.
+  There is no collision to worry about here: two quick taps on shift previously
+  meant "on, off", which is a null gesture.
+- **Swipe up re-cases the word the cursor is in**, cycling lower →
+  capitalised → shouted. Upward because shift has always pointed that way and
+  nothing else on the key is vertical, and once per swipe like the backspace
+  gesture, because it edits text and a destructive-feeling gesture wants a
+  fixed cost.
+
+The swipe is the direct answer to D22's known cost: the wordlists carry one
+casing per word, so a German noun typed without shift is offered lowercase.
+Fixing it afterwards was four keystrokes and is now one gesture — and it works
+on a word jumped back to, using D23's recovery, as much as on the one being
+typed.
 
 ---
 

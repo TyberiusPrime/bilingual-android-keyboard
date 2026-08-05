@@ -99,4 +99,44 @@ class WordInProgressTest {
         word.reset(known = true)
         assertTrue(word.known)
     }
+
+    // -- a word the cursor was put into (D23) --------------------------------
+
+    @Test
+    fun `an adopted word keeps both halves`() {
+        val word = WordInProgress()
+        word.adopt(WordAtCursor("wor", "ld"))
+        assertEquals("wor", word.text.toString())
+        assertEquals("ld", word.suffix)
+        assertEquals("world", word.full)
+        assertTrue("read back from the field is knowing", word.known)
+    }
+
+    @Test
+    fun `typing into an adopted word extends the half in front of the cursor`() {
+        val word = WordInProgress()
+        word.adopt(WordAtCursor("wor", "ld"))
+        word.insert("l")
+        assertEquals("worl", word.text.toString())
+        assertEquals("the far half is untouched", "ld", word.suffix)
+        assertEquals("worlld", word.full)
+    }
+
+    @Test
+    fun `a separator drops the far half too`() {
+        val word = WordInProgress()
+        word.adopt(WordAtCursor("wor", "ld"))
+        word.insert(" ")
+        assertEquals("", word.full)
+        assertTrue(word.known)
+    }
+
+    @Test
+    fun `resetting drops both halves`() {
+        val word = WordInProgress()
+        word.adopt(WordAtCursor("wor", "ld"))
+        word.reset(known = false)
+        assertEquals("", word.full)
+        assertFalse(word.known)
+    }
 }

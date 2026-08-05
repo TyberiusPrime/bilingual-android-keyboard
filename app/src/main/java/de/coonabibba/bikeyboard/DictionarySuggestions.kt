@@ -1,14 +1,17 @@
 package de.coonabibba.bikeyboard
 
+import kotlin.math.abs
+
 /**
  * Suggestions from the shipped wordlists and the personal store.
  *
  * Roadmap step 3, and deliberately the dumb version: completions of what has
- * been typed, ranked by how common the word is. No edit distance, no context,
- * no model. What it does have is the property the whole project is about —
- * **both languages are queried on every keystroke and compete on one scale**
- * (D1, D2). There is no current language, and a German word can win a slot from
- * an English one halfway through a sentence without anything switching.
+ * been typed, ranked by how common the word is, plus words a couple of edits
+ * away when completion finds nothing (D23). No context, no model. What it does
+ * have is the property the whole project is about — **both languages are
+ * queried on every keystroke and compete on one scale** (D1, D2). There is no
+ * current language, and a German word can win a slot from an English one
+ * halfway through a sentence without anything switching.
  *
  * Two smaller things fall out of the design decisions:
  *
@@ -49,6 +52,13 @@ class DictionarySuggestions(
             }
         }
 
+        // Completions only answer a word that was begun correctly. When there
+        // are few or none — a typo, or a whole word the cursor jumped back to
+        // (D23) — look for words a small number of edits away instead.
+        if (candidates.size < SuggestionSlots.CAPACITY) {
+            addCorrections(prefix, candidates)
+        }
+
         if (candidates.isEmpty()) return emptyList()
 
         // Confidence is the candidate's share of everything that matches: a
@@ -67,6 +77,41 @@ class DictionarySuggestions(
             .distinctBy { it.text }
             .take(SuggestionSlots.CAPACITY)
             .toList()
+    }
+
+    /**
+     * Words a few edits away from what was typed.
+     *
+     * Scanned rather than indexed: a deletion index over 70,000 words costs
+     * more memory than the wordlists themselves, and two filters make the scan
+     * cheap enough without it. Only words sharing the typed first letter are
+     * considered — which is the one letter a thumb rarely gets wrong, and is
+     * the honest limit of this approach — and within those, only the ones whose
+     * length is close enough to be reachable. Folding, the expensive part, then
+     * happens for a few hundred words rather than a few thousand.
+     */
+    private fun addCorrections(folded: String, into: MutableList<Candidate>) {
+        if (folded.length < MIN_CORRECTION_LENGTH) return
+        val maxDistance = if (folded.length >= LONG_WORD) 2 else 1
+        val bucket = folded.substring(0, 1)
+
+        lexicons.forEach { lexicon ->
+            for (index in lexicon.completions(bucket)) {
+                val word = lexicon.wordAt(index)
+                if (abs(word.length - folded.length) > maxDistance) continue
+                val distance = EditDistance.between(Folding.fold(word), folded, maxDistance)
+                if (distance !in 1..maxDistance) continue
+                // A correction is worth less than a word that was typed
+                // correctly, and worth less the further away it is. This keeps
+                // corrections under completions when both are on offer, and
+                // orders them by how common the word is within each distance.
+                into += Candidate(
+                    word,
+                    lexicon.weightAt(index) / CORRECTION_PENALTY[distance - 1],
+                    lexicon.language,
+                )
+            }
+        }
     }
 
     override fun knows(word: CharSequence): Boolean =
@@ -97,5 +142,22 @@ class DictionarySuggestions(
          * beat ordinary vocabulary, not enough to displace `the` or `ich`.
          */
         const val PERSONAL_WEIGHT = 1e-3f
+
+        /**
+         * Below this, a word is too short to correct: nearly every three-letter
+         * word is one edit from several others, so the suggestions would be
+         * noise and the typing is quicker than reading them.
+         */
+        const val MIN_CORRECTION_LENGTH = 4
+
+        /** From here up, two edits are allowed. Below it, one. */
+        const val LONG_WORD = 6
+
+        /**
+         * What a correction is worth against a word that was typed correctly,
+         * by distance. Steep, so a completion always wins a slot from a
+         * correction, and a near miss always wins from a far one.
+         */
+        val CORRECTION_PENALTY = floatArrayOf(50f, 2_500f)
     }
 }

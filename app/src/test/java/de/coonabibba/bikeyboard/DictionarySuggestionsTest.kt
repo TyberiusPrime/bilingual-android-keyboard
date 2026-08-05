@@ -114,6 +114,45 @@ class DictionarySuggestionsTest {
         assertEquals("Hauswurz", suggestions.first().text)
     }
 
+    // -- corrections (D23) ----------------------------------------------------
+
+    /** A typo is not a prefix of anything, so completion alone says nothing. */
+    @Test
+    fun `a word a single edit away is offered`() {
+        assertTrue("hallo" in texts("hallp"))
+        assertTrue("house" in texts("housr"))
+    }
+
+    @Test
+    fun `a transposition is one edit, not two`() {
+        assertTrue("house" in texts("huose"))
+    }
+
+    @Test
+    fun `two edits are offered for a longer word`() {
+        assertTrue("Häuser" in texts("hauzer"))
+    }
+
+    @Test
+    fun `a completion still outranks a correction`() {
+        // `hous` completes to `house` and is one edit from `haus`; the word
+        // that was begun correctly comes first.
+        assertEquals("house", texts("hous").first())
+    }
+
+    @Test
+    fun `short words are left alone`() {
+        // Everything three letters long is one edit from half the dictionary.
+        assertEquals(emptyList<String>(), texts("hxu"))
+    }
+
+    @Test
+    fun `a first letter that is wrong is out of reach, and says so`() {
+        // Only words sharing the first letter are searched, which is the
+        // documented limit of the scan rather than an accident.
+        assertFalse("haben" in texts("jaben"))
+    }
+
     /**
      * D4's indicator reads this. It is a property of the candidate rather than
      * of the keyboard, which is the whole of D2 in one field.

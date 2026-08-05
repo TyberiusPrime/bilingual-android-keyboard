@@ -64,6 +64,13 @@ class KeyboardView @JvmOverloads constructor(
     /** Called per word while swiping left on backspace. */
     var onDeleteWord: (() -> Unit)? = null
 
+    /**
+     * Called when shift is swiped upwards, which re-cases the word the cursor
+     * is in (D23). Once per swipe: it edits text, so it wants a fixed and
+     * predictable cost, the same reasoning as the backspace swipe.
+     */
+    var onShiftSwipeUp: (() -> Unit)? = null
+
     var layout: KeyboardLayout = Layouts.letters
         set(value) {
             field = value
@@ -77,6 +84,17 @@ class KeyboardView @JvmOverloads constructor(
 
     /** Whether the shift key is currently engaged (affects labels only). */
     var shifted: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /**
+     * Whether shift is locked on. Drawn differently from a one-shot shift,
+     * because the difference between the next letter being capitalised and
+     * every letter being capitalised is worth one glance.
+     */
+    var capsLocked: Boolean = false
         set(value) {
             field = value
             invalidate()
@@ -123,8 +141,8 @@ class KeyboardView @JvmOverloads constructor(
      */
     private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
-    /** What a sideways drag off a key has turned into, if anything. */
-    private enum class DragMode { NONE, CURSOR, DELETE_WORD }
+    /** What a drag off a key has turned into, if anything. */
+    private enum class DragMode { NONE, CURSOR, DELETE_WORD, RECASE }
 
     /**
      * State of one finger currently on the keyboard.
@@ -136,6 +154,7 @@ class KeyboardView @JvmOverloads constructor(
     private class Touch(
         var placed: PlacedKey,
         val downX: Float,
+        val downY: Float,
         var stepAnchorX: Float,
         var fired: Boolean = false,
         var dragMode: DragMode = DragMode.NONE,
@@ -356,8 +375,11 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
-    private fun displayLabel(key: Key): String =
-        if (shifted && key.action is KeyAction.Text) key.label.uppercase() else key.label
+    private fun displayLabel(key: Key): String = when {
+        key.action == KeyAction.Shift && capsLocked -> CAPS_LOCK_LABEL
+        shifted && key.action is KeyAction.Text -> key.label.uppercase()
+        else -> key.label
+    }
 
     /**
      * `ß`.uppercase() is `SS`, which is correct German and wrong here — nobody
@@ -431,7 +453,12 @@ class KeyboardView @JvmOverloads constructor(
                 val x = event.getX(index)
                 val hit = keyAt(x, event.getY(index))
                 if (hit != null) {
-                    val touch = Touch(placed = hit, downX = x, stepAnchorX = x)
+                    val touch = Touch(
+                        placed = hit,
+                        downX = x,
+                        downY = event.getY(index),
+                        stepAnchorX = x,
+                    )
                     activePointers[pointerId] = touch
 
                     if (hit.key.repeats) {
@@ -512,7 +539,7 @@ class KeyboardView @JvmOverloads constructor(
                 // One word per swipe, deliberately. Repeating on continued
                 // travel took whole clauses out before the finger stopped.
                 // Lift and swipe again for the next word.
-                DragMode.DELETE_WORD -> continue
+                DragMode.DELETE_WORD, DragMode.RECASE -> continue
 
                 DragMode.NONE -> Unit
             }
@@ -529,6 +556,19 @@ class KeyboardView @JvmOverloads constructor(
                 touch.stepAnchorX = touch.downX
                 dismissLongPress()
                 emitCursorSteps(touch, x)
+                continue
+            }
+
+            // Swiping up on shift cycles the case of the word the cursor is
+            // in. Upward because shift has always pointed that way, and
+            // because nothing else on this key is vertical.
+            if (touch.placed.key.action == KeyAction.Shift &&
+                touch.downY - y >= RECASE_TRIGGER_DP * density
+            ) {
+                touch.dragMode = DragMode.RECASE
+                touch.fired = true
+                dismissLongPress()
+                onShiftSwipeUp?.invoke()
                 continue
             }
 
@@ -620,6 +660,16 @@ class KeyboardView @JvmOverloads constructor(
          * which fired when two quick single deletes were meant.
          */
         const val DELETE_WORD_TRIGGER_DP = 30f
+
+        /**
+         * Upward travel on shift before the word is re-cased. Longer than the
+         * backspace swipe: a thumb on shift is at the edge of the keyboard and
+         * drifts upwards on the way to the letters above it.
+         */
+        const val RECASE_TRIGGER_DP = 36f
+
+        /** Shift, but latched. */
+        const val CAPS_LOCK_LABEL = "⇪"
         val TRAIL_STRONG = Color.parseColor("#8B5CF6")
         val KEY_BG = Color.parseColor("#3A3A3C")
         val SPECIAL_BG = Color.parseColor("#2A2A2C")

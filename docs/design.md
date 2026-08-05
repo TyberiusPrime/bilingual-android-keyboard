@@ -31,15 +31,6 @@ below.
       after a week of real use.
 - [ ] Is three the right number of slots in the strip (D21)? Guessed from other
       keyboards; unanswerable until something fills them.
-- [ ] **Tapping a suggestion inserts a trailing space, which collides with D6.**
-      The space is needed so that next-word predictions can be tapped one after
-      another without running together. But it means the text already ends in a
-      space, so double-tapping space to end the sentence sees *space, space* —
-      not *word, space* — and per D6 leaves three spaces instead of a full stop.
-      Nothing can hit this until the strip has content (step 4), and the fix is
-      not obvious: making the pick's space count as the first tap of the gesture
-      turns a single space tap into a period, which is worse. Recorded rather
-      than guessed at.
 
 ## Decisions
 
@@ -394,6 +385,21 @@ Still a down payment on step 3, not a substitute for it. Step 3 owns the
 composing region, which is the mechanism that makes a correction replaceable
 after the fact rather than counted backwards through.
 
+**A picked suggestion inserts a trailing space, and that space counts as the
+first half of D6's full stop.** The space is needed so that next-word
+predictions can be tapped one after another without running together — but it
+means the text already ends in a space, so double-tapping space to end the
+sentence would see *space, space* rather than *word, space*, and D6's rule
+declines to make a full stop out of that. So one tap on space after accepting a
+suggestion ends the sentence. From the typist's side it is the same gesture: the
+first space was placed for them.
+
+The rule that makes this safe is that **anything other than a space clears it**.
+Accept a word, type a letter, and space is a space again. Making that explicit
+also fixed an older bug: the previous key-and-timestamp version never reset
+between taps, so `space`, letter, `space` typed quickly counted as a double tap
+and dropped a full stop into the middle of a sentence.
+
 **Nothing is suggested into a password, a `NO_SUGGESTIONS` field, an email
 address, a URI or a search filter** — the first two an obligation from the API
 notes, the rest because they are not prose. The strip stays *visible* in those
@@ -483,7 +489,7 @@ window is defined in terms of committed-text state.
 
 **The strip is Policy's only visible output** until auto-replace is allowed to
 turn on (step 7). It is built (D21) and wired to a `SuggestionSource` that
-returns nothing; step 4 replaces that object and the strip lights up without
+returns nothing; step 3 replaces that object and the strip lights up without
 anything else moving. What it feeds back is a tap, which the service turns into
 "replace the word in progress with this" — the narrowest editing operation that
 still exercises the whole path.
@@ -501,11 +507,11 @@ scorer's belief; it does not drive anything.
    period (D6), space and backspace gestures (D20), keypress trail (D19),
    suggestion strip present but empty (D9, D21). Daily-drivable, dumb.
    *Done.*
-3. **Editor I/O done properly** — composing regions, selection reconciliation,
-   undo window (D14). No model yet. This is the layer that makes everything
-   above it trustworthy, and the one most likely to be underestimated.
-4. **Dictionaries and personal store** — GPL DE/EN wordlists with provenance
+3. **Dictionaries and personal store** — GPL DE/EN wordlists with provenance
    (D13), the add-word path (D8/D14), plain lookup-based suggestions.
+4. **Editor I/O done properly** — composing regions, selection reconciliation,
+   undo window (D14). This is the layer that makes everything above it
+   trustworthy, and the one most likely to be underestimated.
 5. **TouchModel** — probabilistic hit testing, one-thumb drift compensation
    (D15). Measurable against step 2 on typo rate.
 6. **The multilingual model** (D10/D12) — source or train, quantise, integrate
@@ -513,15 +519,27 @@ scorer's belief; it does not drive anything.
 7. **Calibration and threshold tuning** (D3) — the point at which auto-replace
    is allowed to turn on at all.
 
+**Steps 3 and 4 are swapped from the original order**, which had editor I/O
+first. The reason is that editor I/O has nothing to be tested against while the
+strip is empty: composing regions, replacement and the undo window are all
+defined in terms of corrections that do not exist yet, so building them first
+means building to a specification nobody has typed against. Dictionaries produce
+the corrections, and the corrections are what shows whether the editing model
+holds up in real apps. The risk of doing it this way is that step 3 ships
+suggestions on top of the deliberately conservative word tracking described in
+D21 — good enough to offer and replace a word, not good enough to be the final
+answer — and step 4 has to go back over that ground properly rather than
+starting clean.
+
 Steps 2–5 are worth having on their own; a keyboard with a stable layout, a
 generous space bar and no autocorrect is already better than what is being used
 today. Step 6 is where the project either delivers or does not, and it should
-not be started before step 3 is solid.
+not be started before editor I/O is solid.
 
 ## Risks
 
-- **Step 3 is underestimated.** Editor I/O looks like plumbing and is where
-  keyboards actually break. Budget accordingly.
+- **Editor I/O is underestimated.** Now step 4, and it looks like plumbing; it
+  is where keyboards actually break. Budget accordingly.
 - **No suitable small DE+EN model exists off the shelf**, making step 6 a
   training project rather than an integration one. Mitigated by the D12 hedge.
 - **Latency on real hardware.** A model that is fine on a laptop may not hold a

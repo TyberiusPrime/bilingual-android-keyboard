@@ -126,6 +126,7 @@ class BilingualKeyboardService : InputMethodService() {
         // about; -1, which is what the field reports when it does not know
         // where the cursor is, is not that.
         word.reset(known = info.initialSelStart == 0)
+        spaceGesture.otherInput()
         refreshSuggestions()
     }
 
@@ -143,7 +144,11 @@ class BilingualKeyboardService : InputMethodService() {
             }
 
             KeyAction.Space -> {
-                if (isDoubleTap(key)) sentenceEnd(ic, key) else insertSpace(ic, key)
+                if (spaceGesture.tap(SystemClock.uptimeMillis())) {
+                    sentenceEnd(ic, key)
+                } else {
+                    insertSpace(ic, key)
+                }
             }
 
             // No double tap here: two quick taps are what you do when you want
@@ -161,6 +166,7 @@ class BilingualKeyboardService : InputMethodService() {
                     ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
                     ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
                 }
+                spaceGesture.otherInput()
             }
 
             KeyAction.Shift -> {
@@ -257,6 +263,7 @@ class BilingualKeyboardService : InputMethodService() {
             word.reset(known = false)
         }
         popTrail()
+        spaceGesture.otherInput()
         refreshSuggestions()
     }
 
@@ -282,6 +289,7 @@ class BilingualKeyboardService : InputMethodService() {
         // unless the read hit its limit, in which case a longer word may still
         // be standing and we no longer know what is in front of the cursor.
         word.deleteWord(complete = count < before.length)
+        spaceGesture.otherInput()
         refreshSuggestions()
     }
 
@@ -304,24 +312,19 @@ class BilingualKeyboardService : InputMethodService() {
         val code = if (direction > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        spaceGesture.otherInput()
         // The resulting onUpdateSelection will not match expectedCursor, which
         // clears the trail — correct per D19, since the run of typing is over.
     }
 
-    // -- double tap ----------------------------------------------------------
+    // -- space taps ----------------------------------------------------------
 
-    private var lastTapKey: Key? = null
-    private var lastTapAt = 0L
-
-    private fun isDoubleTap(key: Key): Boolean {
-        val now = SystemClock.uptimeMillis()
-        val isRepeat = key == lastTapKey && now - lastTapAt <= DOUBLE_TAP_MS
-        // Consumed either way, so a third tap starts a fresh pair rather than
-        // chaining another word deletion off the same gesture.
-        lastTapKey = if (isRepeat) null else key
-        lastTapAt = now
-        return isRepeat
-    }
+    /**
+     * When a tap on space ends the sentence instead of inserting one: a second
+     * quick tap, or the first tap after a suggestion put a space there. See
+     * [SpaceGesture].
+     */
+    private val spaceGesture = SpaceGesture()
 
     // -- recent keypress trail ----------------------------------------------
 
@@ -341,6 +344,9 @@ class BilingualKeyboardService : InputMethodService() {
         if (expectedCursor >= 0) expectedCursor += text.length
         publishTrail()
         word.insert(text)
+        // Anything that is not a space breaks up a run of them. The space bar's
+        // own taps are recorded by the gesture itself, before it gets here.
+        if (text != " ") spaceGesture.otherInput()
         refreshSuggestions()
     }
 
@@ -414,6 +420,9 @@ class BilingualKeyboardService : InputMethodService() {
         // there is nothing for the trail to colour (D19).
         clearTrail()
         word.reset(known = true)
+        // The space just committed is the first half of the double-space full
+        // stop, so one more tap on space ends the sentence (D6).
+        spaceGesture.suggestionAccepted()
         refreshSuggestions()
     }
 
@@ -444,6 +453,7 @@ class BilingualKeyboardService : InputMethodService() {
             // The cursor is somewhere we did not put it, so the text in front
             // of it is not the word we were tracking.
             word.reset(known = false)
+            spaceGesture.otherInput()
             refreshSuggestions()
         }
         expectedCursor = newSelEnd
@@ -456,9 +466,6 @@ class BilingualKeyboardService : InputMethodService() {
          * instead of running out.
          */
         const val TRAIL_CAPACITY = 10
-
-        /** Window for a second tap to count as a double tap rather than a new one. */
-        const val DOUBLE_TAP_MS = 350L
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64

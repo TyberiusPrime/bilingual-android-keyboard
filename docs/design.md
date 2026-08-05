@@ -81,6 +81,14 @@ change it — deliberately not a mode. Its purpose is diagnostic: when a
 correction goes wrong, the indicator should make it obvious *why*. A separate,
 louder debug overlay is expected during tuning.
 
+**Built, as a tint behind each suggestion** (D22): gold for German, blue for
+English, a tenth of the way from the keyboard surface to the hue, and nothing
+at all behind a word from the personal store. Deliberately per candidate rather
+than per keyboard — under D2 the language belongs to the word, so a strip
+showing a German and an English candidate side by side, differently tinted, is
+the honest picture. There is nowhere else it could go without inventing a
+current language for it to describe.
+
 ### D5 — QWERTY letter positions, umlauts on long-press
 
 One layout, English letter positions, `äöüß` reached by long-pressing `a`,
@@ -457,6 +465,24 @@ That is D8's requirement met literally: one tap, at the moment of annoyance, no
 settings screen. It is also the only thing in the keyboard that writes to the
 store, which makes `IME_FLAG_NO_PERSONALIZED_LEARNING` a single check rather
 than a policy spread across the codebase.
+
+**A candidate holding most of the matching mass is drawn in purple** — the same
+purple the keypress trail uses for "this came from the keyboard". The threshold
+is half the mass, it is a guess, and it is *appearance only*: D3's auto-replace
+threshold does not exist yet and will be a calibrated number rather than a
+unigram share. What it does today is make the eventual threshold legible before
+anything acts on one, which is the cheapest possible way to find out whether it
+sits in the right place.
+
+**The add-word offer appears only when nothing else does.** Half-typed words are
+unrecognised nearly all of the time, so an offer keyed on "unknown word" alone
+sat in the strip almost permanently and meant nothing when it did. Silence from
+both dictionaries is the moment of annoyance D8 attaches it to.
+
+**No profanity filter, deliberately.** A keyboard that declines to suggest words
+its owner types is a variant of complaint 4, and the corpus is what people
+actually say. The wordlists carry whatever the spelling lists and the subtitle
+corpus agree on.
 
 **What this is not:** it is not correction. There is no edit distance, so a
 typo that is not a prefix of the intended word gets nothing. The confidence on

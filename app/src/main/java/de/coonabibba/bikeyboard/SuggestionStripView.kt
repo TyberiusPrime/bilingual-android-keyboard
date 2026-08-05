@@ -11,6 +11,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 
 /**
  * The suggestion strip (D9).
@@ -20,11 +21,11 @@ import androidx.core.content.ContextCompat
  * the keys, which is why adding it costs no height: the space was spent in
  * advance for exactly this.
  *
- * It is still the keyboard's tallest piece of nothing — until roadmap step 4
- * there are no dictionaries, so [suggestions] stays empty and the strip renders
- * as bare surface. What is real here is the mechanism: fixed slots, a tap that
- * commits the slot it started on, and a callback the service turns into an
- * edit.
+ * Three things are drawn per slot, and each of them means something: the word,
+ * a wash of colour saying which language it came from (D4), and purple text
+ * when the candidate holds most of the matching mass. The last of those is
+ * appearance only — D3's auto-replace threshold does not exist yet, and this is
+ * not it.
  *
  * A long-press popup from the top row of keys is drawn *over* this view. The
  * keyboard view is the later child of a container with child clipping switched
@@ -66,11 +67,36 @@ class SuggestionStripView @JvmOverloads constructor(
 
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
     private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DIVIDER }
+    private val tintPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     // A TextPaint rather than a Paint because ellipsizing wants one.
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        textSize = 16f * density
+        // Nearly the size of a key label. A suggestion you have to squint at is
+        // slower to read than retyping the word.
+        textSize = 19f * density
+    }
+
+    private val surface = ContextCompat.getColor(context, R.color.keyboard_background)
+
+    /**
+     * A wash of colour behind a candidate saying which language it came from.
+     *
+     * This is D4's language indicator: subtle, non-interactive, per candidate
+     * rather than a mode — because per D2 the language belongs to the word and
+     * not to the keyboard. Gold for German and blue for English is a mnemonic
+     * from the flags and nothing deeper; what matters is that it stays the same.
+     *
+     * Kept at [TINT_STRENGTH] of the way from the keyboard surface to the hue,
+     * so it reads as a tint rather than as a highlight — the highlight means
+     * something else here.
+     */
+    private fun tintFor(language: Language?): Int = when (language) {
+        Language.GERMAN -> ColorUtils.blendARGB(surface, GERMAN_HUE, TINT_STRENGTH)
+        Language.ENGLISH -> ColorUtils.blendARGB(surface, ENGLISH_HUE, TINT_STRENGTH)
+        // The personal store belongs to no language, and looking different is
+        // the honest thing for it to do.
+        null -> surface
     }
 
     init {
@@ -95,6 +121,11 @@ class SuggestionStripView @JvmOverloads constructor(
 
             if (index == pressedSlot) {
                 canvas.drawRect(left, 0f, right, height.toFloat(), pressedPaint)
+            } else if (entry is StripEntry.Word) {
+                tintPaint.color = tintFor(entry.suggestion.language)
+                if (tintPaint.color != surface) {
+                    canvas.drawRect(left, 0f, right, height.toFloat(), tintPaint)
+                }
             }
 
             // A divider only between two occupied slots, never trailing off
@@ -109,9 +140,17 @@ class SuggestionStripView @JvmOverloads constructor(
                 )
             }
 
-            // The add-word offer is not a word to insert, so it does not look
-            // like one.
-            textPaint.color = if (entry is StripEntry.AddWord) ADD_WORD_FG else Color.WHITE
+            textPaint.color = when {
+                // Not a word to insert, so it does not look like one.
+                entry is StripEntry.AddWord -> ADD_WORD_FG
+                // A candidate holding most of the matching mass. Purple is the
+                // keyboard's "this came from the machine" colour, the same one
+                // the keypress trail uses.
+                entry is StripEntry.Word && entry.suggestion.confidence >= HIGH_CONFIDENCE ->
+                    CONFIDENT_FG
+
+                else -> Color.WHITE
+            }
 
             val room = right - left - 2f * SLOT_PADDING_DP * density
             val label = TextUtils.ellipsize(
@@ -159,10 +198,29 @@ class SuggestionStripView @JvmOverloads constructor(
     private companion object {
         const val DIVIDER_WIDTH_DP = 1f
         const val SLOT_PADDING_DP = 8f
+
+        /**
+         * Where a candidate stops being one option among several and starts
+         * looking like the answer. Purely how it is drawn — **not** D3's
+         * auto-replace threshold, which does not exist yet and will be a
+         * calibrated number rather than this unigram share. A guess, to be
+         * moved once there is a week of typing to move it against.
+         */
+        const val HIGH_CONFIDENCE = 0.5f
+
+        /** How far from the keyboard surface towards a language's hue. Slight, deliberately. */
+        const val TINT_STRENGTH = 0.10f
+
         val PRESSED_BG = Color.parseColor("#3A3A3C")
         val DIVIDER = Color.parseColor("#3A3A3C")
 
-        /** The trail's purple, so "this one is not a word to insert" reads at a glance. */
-        val ADD_WORD_FG = Color.parseColor("#B79CF8")
+        /** Purple, as on the keypress trail: the keyboard's own voice. */
+        val CONFIDENT_FG = Color.parseColor("#B79CF8")
+
+        /** Meta rather than text, so it reads as an action and not as a word. */
+        val ADD_WORD_FG = Color.parseColor("#9A9A9E")
+
+        val GERMAN_HUE = Color.parseColor("#F2B233")
+        val ENGLISH_HUE = Color.parseColor("#3B82F6")
     }
 }

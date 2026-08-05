@@ -23,7 +23,7 @@ class DictionarySuggestions(
     private val personal: PersonalStore,
 ) : SuggestionSource {
 
-    private class Candidate(val word: String, val weight: Float)
+    private class Candidate(val word: String, val weight: Float, val language: Language?)
 
     override fun suggest(word: CharSequence): List<Suggestion> {
         val prefix = Folding.fold(word)
@@ -35,11 +35,17 @@ class DictionarySuggestions(
         // The user's own words first, and they mostly win: PERSONAL_WEIGHT puts
         // them above everything except the few hundred commonest words of
         // either language. They are here because someone asked for them.
-        personal.completions(prefix).forEach { candidates += Candidate(it, PERSONAL_WEIGHT) }
+        personal.completions(prefix).forEach {
+            candidates += Candidate(it, PERSONAL_WEIGHT, language = null)
+        }
 
         lexicons.forEach { lexicon ->
             for (index in lexicon.completions(prefix)) {
-                candidates += Candidate(lexicon.wordAt(index), lexicon.weightAt(index))
+                candidates += Candidate(
+                    lexicon.wordAt(index),
+                    lexicon.weightAt(index),
+                    lexicon.language,
+                )
             }
         }
 
@@ -55,7 +61,7 @@ class DictionarySuggestions(
         return candidates
             .sortedByDescending { it.weight }
             .asSequence()
-            .map { Suggestion(applyTypedCase(it.word, typed), it.weight / mass) }
+            .map { Suggestion(applyTypedCase(it.word, typed), it.weight / mass, it.language) }
             // Offering back exactly what is already there wastes a slot.
             .filter { it.text != typed }
             .distinctBy { it.text }

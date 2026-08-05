@@ -21,7 +21,7 @@ object Wordlists {
     const val GERMAN = "wordlists/de.txt"
     const val ENGLISH = "wordlists/en.txt"
 
-    fun load(open: (String) -> java.io.InputStream, path: String): Lexicon {
+    fun load(open: (String) -> java.io.InputStream, path: String, language: Language): Lexicon {
         val words = ArrayList<String>(EXPECTED_ENTRIES)
         var counts = LongArray(EXPECTED_ENTRIES)
         var size = 0
@@ -38,7 +38,7 @@ object Wordlists {
             }
         }
 
-        return Lexicon(words, counts.copyOf(size))
+        return Lexicon(language, words, counts.copyOf(size))
     }
 
     /** Both files are a little over 35,000 entries; sized to avoid regrowing. */

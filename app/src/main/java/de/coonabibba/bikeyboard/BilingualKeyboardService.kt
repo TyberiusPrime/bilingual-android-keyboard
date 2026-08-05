@@ -409,8 +409,8 @@ class BilingualKeyboardService : InputMethodService() {
             personalStore.load()
             val source = DictionarySuggestions(
                 lexicons = listOf(
-                    Wordlists.load(assets::open, Wordlists.GERMAN),
-                    Wordlists.load(assets::open, Wordlists.ENGLISH),
+                    Wordlists.load(assets::open, Wordlists.GERMAN, Language.GERMAN),
+                    Wordlists.load(assets::open, Wordlists.ENGLISH, Language.ENGLISH),
                 ),
                 personal = personalStore,
             )
@@ -435,7 +435,7 @@ class BilingualKeyboardService : InputMethodService() {
 
         val source = suggestionSource
         val candidates = source.suggest(word.text).map { StripEntry.Word(it) }
-        val offer = addWordOffer(source)
+        val offer = addWordOffer(source, candidates)
 
         // The add-word offer keeps the rightmost slot to itself, in the same
         // place whether or not there are candidates beside it. A feedback
@@ -451,11 +451,18 @@ class BilingualKeyboardService : InputMethodService() {
     /**
      * The word in progress, if it is worth offering to remember.
      *
-     * Only for a word nothing recognises, only where the field permits learning,
-     * and only once it is long enough to be a word rather than the start of one.
+     * Only where the field permits learning, only once the word is long enough
+     * to be one, only if nothing recognises it — and **only when there is
+     * nothing else to say about it**. Half-typed words are unrecognised nearly
+     * all of the time, so without that last condition the offer is on screen
+     * almost always and means nothing when it is. Silence from both dictionaries
+     * is the moment of annoyance D8 wants this attached to.
      */
-    private fun addWordOffer(source: SuggestionSource): StripEntry.AddWord? {
-        if (!learningAllowed) return null
+    private fun addWordOffer(
+        source: SuggestionSource,
+        candidates: List<StripEntry.Word>,
+    ): StripEntry.AddWord? {
+        if (!learningAllowed || candidates.isNotEmpty()) return null
         val typed = word.text.toString()
         if (typed.length < MIN_ADDABLE_LENGTH) return null
         if (source.knows(typed)) return null

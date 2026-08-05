@@ -18,17 +18,19 @@ class DictionarySuggestionsTest {
      * a tenth of the language and nothing would rank the way it does on the
      * device. The counts are the real ones from the shipped lists.
      */
-    private fun lexicon(vararg entries: Pair<String, Long>): Lexicon {
+    private fun lexicon(language: Language, vararg entries: Pair<String, Long>): Lexicon {
         val filler = "zzfiller" to CORPUS_SIZE - entries.sumOf { it.second }
         val sorted = (entries.toList() + filler).sortedBy { Folding.fold(it.first) }
-        return Lexicon(sorted.map { it.first }, sorted.map { it.second }.toLongArray())
+        return Lexicon(language, sorted.map { it.first }, sorted.map { it.second }.toLongArray())
     }
 
     private val german = lexicon(
+        Language.GERMAN,
         "haben" to 742_327, "Haus" to 70_976, "Häuser" to 3_487, "hallo" to 61_000,
         "über" to 196_855,
     )
     private val english = lexicon(
+        Language.ENGLISH,
         "have" to 700_000, "hard" to 120_000, "house" to 90_000, "hallway" to 3_000,
     )
 
@@ -110,6 +112,24 @@ class DictionarySuggestionsTest {
         val personal = PersonalStore(folder.newFile()).apply { add("Hauswurz") }
         val suggestions = DictionarySuggestions(listOf(german, english), personal).suggest("hau")
         assertEquals("Hauswurz", suggestions.first().text)
+    }
+
+    /**
+     * D4's indicator reads this. It is a property of the candidate rather than
+     * of the keyboard, which is the whole of D2 in one field.
+     */
+    @Test
+    fun `candidates carry the language they came from`() {
+        val suggestions = source().suggest("ha").associate { it.text to it.language }
+        assertEquals(Language.GERMAN, suggestions["haben"])
+        assertEquals(Language.ENGLISH, suggestions["have"])
+    }
+
+    @Test
+    fun `a personal word belongs to no language`() {
+        val personal = PersonalStore(folder.newFile()).apply { add("Hauswurz") }
+        val suggestions = DictionarySuggestions(listOf(german, english), personal).suggest("hau")
+        assertEquals(null, suggestions.first { it.text == "Hauswurz" }.language)
     }
 
     @Test

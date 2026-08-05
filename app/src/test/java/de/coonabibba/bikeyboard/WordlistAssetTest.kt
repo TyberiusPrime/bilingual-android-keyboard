@@ -128,8 +128,8 @@ class WordlistAssetTest {
         val open = { name: String -> asset(name.removePrefix("wordlists/")).inputStream() }
         return DictionarySuggestions(
             lexicons = listOf(
-                Wordlists.load(open, Wordlists.GERMAN),
-                Wordlists.load(open, Wordlists.ENGLISH),
+                Wordlists.load(open, Wordlists.GERMAN, Language.GERMAN),
+                Wordlists.load(open, Wordlists.ENGLISH, Language.ENGLISH),
             ),
             personal = PersonalStore(File(folder(), "personal-words.txt")),
         )

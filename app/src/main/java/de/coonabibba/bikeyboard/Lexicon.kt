@@ -13,7 +13,11 @@ package de.coonabibba.bikeyboard
  * written that way, and trusting it is what keeps startup to a read rather than
  * a read plus a 35,000-string sort. [Wordlists] checks the order as it loads.
  */
-class Lexicon(private val words: List<String>, counts: LongArray) {
+class Lexicon(
+    val language: Language,
+    private val words: List<String>,
+    counts: LongArray,
+) {
 
     init {
         require(words.size == counts.size) { "each word needs a count" }

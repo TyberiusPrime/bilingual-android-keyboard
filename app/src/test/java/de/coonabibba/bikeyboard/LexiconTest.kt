@@ -10,7 +10,7 @@ class LexiconTest {
     /** Words must arrive in folded order — the same order the assets are written in. */
     private fun lexicon(vararg entries: Pair<String, Long>): Lexicon {
         val sorted = entries.sortedBy { Folding.fold(it.first) }
-        return Lexicon(sorted.map { it.first }, sorted.map { it.second }.toLongArray())
+        return Lexicon(Language.GERMAN, sorted.map { it.first }, sorted.map { it.second }.toLongArray())
     }
 
     private fun Lexicon.completionsOf(prefix: String): List<String> =
@@ -52,7 +52,7 @@ class LexiconTest {
 
     @Test
     fun `an empty lexicon answers everything with nothing`() {
-        val lexicon = Lexicon(emptyList(), LongArray(0))
+        val lexicon = Lexicon(Language.GERMAN, emptyList(), LongArray(0))
         assertEquals(0, lexicon.size)
         assertFalse(lexicon.knows("haus"))
         assertEquals(emptyList<String>(), lexicon.completionsOf("ha"))

@@ -12,7 +12,23 @@ package de.coonabibba.bikeyboard
  * Nothing above the strip reads it yet — the strip only ever offers, never
  * replaces (D3), so at this stage every candidate is displayed regardless.
  */
-data class Suggestion(val text: String, val confidence: Float)
+data class Suggestion(
+    val text: String,
+    val confidence: Float,
+    /**
+     * Which wordlist the candidate came from, or `null` for the personal store,
+     * which belongs to no language.
+     *
+     * This is D4's language indicator, and the strip is the right place for it:
+     * it says what the keyboard believes *per candidate* rather than declaring a
+     * mode, and nothing reads it back. Per D2 language is a property of a word,
+     * not of the keyboard, so there is nowhere else it could honestly live.
+     */
+    val language: Language?,
+)
+
+/** The languages the keyboard carries. Neither is the fallback (D1). */
+enum class Language { GERMAN, ENGLISH }
 
 /**
  * Where the strip's contents come from.

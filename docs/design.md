@@ -1,8 +1,8 @@
 # Design document
 
-**Status: decisions D1–D20 settled in interview; architecture drafted from
-them. Roadmap step 2 partially built.** See `docs/android-ime-api.md` for what
-the platform allows and what it withholds.
+**Status: decisions D1–D21 settled; architecture drafted from them. Roadmap
+step 2 built, step 3 next.** See `docs/android-ime-api.md` for what the platform
+allows and what it withholds.
 
 ## Problem statement
 
@@ -29,6 +29,17 @@ below.
 - [ ] **Are `7` on `j` and `9` on `l` acceptable?** See D17; this is the one
       arbitrary placement in the layout and the likeliest thing to want changed
       after a week of real use.
+- [ ] Is three the right number of slots in the strip (D21)? Guessed from other
+      keyboards; unanswerable until something fills them.
+- [ ] **Tapping a suggestion inserts a trailing space, which collides with D6.**
+      The space is needed so that next-word predictions can be tapped one after
+      another without running together. But it means the text already ends in a
+      space, so double-tapping space to end the sentence sees *space, space* —
+      not *word, space* — and per D6 leaves three spaces instead of a full stop.
+      Nothing can hit this until the strip has content (step 4), and the fix is
+      not obvious: making the pick's space count as the first tap of the gesture
+      turns a single space tap into a period, which is worse. Recorded rather
+      than guessed at.
 
 ## Decisions
 
@@ -350,6 +361,50 @@ identified it. The keyboard still claims its area via
 `setSystemGestureExclusionRects`, which is correct hygiene for a surface whose
 own gestures run to the screen edge, but it was not the cause.
 
+### D21 — The strip: three fixed slots, and it knows the word without asking
+
+The mechanism half of D9, built while there is still nothing to put in it.
+
+**It costs no height.** The 40dp band above the keys was already reserved — as
+plain gutter, so that a long-press popup on the top row had somewhere to be
+drawn. The strip takes that band over. The popup now overhangs upwards into it
+(the container turns off child clipping and draws the keys last), which is
+better than what it did before: with the popup clamped to the top of the key
+area it landed under the finger holding the key.
+
+**Three slots, fixed whether occupied or not.** A suggestion never slides
+sideways when another appears or disappears. Same argument as D16 makes for the
+layer toggle: a target that moves between the look and the tap gets mis-hit, and
+a mis-hit here inserts a word. The cost is that a lone suggestion sits in the
+left third rather than centred, which looks slightly odd and is the right trade.
+Best candidate first, left to right; nothing scrolls, because a suggestion you
+have to go looking for is not a suggestion.
+
+**The keyboard does not ask the app what the current word is.** Reading
+`getTextBeforeCursor` on every keystroke is an IPC round trip per key, which the
+API notes name as the thing that makes a keyboard feel broken. So the keyboard
+tracks what it typed — `WordInProgress`, the same posture as the expected-cursor
+bookkeeping from D19 — and it refuses to guess: after a cursor move, a replaced
+selection, or a backspace that ate past the start of what it was tracking, the
+word is *unknown* and the strip stays empty until the next word boundary. That
+refusal is what makes tapping a suggestion safe: the characters it deletes are
+ones this keyboard put there.
+
+Still a down payment on step 3, not a substitute for it. Step 3 owns the
+composing region, which is the mechanism that makes a correction replaceable
+after the fact rather than counted backwards through.
+
+**Nothing is suggested into a password, a `NO_SUGGESTIONS` field, an email
+address, a URI or a search filter** — the first two an obligation from the API
+notes, the rest because they are not prose. The strip stays *visible* in those
+fields regardless, because D9's promise is that the keyboard height never
+changes.
+
+**What is deliberately absent:** any content. There are no dictionaries until
+step 4, and inventing a small wordlist to make the strip look alive would put
+words of unrecorded provenance in the repo (D13) and teach nobody anything about
+whether the design works. The strip renders as bare surface until it has
+something true to say.
 
 ---
 
@@ -426,6 +481,13 @@ handles `onUpdateSelection` contradicting it. Most "text got scrambled in app
 X" bugs live here. It is also where the D14 undo window lives, since that
 window is defined in terms of committed-text state.
 
+**The strip is Policy's only visible output** until auto-replace is allowed to
+turn on (step 7). It is built (D21) and wired to a `SuggestionSource` that
+returns nothing; step 4 replaces that object and the strip lights up without
+anything else moving. What it feeds back is a tap, which the service turns into
+"replace the word in progress with this" — the narrowest editing operation that
+still exercises the whole path.
+
 **Language inference is not a layer.** There is no component that decides "we
 are in German now". Per D2 and D12, language identity is a property of a
 candidate, resolved per word by the scorer. The D4 indicator reads out the
@@ -437,8 +499,8 @@ scorer's belief; it does not drive anything.
 2. **Typing that is pleasant without any intelligence** — layout constraints
    (D16, D17), umlaut and digit long-press with tuned timing (D5), double-space
    period (D6), space and backspace gestures (D20), keypress trail (D19),
-   suggestion strip present but empty (D9). Daily-drivable, dumb.
-   *Done apart from the strip itself, which is still only reserved space.*
+   suggestion strip present but empty (D9, D21). Daily-drivable, dumb.
+   *Done.*
 3. **Editor I/O done properly** — composing regions, selection reconciliation,
    undo window (D14). No model yet. This is the layer that makes everything
    above it trustworthy, and the one most likely to be underestimated.

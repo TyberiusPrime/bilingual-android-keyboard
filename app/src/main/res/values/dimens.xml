@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        The band above the keys. It is the suggestion strip (D9), and it is also
+        the headroom a long-press popup on the top row overhangs into, so both
+        views read the same value: the keyboard's total height must not depend
+        on which of the two is asking.
+    -->
+    <dimen name="suggestion_strip_height">40dp</dimen>
+</resources>

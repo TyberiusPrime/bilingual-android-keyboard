@@ -177,11 +177,16 @@ class KeyboardView @JvmOverloads constructor(
     private val rowHeight = 52f * density
 
     /**
-     * Space above the keys, so a long-press popup on the top row has somewhere
-     * to be drawn instead of being clipped. Becomes the suggestion strip (D9),
-     * which is why the height is spent now rather than added later.
+     * How far above this view a long-press popup on the top row may overhang.
+     *
+     * The space is the suggestion strip's (D9) — this view no longer reserves a
+     * gutter of its own, so the keyboard's height is unchanged by the strip
+     * arriving. The popup is allowed to draw over the strip because the
+     * container switches off child clipping and draws the keys after it; the
+     * alternative, clamping the popup to this view's top edge, puts it directly
+     * under the finger holding the key.
      */
-    private val gutterHeight = 40f * density
+    private val popupHeadroom = resources.getDimension(R.dimen.suggestion_strip_height)
 
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = KEY_BG }
     private val specialKeyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SPECIAL_BG }
@@ -209,7 +214,7 @@ class KeyboardView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val height = (gutterHeight + layout.rows.size * rowHeight + keyGap * 2).toInt()
+        val height = (layout.rows.size * rowHeight + keyGap * 2).toInt()
         setMeasuredDimension(width, height)
     }
 
@@ -245,7 +250,7 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun placeKeys(width: Float, height: Float): List<PlacedKey> {
         if (width <= 0f || layout.rows.isEmpty()) return emptyList()
-        val usableHeight = height - gutterHeight - keyGap * 2
+        val usableHeight = height - keyGap * 2
         val perRow = usableHeight / layout.rows.size
         val half = keyGap / 2f
         val lastRow = layout.rows.lastIndex
@@ -255,17 +260,19 @@ class KeyboardView @JvmOverloads constructor(
             val totalWeight = row.sumOf { it.widthWeight.toDouble() }.toFloat()
             val usableWidth = width - keyGap * (row.size + 1)
             var x = keyGap
-            val y = gutterHeight + keyGap + rowIndex * perRow
+            val y = keyGap + rowIndex * perRow
             row.forEachIndexed { keyIndex, key ->
                 val keyWidth = usableWidth * (key.widthWeight / totalWeight)
                 val bounds = RectF(x, y, x + keyWidth, y + perRow - keyGap)
 
                 // Grow into the gaps, and all the way to the view edge for the
                 // outermost keys and the last row — a thumb landing a few pixels
-                // past the edge of `m` still means `m`.
+                // past the edge of `m` still means `m`. The top row grows to
+                // this view's top edge and no further: above it is the
+                // suggestion strip, whose taps are its own.
                 val hitBounds = RectF(
                     if (keyIndex == 0) 0f else bounds.left - half,
-                    if (rowIndex == 0) gutterHeight else bounds.top - half,
+                    if (rowIndex == 0) 0f else bounds.top - half,
                     if (keyIndex == row.lastIndex) width else bounds.right + half,
                     if (rowIndex == lastRow) height else bounds.bottom + half,
                 )
@@ -392,7 +399,9 @@ class KeyboardView @JvmOverloads constructor(
         // Anchor over the key, then clamp so the popup stays on screen.
         var left = target.bounds.centerX() - totalWidth / 2f
         left = left.coerceIn(keyGap, max(keyGap, width - totalWidth - keyGap))
-        val top = max(0f, target.bounds.top - cellHeight - keyGap)
+        // Negative is allowed, up to the headroom the strip provides: a popup
+        // that lands on the key you are holding is a popup you cannot read.
+        val top = max(-popupHeadroom, target.bounds.top - cellHeight - keyGap)
 
         alternateBounds = labels.indices.map { index ->
             RectF(

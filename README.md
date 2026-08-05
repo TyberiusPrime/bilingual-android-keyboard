@@ -14,6 +14,7 @@ being worked out in [`docs/design.md`](docs/design.md).
 | `app/src/main/java/.../BilingualKeyboardService.kt` | the `InputMethodService` |
 | `app/src/main/java/.../KeyboardView.kt` | key drawing and hit-testing |
 | `app/src/main/java/.../KeyboardLayout.kt` | layout definitions |
+| `app/src/main/java/.../SuggestionStripView.kt` | the suggestion strip — built, and empty until there are dictionaries |
 | `app/src/main/res/xml/method.xml` | one subtype, deliberately |
 | `docs/android-ime-api.md` | what the platform gives an IME, and what it withholds |
 | `docs/design.md` | the design document, in progress |

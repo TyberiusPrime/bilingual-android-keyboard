@@ -8,6 +8,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -21,6 +22,7 @@ import androidx.core.view.updatePadding
 class BilingualKeyboardService : InputMethodService() {
 
     private lateinit var keyboardView: KeyboardView
+    private lateinit var suggestionStrip: SuggestionStripView
     private var inputRoot: FrameLayout? = null
     private var layer = Layer.LETTERS
     private var shifted = false
@@ -34,6 +36,32 @@ class BilingualKeyboardService : InputMethodService() {
             onCursorStep = ::moveCursor
             onDeleteWord = ::handleDeleteWord
         }
+        suggestionStrip = SuggestionStripView(this).apply { onPick = ::pickSuggestion }
+
+        // Strip above keys. Child clipping is off so that a long-press popup on
+        // the top row, drawn by the keyboard view at a negative y, overhangs
+        // into the strip's band instead of being cut off at the top row — and
+        // the keyboard view is added last so it draws over the strip rather
+        // than under it.
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+            addView(
+                suggestionStrip,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            addView(
+                keyboardView,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
 
         // The keys live inside a container that carries the navigation-bar
         // inset as bottom padding. targetSdk 35 means edge-to-edge is mandatory
@@ -45,8 +73,10 @@ class BilingualKeyboardService : InputMethodService() {
             // Also opaque, so the navigation-bar padding below the keys is part
             // of the keyboard rather than a window onto the app.
             setBackgroundColor(ContextCompat.getColor(context, R.color.keyboard_background))
+            clipChildren = false
+            clipToPadding = false
             addView(
-                keyboardView,
+                stack,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -79,8 +109,8 @@ class BilingualKeyboardService : InputMethodService() {
         applyNavigationBarInset()
         // A password field must never reach prediction, logging or a learned
         // dictionary. Recorded here so later stages can honour it.
-        val isPassword = isPasswordField(info)
-        layer = if (isNumericField(info)) Layer.SYMBOLS else Layer.LETTERS
+        val isPassword = FieldPolicy.isPassword(info.inputType)
+        layer = if (FieldPolicy.isNumeric(info.inputType)) Layer.SYMBOLS else Layer.LETTERS
         shifted = !isPassword && shouldAutoCapitalise(info)
         keyboardView.layout = Layouts.forLayer(layer)
         keyboardView.shifted = shifted
@@ -88,6 +118,15 @@ class BilingualKeyboardService : InputMethodService() {
         // A new field is a new context: nothing typed here yet.
         expectedCursor = info.initialSelEnd
         clearTrail()
+
+        suggestionsAllowed = FieldPolicy.suggestionsAllowed(info.inputType)
+        // Focus can land in the middle of existing text, and what precedes the
+        // cursor there is text this keyboard did not type. Only a cursor at
+        // position zero means there is nothing in front of it to be wrong
+        // about; -1, which is what the field reports when it does not know
+        // where the cursor is, is not that.
+        word.reset(known = info.initialSelStart == 0)
+        refreshSuggestions()
     }
 
     private fun handleKey(key: Key) {
@@ -96,7 +135,7 @@ class BilingualKeyboardService : InputMethodService() {
             is KeyAction.Text -> {
                 val text = if (shifted) action.text.uppercase() else action.text
                 ic.commitText(text, 1)
-                noteInsertion(key, alternate = false, length = text.length)
+                noteInsertion(key, alternate = false, text = text)
                 if (shifted) {
                     shifted = false
                     keyboardView.shifted = false
@@ -146,7 +185,7 @@ class BilingualKeyboardService : InputMethodService() {
     private fun handleAlternate(key: Key, text: String) {
         val ic = currentInputConnection ?: return
         ic.commitText(text, 1)
-        noteInsertion(key, alternate = true, length = text.length)
+        noteInsertion(key, alternate = true, text = text)
         if (shifted) {
             shifted = false
             keyboardView.shifted = false
@@ -169,7 +208,7 @@ class BilingualKeyboardService : InputMethodService() {
 
     private fun insertSpace(ic: InputConnection, key: Key) {
         ic.commitText(" ", 1)
-        noteInsertion(key, alternate = false, length = 1)
+        noteInsertion(key, alternate = false, text = " ")
     }
 
     /**
@@ -195,6 +234,11 @@ class BilingualKeyboardService : InputMethodService() {
         trail.addFirst(TrailEntry(key, alternate = false))
         publishTrail()
 
+        // The space that was there is gone and a full stop and space stand in
+        // its place; either way the word ended.
+        word.insert(". ")
+        refreshSuggestions()
+
         shifted = true
         keyboardView.shifted = true
     }
@@ -204,11 +248,16 @@ class BilingualKeyboardService : InputMethodService() {
         if (selected.isNullOrEmpty()) {
             ic.deleteSurroundingText(1, 0)
             if (expectedCursor > 0) expectedCursor -= 1
+            word.deleteOne()
         } else {
             ic.commitText("", 1)
             expectedCursor = -1
+            // A selection can span anything at all; what is left in front of
+            // the cursor is not ours to describe.
+            word.reset(known = false)
         }
         popTrail()
+        refreshSuggestions()
     }
 
     /**
@@ -228,6 +277,12 @@ class BilingualKeyboardService : InputMethodService() {
         if (expectedCursor >= count) expectedCursor -= count else expectedCursor = -1
         repeat(count) { trail.removeFirstOrNull() }
         publishTrail()
+
+        // Deleting back to a whitespace boundary leaves no word in progress —
+        // unless the read hit its limit, in which case a longer word may still
+        // be standing and we no longer know what is in front of the cursor.
+        word.deleteWord(complete = count < before.length)
+        refreshSuggestions()
     }
 
     /** Space-bar drag. One step per character, in either direction. */
@@ -280,11 +335,13 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private val trail = ArrayDeque<TrailEntry>()
 
-    private fun noteInsertion(key: Key, alternate: Boolean, length: Int) {
+    private fun noteInsertion(key: Key, alternate: Boolean, text: String) {
         trail.addFirst(TrailEntry(key, alternate))
         while (trail.size > TRAIL_CAPACITY) trail.removeLast()
-        if (expectedCursor >= 0) expectedCursor += length
+        if (expectedCursor >= 0) expectedCursor += text.length
         publishTrail()
+        word.insert(text)
+        refreshSuggestions()
     }
 
     private fun popTrail() {
@@ -300,6 +357,64 @@ class BilingualKeyboardService : InputMethodService() {
 
     private fun publishTrail() {
         keyboardView.trail = trail.toList()
+    }
+
+    // -- suggestions ---------------------------------------------------------
+
+    /**
+     * The word being typed, tracked from our own edits rather than read back
+     * per keystroke. See [WordInProgress] for why, and for what happens when it
+     * loses track.
+     */
+    private val word = WordInProgress()
+
+    /** False in password, no-suggestion and non-prose fields (see [FieldPolicy]). */
+    private var suggestionsAllowed = true
+
+    /**
+     * Empty until roadmap step 4. The strip, its taps and the editing they
+     * cause are real; the candidates are what is missing, and they are missing
+     * because there are no dictionaries yet rather than because nothing is
+     * wired up.
+     */
+    private val suggestionSource: SuggestionSource = NoSuggestions
+
+    private fun refreshSuggestions() {
+        if (!::suggestionStrip.isInitialized) return
+        suggestionStrip.suggestions =
+            if (suggestionsAllowed && word.known) suggestionSource.suggest(word.text) else emptyList()
+    }
+
+    /**
+     * A suggestion was tapped: it replaces the word in progress, followed by a
+     * space, because accepting a word is also finishing it.
+     *
+     * The characters to remove are the ones this keyboard believes it typed —
+     * [WordInProgress] refuses to claim a word it cannot account for, and no
+     * suggestion is offered while it does, so there is nothing to count
+     * backwards through here.
+     */
+    private fun pickSuggestion(suggestion: Suggestion) {
+        val ic = currentInputConnection ?: return
+        val replaced = word.text.length
+        val text = if (shifted) suggestion.text.replaceFirstChar { it.uppercase() } else suggestion.text
+        val committed = "$text "
+
+        ic.beginBatchEdit()
+        if (replaced > 0) ic.deleteSurroundingText(replaced, 0)
+        ic.commitText(committed, 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += committed.length - replaced
+        if (shifted) {
+            shifted = false
+            keyboardView.shifted = false
+        }
+        // A word that arrived from the strip was not typed on the keys, so
+        // there is nothing for the trail to colour (D19).
+        clearTrail()
+        word.reset(known = true)
+        refreshSuggestions()
     }
 
     /**
@@ -324,27 +439,15 @@ class BilingualKeyboardService : InputMethodService() {
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
         )
         val ourOwnEdit = newSelStart == newSelEnd && newSelStart == expectedCursor
-        if (!ourOwnEdit) clearTrail()
+        if (!ourOwnEdit) {
+            clearTrail()
+            // The cursor is somewhere we did not put it, so the text in front
+            // of it is not the word we were tracking.
+            word.reset(known = false)
+            refreshSuggestions()
+        }
         expectedCursor = newSelEnd
     }
-
-    private fun isPasswordField(info: EditorInfo): Boolean {
-        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
-        return when (info.inputType and InputType.TYPE_MASK_CLASS) {
-            InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-                variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-                variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
-
-            InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            else -> false
-        }
-    }
-
-    private fun isNumericField(info: EditorInfo): Boolean =
-        when (info.inputType and InputType.TYPE_MASK_CLASS) {
-            InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_PHONE, InputType.TYPE_CLASS_DATETIME -> true
-            else -> false
-        }
 
     private companion object {
         /**

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        The floor under the band above the keys.
+
+        The band itself follows the suggestion text size, which is a setting
+        (see KeyboardPrefs) — but it can never be shorter than this, because it
+        is also the headroom a long-press popup on the top row overhangs into,
+        and the keys are not allowed to draw over each other however small the
+        suggestions are set.
+    -->
+    <dimen name="suggestion_strip_min_height">40dp</dimen>
+</resources>

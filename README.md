@@ -3,9 +3,13 @@
 An Android keyboard that is aware of two languages at once, instead of making
 you switch between them.
 
-**Status: scaffold.** The app builds, installs, and types. The interesting parts
-— multilingual prediction and correction — are not written yet; the design is
-being worked out in [`docs/design.md`](docs/design.md).
+**Status: it types, it suggests, and it corrects when asked.** German and
+English wordlists are queried together on every keystroke, so a suggestion from
+either language can win a slot mid-sentence without anything switching; typos
+are offered corrections, and tapping back into an earlier word picks it up
+again. What is *not* written is auto-correction — nothing is ever replaced
+without a tap, because the confidence behind it is not yet worth acting on. The
+design is being worked out in [`docs/design.md`](docs/design.md).
 
 ## What is here
 
@@ -14,6 +18,12 @@ being worked out in [`docs/design.md`](docs/design.md).
 | `app/src/main/java/.../BilingualKeyboardService.kt` | the `InputMethodService` |
 | `app/src/main/java/.../KeyboardView.kt` | key drawing and hit-testing |
 | `app/src/main/java/.../KeyboardLayout.kt` | layout definitions |
+| `app/src/main/java/.../SuggestionStripView.kt` | the suggestion strip |
+| `app/src/main/java/.../DictionarySuggestions.kt` | both languages, one ranking |
+| `app/src/main/java/.../SetupActivity.kt` | setup, and the learned-word list |
+| `app/src/main/java/.../SettingsActivity.kt` | settings — suggestion text size |
+| `app/src/main/assets/wordlists/` | the wordlists, and where they came from |
+| `scripts/build-wordlists.py` | how the wordlists are regenerated |
 | `app/src/main/res/xml/method.xml` | one subtype, deliberately |
 | `docs/android-ime-api.md` | what the platform gives an IME, and what it withholds |
 | `docs/design.md` | the design document, in progress |

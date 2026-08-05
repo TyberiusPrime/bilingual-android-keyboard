@@ -1,6 +1,8 @@
 package de.coonabibba.bikeyboard
 
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
@@ -8,10 +10,13 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * The IME. Everything the keyboard is allowed to know about the app it is
@@ -21,11 +26,29 @@ import androidx.core.view.updatePadding
 class BilingualKeyboardService : InputMethodService() {
 
     private lateinit var keyboardView: KeyboardView
+    private lateinit var suggestionStrip: SuggestionStripView
     private var inputRoot: FrameLayout? = null
     private var layer = Layer.LETTERS
     private var shifted = false
 
+    /**
+     * Shift latched on, until it is tapped off (D23). [shifted] stays true the
+     * whole time it is, so everything that asks "should this letter be
+     * capitalised" keeps asking one question.
+     */
+    private var capsLock = false
+
+    /** Double-tapping shift latches it; see [DoubleTap]. */
+    private val shiftTaps = DoubleTap()
+
+    /**
+     * The suggestion text size the current input view was built for. The views
+     * read the setting once, so a change means building them again.
+     */
+    private var viewsBuiltForTextSp = 0
+
     override fun onCreateInputView(): View {
+        viewsBuiltForTextSp = KeyboardPrefs.suggestionTextSp(this)
         keyboardView = KeyboardView(this).apply {
             layout = Layouts.forLayer(layer)
             onKey = ::handleKey
@@ -33,6 +56,33 @@ class BilingualKeyboardService : InputMethodService() {
             onRepeat = ::handleRepeat
             onCursorStep = ::moveCursor
             onDeleteWord = ::handleDeleteWord
+            onShiftSwipeUp = ::cycleWordCase
+        }
+        suggestionStrip = SuggestionStripView(this).apply { onPick = ::pickEntry }
+
+        // Strip above keys. Child clipping is off so that a long-press popup on
+        // the top row, drawn by the keyboard view at a negative y, overhangs
+        // into the strip's band instead of being cut off at the top row — and
+        // the keyboard view is added last so it draws over the strip rather
+        // than under it.
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+            addView(
+                suggestionStrip,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            addView(
+                keyboardView,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
         }
 
         // The keys live inside a container that carries the navigation-bar
@@ -45,8 +95,10 @@ class BilingualKeyboardService : InputMethodService() {
             // Also opaque, so the navigation-bar padding below the keys is part
             // of the keyboard rather than a window onto the app.
             setBackgroundColor(ContextCompat.getColor(context, R.color.keyboard_background))
+            clipChildren = false
+            clipToPadding = false
             addView(
-                keyboardView,
+                stack,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -76,18 +128,42 @@ class BilingualKeyboardService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // The size of the suggestions is a setting, and the views bake it in
+        // when they are built. Focusing a field is the natural moment to notice
+        // it has been changed.
+        if (viewsBuiltForTextSp != KeyboardPrefs.suggestionTextSp(this)) {
+            setInputView(onCreateInputView())
+        }
         applyNavigationBarInset()
         // A password field must never reach prediction, logging or a learned
         // dictionary. Recorded here so later stages can honour it.
-        val isPassword = isPasswordField(info)
-        layer = if (isNumericField(info)) Layer.SYMBOLS else Layer.LETTERS
+        val isPassword = FieldPolicy.isPassword(info.inputType)
+        layer = if (FieldPolicy.isNumeric(info.inputType)) Layer.SYMBOLS else Layer.LETTERS
         shifted = !isPassword && shouldAutoCapitalise(info)
+        capsLock = false
+        shiftTaps.reset()
         keyboardView.layout = Layouts.forLayer(layer)
         keyboardView.shifted = shifted
+        keyboardView.capsLocked = false
 
         // A new field is a new context: nothing typed here yet.
         expectedCursor = info.initialSelEnd
         clearTrail()
+
+        suggestionsAllowed = FieldPolicy.suggestionsAllowed(info.inputType)
+        learningAllowed = FieldPolicy.learningAllowed(info.inputType, info.imeOptions)
+        // Focus can land in the middle of existing text, and what precedes the
+        // cursor there is text this keyboard did not type. Only a cursor at
+        // position zero means there is nothing in front of it to be wrong
+        // about; -1, which is what the field reports when it does not know
+        // where the cursor is, is not that.
+        word.reset(known = info.initialSelStart == 0)
+        spaceGesture.otherInput()
+        // The launcher screen can take words back out of the store while this
+        // service is alive. A stat per focus, and a read only when the file
+        // really did change under us.
+        personalStore.reloadIfChanged()
+        refreshSuggestions()
     }
 
     private fun handleKey(key: Key) {
@@ -96,15 +172,16 @@ class BilingualKeyboardService : InputMethodService() {
             is KeyAction.Text -> {
                 val text = if (shifted) action.text.uppercase() else action.text
                 ic.commitText(text, 1)
-                noteInsertion(key, alternate = false, length = text.length)
-                if (shifted) {
-                    shifted = false
-                    keyboardView.shifted = false
-                }
+                noteInsertion(key, alternate = false, text = text)
+                consumeShift()
             }
 
             KeyAction.Space -> {
-                if (isDoubleTap(key)) sentenceEnd(ic, key) else insertSpace(ic, key)
+                if (spaceGesture.tap(SystemClock.uptimeMillis())) {
+                    sentenceEnd(ic, key)
+                } else {
+                    insertSpace(ic, key)
+                }
             }
 
             // No double tap here: two quick taps are what you do when you want
@@ -122,11 +199,26 @@ class BilingualKeyboardService : InputMethodService() {
                     ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
                     ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
                 }
+                spaceGesture.otherInput()
             }
 
             KeyAction.Shift -> {
-                shifted = !shifted
+                when {
+                    // Two quick taps latch it. A third, later tap unlatches.
+                    shiftTaps.tap(SystemClock.uptimeMillis()) -> {
+                        capsLock = true
+                        shifted = true
+                    }
+
+                    capsLock -> {
+                        capsLock = false
+                        shifted = false
+                    }
+
+                    else -> shifted = !shifted
+                }
                 keyboardView.shifted = shifted
+                keyboardView.capsLocked = capsLock
             }
 
             KeyAction.ToggleLayer -> {
@@ -146,11 +238,19 @@ class BilingualKeyboardService : InputMethodService() {
     private fun handleAlternate(key: Key, text: String) {
         val ic = currentInputConnection ?: return
         ic.commitText(text, 1)
-        noteInsertion(key, alternate = true, length = text.length)
-        if (shifted) {
-            shifted = false
-            keyboardView.shifted = false
-        }
+        noteInsertion(key, alternate = true, text = text)
+        consumeShift()
+    }
+
+    /**
+     * Spends a one-shot shift. A latched one is not spent — that is the whole
+     * difference between them.
+     */
+    private fun consumeShift() {
+        shiftTaps.reset()
+        if (!shifted || capsLock) return
+        shifted = false
+        keyboardView.shifted = false
     }
 
     /** Leftward swipe on backspace, one call per word. */
@@ -169,7 +269,7 @@ class BilingualKeyboardService : InputMethodService() {
 
     private fun insertSpace(ic: InputConnection, key: Key) {
         ic.commitText(" ", 1)
-        noteInsertion(key, alternate = false, length = 1)
+        noteInsertion(key, alternate = false, text = " ")
     }
 
     /**
@@ -180,20 +280,26 @@ class BilingualKeyboardService : InputMethodService() {
      * newline, or nothing at all, a second space is just a space.
      */
     private fun sentenceEnd(ic: InputConnection, key: Key) {
-        if (!TextEdits.endsSentenceOnDoubleSpace(ic.getTextBeforeCursor(2, 0))) {
+        val spaces = TextEdits.spacesBeforeSentenceEnd(ic.getTextBeforeCursor(SENTENCE_LOOKBEHIND, 0))
+        if (spaces == 0) {
             insertSpace(ic, key)
             return
         }
 
         ic.beginBatchEdit()
-        ic.deleteSurroundingText(1, 0)
-        ic.commitText(". ", 1)
+        ic.deleteSurroundingText(spaces, 0)
+        ic.commitText(SENTENCE_END, 1)
         ic.endBatchEdit()
 
-        if (expectedCursor >= 0) expectedCursor += 1
+        if (expectedCursor >= 0) expectedCursor += SENTENCE_END.length - spaces
         popTrail()
         trail.addFirst(TrailEntry(key, alternate = false))
         publishTrail()
+
+        // The spaces that were there are gone and a full stop and space stand
+        // in their place; either way the word ended.
+        word.insert(SENTENCE_END)
+        refreshSuggestions()
 
         shifted = true
         keyboardView.shifted = true
@@ -203,12 +309,31 @@ class BilingualKeyboardService : InputMethodService() {
         val selected = ic.getSelectedText(0)
         if (selected.isNullOrEmpty()) {
             ic.deleteSurroundingText(1, 0)
-            if (expectedCursor > 0) expectedCursor -= 1
+            if (expectedCursor == 0) {
+                // Nothing in front of the cursor to delete, so nothing was: the
+                // word is empty and known to be. Treating this as a loss of
+                // tracking is what left the strip dead after backspacing a
+                // field clear — which is exactly when the next word starts.
+                word.reset(known = true)
+            } else {
+                if (expectedCursor > 0) expectedCursor -= 1
+                word.deleteOne()
+                // Backspacing past the start of what we were tracking used to
+                // silence the strip until the next space — which is exactly
+                // when someone deletes a word and starts retyping it. Ask the
+                // field what is there instead (D23).
+                if (!word.known) recoverWordAtCursor()
+            }
         } else {
             ic.commitText("", 1)
             expectedCursor = -1
+            // A selection can span anything at all; what is left in front of
+            // the cursor is not ours to describe.
+            word.reset(known = false)
         }
         popTrail()
+        spaceGesture.otherInput()
+        refreshSuggestions()
     }
 
     /**
@@ -228,6 +353,76 @@ class BilingualKeyboardService : InputMethodService() {
         if (expectedCursor >= count) expectedCursor -= count else expectedCursor = -1
         repeat(count) { trail.removeFirstOrNull() }
         publishTrail()
+
+        // Deleting back to a whitespace boundary leaves no word in progress —
+        // unless the read hit its limit, in which case a longer word may still
+        // be standing and we no longer know what is in front of the cursor.
+        word.deleteWord(complete = count < before.length)
+        if (!word.known) recoverWordAtCursor()
+        spaceGesture.otherInput()
+        refreshSuggestions()
+    }
+
+    /**
+     * Swipe up on shift: the word the cursor is in cycles through lower case,
+     * capitalised and shouted (D23).
+     *
+     * Works on a word that was jumped back to as much as on one being typed —
+     * if the word is not one we were tracking, it is read back from the field
+     * first, which is the same recovery a cursor jump does.
+     */
+    private fun cycleWordCase() {
+        val ic = currentInputConnection ?: return
+        if (!word.known) recoverWordAtCursor()
+
+        val current = word.full
+        if (current.isEmpty()) return
+        val recased = TextCase.cycle(current)
+        if (recased == current) return
+
+        val before = word.text.length
+        val after = word.suffix.length
+
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(before, after)
+        ic.commitText(recased, 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += recased.length - before
+        // The word is whole again, and the cursor is at the end of it.
+        word.reset(known = true)
+        word.insert(recased)
+        // Nothing about this arrived from a key, so the trail no longer
+        // describes the text in front of it (D19).
+        clearTrail()
+        spaceGesture.otherInput()
+        refreshSuggestions()
+    }
+
+    /**
+     * Asks the field what word the cursor is sitting in (D23).
+     *
+     * The one place this keyboard reads text back rather than remembering it,
+     * and it happens on a cursor jump rather than per keystroke — which is the
+     * difference between one IPC round trip now and again, and one per key.
+     * Both halves of the word are kept: correcting it means replacing all of
+     * it, not the half in front of the cursor.
+     */
+    private fun recoverWordAtCursor() {
+        val ic = currentInputConnection
+        if (ic == null) {
+            word.reset(known = false)
+            return
+        }
+        val before = ic.getTextBeforeCursor(WORD_LOOKBEHIND, 0)
+        val after = ic.getTextAfterCursor(WORD_LOOKAHEAD, 0)
+        if (before == null && after == null) {
+            // A read that fails is the app refusing to say, which happens; it
+            // is not a licence to guess.
+            word.reset(known = false)
+            return
+        }
+        word.adopt(TextEdits.wordAtCursor(before, after))
     }
 
     /** Space-bar drag. One step per character, in either direction. */
@@ -249,24 +444,19 @@ class BilingualKeyboardService : InputMethodService() {
         val code = if (direction > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        spaceGesture.otherInput()
         // The resulting onUpdateSelection will not match expectedCursor, which
         // clears the trail — correct per D19, since the run of typing is over.
     }
 
-    // -- double tap ----------------------------------------------------------
+    // -- space taps ----------------------------------------------------------
 
-    private var lastTapKey: Key? = null
-    private var lastTapAt = 0L
-
-    private fun isDoubleTap(key: Key): Boolean {
-        val now = SystemClock.uptimeMillis()
-        val isRepeat = key == lastTapKey && now - lastTapAt <= DOUBLE_TAP_MS
-        // Consumed either way, so a third tap starts a fresh pair rather than
-        // chaining another word deletion off the same gesture.
-        lastTapKey = if (isRepeat) null else key
-        lastTapAt = now
-        return isRepeat
-    }
+    /**
+     * When a tap on space ends the sentence instead of inserting one: a second
+     * quick tap, or the first tap after a suggestion put a space there. See
+     * [SpaceGesture].
+     */
+    private val spaceGesture = SpaceGesture()
 
     // -- recent keypress trail ----------------------------------------------
 
@@ -280,11 +470,16 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private val trail = ArrayDeque<TrailEntry>()
 
-    private fun noteInsertion(key: Key, alternate: Boolean, length: Int) {
+    private fun noteInsertion(key: Key, alternate: Boolean, text: String) {
         trail.addFirst(TrailEntry(key, alternate))
         while (trail.size > TRAIL_CAPACITY) trail.removeLast()
-        if (expectedCursor >= 0) expectedCursor += length
+        if (expectedCursor >= 0) expectedCursor += text.length
         publishTrail()
+        word.insert(text)
+        // Anything that is not a space breaks up a run of them. The space bar's
+        // own taps are recorded by the gesture itself, before it gets here.
+        if (text != " ") spaceGesture.otherInput()
+        refreshSuggestions()
     }
 
     private fun popTrail() {
@@ -300,6 +495,173 @@ class BilingualKeyboardService : InputMethodService() {
 
     private fun publishTrail() {
         keyboardView.trail = trail.toList()
+    }
+
+    // -- suggestions ---------------------------------------------------------
+
+    /**
+     * The word being typed, tracked from our own edits rather than read back
+     * per keystroke. See [WordInProgress] for why, and for what happens when it
+     * loses track.
+     */
+    private val word = WordInProgress()
+
+    /** False in password, no-suggestion and non-prose fields (see [FieldPolicy]). */
+    private var suggestionsAllowed = true
+
+    /** False additionally in fields that ask not to be learned from (D8). */
+    private var learningAllowed = true
+
+    /**
+     * The shipped wordlists plus the personal store, once they have been read.
+     * [NoSuggestions] until then, which is a moment at the start of a session
+     * and never again — the strip is empty rather than absent, per D9.
+     */
+    @Volatile
+    private var suggestionSource: SuggestionSource = NoSuggestions
+
+    /** The user's own words. The only thing that ever teaches this keyboard (D8). */
+    private val personalStore by lazy { PersonalStore(File(filesDir, PersonalStore.FILE_NAME)) }
+
+    /** Disk work — reading the wordlists, appending a word — never on the typing thread. */
+    private val diskThread = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "bikeyboard-disk").apply { priority = Thread.MIN_PRIORITY }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Once per service, not once per field: this is the whole reason
+        // dictionaries are loaded here rather than in onStartInput.
+        diskThread.execute {
+            personalStore.load()
+            val source = DictionarySuggestions(
+                lexicons = listOf(
+                    Wordlists.load(assets::open, Wordlists.GERMAN, Language.GERMAN),
+                    Wordlists.load(assets::open, Wordlists.ENGLISH, Language.ENGLISH),
+                ),
+                personal = personalStore,
+            )
+            suggestionSource = source
+            mainHandler.post(::refreshSuggestions)
+        }
+    }
+
+    override fun onDestroy() {
+        diskThread.shutdown()
+        super.onDestroy()
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private fun refreshSuggestions() {
+        if (!::suggestionStrip.isInitialized) return
+        if (!suggestionsAllowed || !word.known) {
+            suggestionStrip.slots = emptyList()
+            return
+        }
+
+        val source = suggestionSource
+        val candidates = source.suggest(word.full).map { StripEntry.Word(it) }
+        val offer = addWordOffer(source, candidates)
+
+        // The add-word offer keeps the rightmost slot to itself, in the same
+        // place whether or not there are candidates beside it. A feedback
+        // channel that moves around is one that gets mis-tapped, and under D8
+        // it is the only one there is.
+        suggestionStrip.slots = if (offer == null) {
+            candidates
+        } else {
+            List(SuggestionSlots.CAPACITY - 1) { candidates.getOrNull(it) } + offer
+        }
+    }
+
+    /**
+     * The word in progress, if it is worth offering to remember.
+     *
+     * Only where the field permits learning, only once the word is long enough
+     * to be one, only if nothing recognises it — and **only when there is
+     * nothing else to say about it**. Half-typed words are unrecognised nearly
+     * all of the time, so without that last condition the offer is on screen
+     * almost always and means nothing when it is. Silence from both dictionaries
+     * is the moment of annoyance D8 wants this attached to.
+     */
+    private fun addWordOffer(
+        source: SuggestionSource,
+        candidates: List<StripEntry.Word>,
+    ): StripEntry.AddWord? {
+        if (!learningAllowed || candidates.isNotEmpty()) return null
+        val typed = word.full
+        if (typed.length < MIN_ADDABLE_LENGTH) return null
+        if (source.knows(typed)) return null
+        return StripEntry.AddWord(typed)
+    }
+
+    private fun pickEntry(entry: StripEntry, style: PickStyle) {
+        when (entry) {
+            is StripEntry.Word -> pickSuggestion(entry.suggestion, style)
+            // Remembering a word is the same act however long the finger stays
+            // down; there is no second meaning for it to have.
+            is StripEntry.AddWord -> addWord(entry.word)
+        }
+    }
+
+    /**
+     * Remembers a word. The text is not touched — the word is already typed;
+     * what was missing is the keyboard knowing it.
+     */
+    private fun addWord(text: String) {
+        if (!learningAllowed) return
+        if (!personalStore.add(text)) return
+        diskThread.execute { personalStore.persist() }
+        refreshSuggestions()
+    }
+
+    /**
+     * A suggestion was tapped: it replaces the word in progress, followed by a
+     * space, because accepting a word is also finishing it.
+     *
+     * The characters to remove are the ones this keyboard believes it typed —
+     * [WordInProgress] refuses to claim a word it cannot account for, and no
+     * suggestion is offered while it does, so there is nothing to count
+     * backwards through here.
+     */
+    private fun pickSuggestion(suggestion: Suggestion, style: PickStyle) {
+        val ic = currentInputConnection ?: return
+        val replaced = word.text.length
+        // Whatever of the word sits on the far side of the cursor goes too: the
+        // suggestion replaces the word, not the half of it that was typed most
+        // recently (D23).
+        val replacedAfter = word.suffix.length
+        val text = if (shifted) suggestion.text.replaceFirstChar { it.uppercase() } else suggestion.text
+        // What follows the word decides whether a space is wanted: at the end
+        // of the text yes, in front of an existing space or comma no. Without
+        // this, correcting a word in a finished sentence doubles its space.
+        // A long press says the word is half of a compound, and skips it
+        // regardless (D26).
+        val following = ic.getTextAfterCursor(replacedAfter + 1, 0)
+        val next = following?.getOrNull(replacedAfter)
+        val spaced = style == PickStyle.SPACED && TextEdits.needsTrailingSpace(next)
+        val committed = if (spaced) "$text " else text
+
+        ic.beginBatchEdit()
+        if (replaced > 0 || replacedAfter > 0) ic.deleteSurroundingText(replaced, replacedAfter)
+        ic.commitText(committed, 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += committed.length - replaced
+        consumeShift()
+        // A word that arrived from the strip was not typed on the keys, so
+        // there is nothing for the trail to colour (D19).
+        clearTrail()
+        word.reset(known = true)
+        // Joined on, the word is still in progress: what comes next is more of
+        // it, and the strip should be completing `Haus` + `tür` as one.
+        if (!spaced) word.insert(text)
+        // A space just committed is the first half of the double-space full
+        // stop, so one more tap on space ends the sentence (D6). If no space
+        // was added, there is nothing to be the first half of.
+        if (committed.endsWith(" ")) spaceGesture.suggestionAccepted() else spaceGesture.otherInput()
+        refreshSuggestions()
     }
 
     /**
@@ -324,27 +686,18 @@ class BilingualKeyboardService : InputMethodService() {
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
         )
         val ourOwnEdit = newSelStart == newSelEnd && newSelStart == expectedCursor
-        if (!ourOwnEdit) clearTrail()
         expectedCursor = newSelEnd
+        if (ourOwnEdit) return
+
+        clearTrail()
+        // The cursor is somewhere we did not put it. Rather than going quiet,
+        // ask the field what word it landed in — jumping back to an earlier
+        // word is exactly when a correction is wanted (D23). A selection is
+        // different: there is no one word it is sitting in.
+        if (newSelStart == newSelEnd) recoverWordAtCursor() else word.reset(known = false)
+        spaceGesture.otherInput()
+        refreshSuggestions()
     }
-
-    private fun isPasswordField(info: EditorInfo): Boolean {
-        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
-        return when (info.inputType and InputType.TYPE_MASK_CLASS) {
-            InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-                variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-                variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
-
-            InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            else -> false
-        }
-    }
-
-    private fun isNumericField(info: EditorInfo): Boolean =
-        when (info.inputType and InputType.TYPE_MASK_CLASS) {
-            InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_PHONE, InputType.TYPE_CLASS_DATETIME -> true
-            else -> false
-        }
 
     private companion object {
         /**
@@ -354,11 +707,26 @@ class BilingualKeyboardService : InputMethodService() {
          */
         const val TRAIL_CAPACITY = 10
 
-        /** Window for a second tap to count as a double tap rather than a new one. */
-        const val DOUBLE_TAP_MS = 350L
+        /** What a double tap on space writes. */
+        const val SENTENCE_END = ". "
+
+        /**
+         * Enough to see the spaces a double tap should swallow and the
+         * character in front of them.
+         */
+        const val SENTENCE_LOOKBEHIND = 3
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64
+
+        /** How far forward to read when recovering the word the cursor landed in. */
+        const val WORD_LOOKAHEAD = 64
+
+        /**
+         * Below this, the word in progress is the start of typing rather than a
+         * word, and offering to remember it would fire on every second letter.
+         */
+        const val MIN_ADDABLE_LENGTH = 3
     }
 
     private fun shouldAutoCapitalise(info: EditorInfo): Boolean {

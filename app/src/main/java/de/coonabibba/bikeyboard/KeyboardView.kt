@@ -64,6 +64,13 @@ class KeyboardView @JvmOverloads constructor(
     /** Called per word while swiping left on backspace. */
     var onDeleteWord: (() -> Unit)? = null
 
+    /**
+     * Called when shift is swiped upwards, which re-cases the word the cursor
+     * is in (D23). Once per swipe: it edits text, so it wants a fixed and
+     * predictable cost, the same reasoning as the backspace swipe.
+     */
+    var onShiftSwipeUp: (() -> Unit)? = null
+
     var layout: KeyboardLayout = Layouts.letters
         set(value) {
             field = value
@@ -77,6 +84,17 @@ class KeyboardView @JvmOverloads constructor(
 
     /** Whether the shift key is currently engaged (affects labels only). */
     var shifted: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /**
+     * Whether shift is locked on. Drawn differently from a one-shot shift,
+     * because the difference between the next letter being capitalised and
+     * every letter being capitalised is worth one glance.
+     */
+    var capsLocked: Boolean = false
         set(value) {
             field = value
             invalidate()
@@ -123,8 +141,8 @@ class KeyboardView @JvmOverloads constructor(
      */
     private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
-    /** What a sideways drag off a key has turned into, if anything. */
-    private enum class DragMode { NONE, CURSOR, DELETE_WORD }
+    /** What a drag off a key has turned into, if anything. */
+    private enum class DragMode { NONE, CURSOR, DELETE_WORD, RECASE }
 
     /**
      * State of one finger currently on the keyboard.
@@ -136,6 +154,7 @@ class KeyboardView @JvmOverloads constructor(
     private class Touch(
         var placed: PlacedKey,
         val downX: Float,
+        val downY: Float,
         var stepAnchorX: Float,
         var fired: Boolean = false,
         var dragMode: DragMode = DragMode.NONE,
@@ -177,11 +196,16 @@ class KeyboardView @JvmOverloads constructor(
     private val rowHeight = 52f * density
 
     /**
-     * Space above the keys, so a long-press popup on the top row has somewhere
-     * to be drawn instead of being clipped. Becomes the suggestion strip (D9),
-     * which is why the height is spent now rather than added later.
+     * How far above this view a long-press popup on the top row may overhang.
+     *
+     * The space is the suggestion strip's (D9) — this view no longer reserves a
+     * gutter of its own, so the keyboard's height is unchanged by the strip
+     * arriving. The popup is allowed to draw over the strip because the
+     * container switches off child clipping and draws the keys after it; the
+     * alternative, clamping the popup to this view's top edge, puts it directly
+     * under the finger holding the key.
      */
-    private val gutterHeight = 40f * density
+    private val popupHeadroom = KeyboardPrefs.stripHeightPx(context)
 
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = KEY_BG }
     private val specialKeyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SPECIAL_BG }
@@ -209,7 +233,7 @@ class KeyboardView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val height = (gutterHeight + layout.rows.size * rowHeight + keyGap * 2).toInt()
+        val height = (layout.rows.size * rowHeight + keyGap * 2).toInt()
         setMeasuredDimension(width, height)
     }
 
@@ -245,7 +269,7 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun placeKeys(width: Float, height: Float): List<PlacedKey> {
         if (width <= 0f || layout.rows.isEmpty()) return emptyList()
-        val usableHeight = height - gutterHeight - keyGap * 2
+        val usableHeight = height - keyGap * 2
         val perRow = usableHeight / layout.rows.size
         val half = keyGap / 2f
         val lastRow = layout.rows.lastIndex
@@ -255,17 +279,19 @@ class KeyboardView @JvmOverloads constructor(
             val totalWeight = row.sumOf { it.widthWeight.toDouble() }.toFloat()
             val usableWidth = width - keyGap * (row.size + 1)
             var x = keyGap
-            val y = gutterHeight + keyGap + rowIndex * perRow
+            val y = keyGap + rowIndex * perRow
             row.forEachIndexed { keyIndex, key ->
                 val keyWidth = usableWidth * (key.widthWeight / totalWeight)
                 val bounds = RectF(x, y, x + keyWidth, y + perRow - keyGap)
 
                 // Grow into the gaps, and all the way to the view edge for the
                 // outermost keys and the last row — a thumb landing a few pixels
-                // past the edge of `m` still means `m`.
+                // past the edge of `m` still means `m`. The top row grows to
+                // this view's top edge and no further: above it is the
+                // suggestion strip, whose taps are its own.
                 val hitBounds = RectF(
                     if (keyIndex == 0) 0f else bounds.left - half,
-                    if (rowIndex == 0) gutterHeight else bounds.top - half,
+                    if (rowIndex == 0) 0f else bounds.top - half,
                     if (keyIndex == row.lastIndex) width else bounds.right + half,
                     if (rowIndex == lastRow) height else bounds.bottom + half,
                 )
@@ -349,8 +375,11 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
-    private fun displayLabel(key: Key): String =
-        if (shifted && key.action is KeyAction.Text) key.label.uppercase() else key.label
+    private fun displayLabel(key: Key): String = when {
+        key.action == KeyAction.Shift && capsLocked -> CAPS_LOCK_LABEL
+        shifted && key.action is KeyAction.Text -> key.label.uppercase()
+        else -> key.label
+    }
 
     /**
      * `ß`.uppercase() is `SS`, which is correct German and wrong here — nobody
@@ -392,7 +421,9 @@ class KeyboardView @JvmOverloads constructor(
         // Anchor over the key, then clamp so the popup stays on screen.
         var left = target.bounds.centerX() - totalWidth / 2f
         left = left.coerceIn(keyGap, max(keyGap, width - totalWidth - keyGap))
-        val top = max(0f, target.bounds.top - cellHeight - keyGap)
+        // Negative is allowed, up to the headroom the strip provides: a popup
+        // that lands on the key you are holding is a popup you cannot read.
+        val top = max(-popupHeadroom, target.bounds.top - cellHeight - keyGap)
 
         alternateBounds = labels.indices.map { index ->
             RectF(
@@ -422,7 +453,12 @@ class KeyboardView @JvmOverloads constructor(
                 val x = event.getX(index)
                 val hit = keyAt(x, event.getY(index))
                 if (hit != null) {
-                    val touch = Touch(placed = hit, downX = x, stepAnchorX = x)
+                    val touch = Touch(
+                        placed = hit,
+                        downX = x,
+                        downY = event.getY(index),
+                        stepAnchorX = x,
+                    )
                     activePointers[pointerId] = touch
 
                     if (hit.key.repeats) {
@@ -503,7 +539,7 @@ class KeyboardView @JvmOverloads constructor(
                 // One word per swipe, deliberately. Repeating on continued
                 // travel took whole clauses out before the finger stopped.
                 // Lift and swipe again for the next word.
-                DragMode.DELETE_WORD -> continue
+                DragMode.DELETE_WORD, DragMode.RECASE -> continue
 
                 DragMode.NONE -> Unit
             }
@@ -520,6 +556,19 @@ class KeyboardView @JvmOverloads constructor(
                 touch.stepAnchorX = touch.downX
                 dismissLongPress()
                 emitCursorSteps(touch, x)
+                continue
+            }
+
+            // Swiping up on shift cycles the case of the word the cursor is
+            // in. Upward because shift has always pointed that way, and
+            // because nothing else on this key is vertical.
+            if (touch.placed.key.action == KeyAction.Shift &&
+                touch.downY - y >= RECASE_TRIGGER_DP * density
+            ) {
+                touch.dragMode = DragMode.RECASE
+                touch.fired = true
+                dismissLongPress()
+                onShiftSwipeUp?.invoke()
                 continue
             }
 
@@ -611,6 +660,16 @@ class KeyboardView @JvmOverloads constructor(
          * which fired when two quick single deletes were meant.
          */
         const val DELETE_WORD_TRIGGER_DP = 30f
+
+        /**
+         * Upward travel on shift before the word is re-cased. Longer than the
+         * backspace swipe: a thumb on shift is at the edge of the keyboard and
+         * drifts upwards on the way to the letters above it.
+         */
+        const val RECASE_TRIGGER_DP = 36f
+
+        /** Shift, but latched. */
+        const val CAPS_LOCK_LABEL = "⇪"
         val TRAIL_STRONG = Color.parseColor("#8B5CF6")
         val KEY_BG = Color.parseColor("#3A3A3C")
         val SPECIAL_BG = Color.parseColor("#2A2A2C")

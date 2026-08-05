@@ -4,9 +4,14 @@
     <string name="ime_name">Bilingual Keyboard</string>
     <string name="subtype_label">Bilingual</string>
     <string name="settings_title">Keyboard settings</string>
-    <string name="settings_placeholder">Nothing to configure yet.</string>
+    <string name="settings_text_size">Suggestion text size: %1$d</string>
+    <string name="settings_text_size_preview">Vorschlag · suggestion</string>
     <string name="action_enable">1. Enable in system settings</string>
     <string name="action_select">2. Select as active keyboard</string>
     <string name="status_enabled">Status: enabled.</string>
     <string name="status_not_enabled">Status: not enabled yet.</string>
+    <string name="learned_title">Learned words (%1$d)</string>
+    <string name="learned_empty">Nothing learned yet. When the keyboard does not know a word you are typing, the suggestion strip offers to remember it.</string>
+    <string name="action_forget">Forget</string>
+    <string name="action_forget_word">Forget %1$s</string>
 </resources>

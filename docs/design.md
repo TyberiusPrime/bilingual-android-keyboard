@@ -1,8 +1,8 @@
 # Design document
 
-**Status: decisions D1–D20 settled in interview; architecture drafted from
-them. Roadmap step 2 partially built.** See `docs/android-ime-api.md` for what
-the platform allows and what it withholds.
+**Status: decisions D1–D27 settled; architecture drafted from them. Roadmap
+steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
+for what the platform allows and what it withholds.
 
 ## Problem statement
 
@@ -29,6 +29,16 @@ below.
 - [ ] **Are `7` on `j` and `9` on `l` acceptable?** See D17; this is the one
       arbitrary placement in the layout and the likeliest thing to want changed
       after a week of real use.
+- [ ] Is three the right number of slots in the strip (D21)? Guessed from other
+      keyboards. Now that the strip has content, it is answerable.
+- [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
+      shift is pressed (D22). Worth a part-of-speech source, or worth living
+      with?
+- [ ] Corrections cannot fix a mistyped **first** letter (D23), because the scan
+      is bucketed by it. How often does that bite in real typing?
+- [ ] A correction query costs ~3ms on a laptop and has not been timed on the
+      phone (D23). Per keystroke, on a word with no completions, that is the
+      first thing in this keyboard with a latency budget worth watching.
 
 ## Decisions
 
@@ -74,6 +84,18 @@ change it — deliberately not a mode. Its purpose is diagnostic: when a
 correction goes wrong, the indicator should make it obvious *why*. A separate,
 louder debug overlay is expected during tuning.
 
+**Built, as a tint behind each suggestion** (D22): gold for German, blue for
+English, a fifth of the way from the keyboard surface to the hue, and a neutral
+wash behind a word from the personal store, which belongs to no language. Half
+that strength was tried first and could not be seen on the phone at all, which
+for an indicator is the same as not existing; an untinted slot next to two
+tinted ones was read as a rendering bug rather than as a third case.
+
+Deliberately per candidate rather than per keyboard — under D2 the language
+belongs to the word, so a strip showing a German and an English candidate side
+by side, differently tinted, is the honest picture. There is nowhere else it
+could go without inventing a current language for it to describe.
+
 ### D5 — QWERTY letter positions, umlauts on long-press
 
 One layout, English letter positions, `äöüß` reached by long-pressing `a`,
@@ -95,7 +117,10 @@ engine rather than the layout:
 
 The letter layer carries no `.` or `,` at all. Instead:
 
-- double-space inserts `. ` (period, space) and re-arms capitalisation,
+- double-space inserts `. ` (period, space) and re-arms capitalisation, and
+  **repeats**: the second double tap swallows both the space it just made and
+  the one it typed, so `word. ` becomes `word.. ` and three of them spell an
+  ellipsis without a trip to the symbol layer,
 - the symbol layer keeps the full punctuation set for everything else,
 - correction is expected to place apostrophes in contractions unprompted.
 
@@ -141,6 +166,11 @@ are now load-bearing rather than nice-to-have:
   into a settings screen. Under this policy it is the *only* feedback channel,
   so its friction sets the ceiling on how good the keyboard ever gets for this
   user.
+- **And it must be reviewable.** A one-tap add with no way back fills up with
+  half-typed mistakes — `+ purp` is one tap away from being learned forever. The
+  launcher screen lists everything the store holds and can take any of it out
+  again. That is the only screen the keyboard has, and it is the right one:
+  seen on the way to the keyboard rather than gone looking for.
 - **The auto-replace confidence threshold should start conservative**, because
   the self-correcting mechanism that would normally excuse an aggressive
   threshold does not exist here.
@@ -337,6 +367,8 @@ and neither has a long-press alternate to collide with.
 Auto-repeat ticks are delivered on a separate callback from real presses, so
 the machine gun is never mistaken for a deliberate gesture.
 
+Shift joined them later; see D24.
+
 **Cursor drag must not walk off the end.** A `DPAD_LEFT`/`DPAD_RIGHT` that the
 text field cannot consume — because the cursor is already at the start or the
 end — is not swallowed. It falls through to Android's focus navigation, focus
@@ -350,6 +382,268 @@ identified it. The keyboard still claims its area via
 `setSystemGestureExclusionRects`, which is correct hygiene for a surface whose
 own gestures run to the screen edge, but it was not the cause.
 
+### D21 — The strip: three fixed slots, and it knows the word without asking
+
+The mechanism half of D9, built while there is still nothing to put in it.
+
+**It costs no height.** The 40dp band above the keys was already reserved — as
+plain gutter, so that a long-press popup on the top row had somewhere to be
+drawn. The strip takes that band over. The popup now overhangs upwards into it
+(the container turns off child clipping and draws the keys last), which is
+better than what it did before: with the popup clamped to the top of the key
+area it landed under the finger holding the key.
+
+**Three slots, fixed whether occupied or not.** A suggestion never slides
+sideways when another appears or disappears. Same argument as D16 makes for the
+layer toggle: a target that moves between the look and the tap gets mis-hit, and
+a mis-hit here inserts a word. The cost is that a lone suggestion sits in the
+left third rather than centred, which looks slightly odd and is the right trade.
+Best candidate first, left to right; nothing scrolls, because a suggestion you
+have to go looking for is not a suggestion.
+
+**The keyboard does not ask the app what the current word is.** Reading
+`getTextBeforeCursor` on every keystroke is an IPC round trip per key, which the
+API notes name as the thing that makes a keyboard feel broken. So the keyboard
+tracks what it typed — `WordInProgress`, the same posture as the expected-cursor
+bookkeeping from D19 — and it refuses to guess: after a cursor move, a replaced
+selection, or a backspace that ate past the start of what it was tracking, the
+word is *unknown* and the strip stays empty until the next word boundary. That
+refusal is what makes tapping a suggestion safe: the characters it deletes are
+ones this keyboard put there.
+
+Still a down payment on step 3, not a substitute for it. Step 3 owns the
+composing region, which is the mechanism that makes a correction replaceable
+after the fact rather than counted backwards through.
+
+**A picked suggestion inserts a trailing space, and that space counts as the
+first half of D6's full stop.** The space is needed so that next-word
+predictions can be tapped one after another without running together — but it
+means the text already ends in a space, so double-tapping space to end the
+sentence would see *space, space* rather than *word, space*, and D6's rule
+declines to make a full stop out of that. So one tap on space after accepting a
+suggestion ends the sentence. From the typist's side it is the same gesture: the
+first space was placed for them.
+
+The rule that makes this safe is that **anything other than a space clears it**.
+Accept a word, type a letter, and space is a space again. Making that explicit
+also fixed an older bug: the previous key-and-timestamp version never reset
+between taps, so `space`, letter, `space` typed quickly counted as a double tap
+and dropped a full stop into the middle of a sentence.
+
+**Nothing is suggested into a password, a `NO_SUGGESTIONS` field, an email
+address, a URI or a search filter** — the first two an obligation from the API
+notes, the rest because they are not prose. The strip stays *visible* in those
+fields regardless, because D9's promise is that the keyboard height never
+changes.
+
+**What is deliberately absent:** any content. There are no dictionaries until
+step 4, and inventing a small wordlist to make the strip look alive would put
+words of unrecorded provenance in the repo (D13) and teach nobody anything about
+whether the design works. The strip renders as bare surface until it has
+something true to say.
+
+### D22 — Two wordlists, one scale, one casing per word
+
+Roadmap step 3, and the first thing in the project that makes the strip say
+anything. Deliberately the dumb version: completions of what has been typed,
+ranked by how common the word is. No edit distance, no context, no model.
+
+**Both lists are queried on every keystroke and compete on one scale.** This is
+D1 and D2 made real rather than promised: a word's weight is its share of its
+own corpus, so a common German word and a common English word are directly
+comparable, and nothing anywhere holds a current language. Typing `inte` offers
+*interessiert*, *interesting*, *interested*; `str` offers *street*, *Straße*,
+*straight*. That is the entire thesis of the project, working, at a point where
+there is no model in the build at all.
+
+**Matching is folded** — lowercased, `ß` as `ss`, accents dropped — so `ube`
+finds `über`. That is the cheap half of D5's mitigation: the umlaut costs a
+long-press, and skipping it now costs a tap on the strip instead.
+
+**One casing per word, and the typist supplies the first letter.** Two entries
+differing only in case would eat two of three slots to say the same thing, so
+the wordlists carry one — the least-capitalised form the spelling list offers,
+which keeps `nicht` over `Nicht` and leaves `Haus` alone because no lowercase
+`haus` exists. A capital the typist types is then applied to the candidate, so
+`Zei` completes to `Zeit`.
+
+The cost, and it is visible: German homographs whose spelling list kept the
+lowercase reading — `zeit`, `leben`, `weg`, `recht` — are offered lowercase
+unless shift is pressed. Telling a noun from an adjective needs a
+part-of-speech signal that no GPL-compatible source here carries, and guessing
+it would capitalise adjectives instead. Recorded in the wordlists' own
+`PROVENANCE.md` alongside the other gaps.
+
+The store is also the only thing here the user can be *wrong* about, so the
+launcher screen lists it and can forget any word in it. Keyboard and screen hold
+separate copies of the same file; each stats it on the way in and re-reads only
+when the other has written.
+
+**The personal store is a lexicon with a fixed weight** — about that of the
+two-hundredth most common word, so an added word beats ordinary vocabulary but
+not `the` or `ich`. It is reached by the add-word offer, which occupies the
+strip's rightmost slot whenever the word being typed is one nothing recognises.
+That is D8's requirement met literally: one tap, at the moment of annoyance, no
+settings screen. It is also the only thing in the keyboard that writes to the
+store, which makes `IME_FLAG_NO_PERSONALIZED_LEARNING` a single check rather
+than a policy spread across the codebase.
+
+**A candidate holding most of the matching mass is drawn in purple** — the same
+purple the keypress trail uses for "this came from the keyboard". The threshold
+is half the mass, it is a guess, and it is *appearance only*: D3's auto-replace
+threshold does not exist yet and will be a calibrated number rather than a
+unigram share. What it does today is make the eventual threshold legible before
+anything acts on one, which is the cheapest possible way to find out whether it
+sits in the right place.
+
+**The add-word offer appears only when nothing else does.** Half-typed words are
+unrecognised nearly all of the time, so an offer keyed on "unknown word" alone
+sat in the strip almost permanently and meant nothing when it did. Silence from
+both dictionaries is the moment of annoyance D8 attaches it to.
+
+**No profanity filter, deliberately.** A keyboard that declines to suggest words
+its owner types is a variant of complaint 4, and the corpus is what people
+actually say. The wordlists carry whatever the spelling lists and the subtitle
+corpus agree on.
+
+**What this is not:** it is not *auto*-correction. Typos are found (D23 added
+edit distance), but the confidence on each candidate is still its share of the
+matching mass — a unigram *P(word | prefix)* — which is honest but is not the
+calibrated number D3 wants, and nothing is ever replaced silently. D3 and step
+7 are untouched.
+
+Measured on a laptop, not the Fairphone: 70,000 entries load in ~75ms, and a
+query costs ~0.2ms. The load happens once per service on a background thread,
+so the first moment of a session has an empty strip rather than a stalled one.
+The device numbers are the ones that matter and are not in yet.
+
+### D23 — Corrections, and picking a word back up after a cursor jump
+
+Two halves of the same complaint: the strip went quiet exactly when it was
+wanted. A typo is not the prefix of anything, so completion had nothing to say
+about it; and tapping back into an earlier word left the keyboard with no idea
+what word that was, so it said nothing at all.
+
+**Corrections are edit distance, bounded and scanned.** One edit for a short
+word, two from six letters up, and a transposition counts as one — `teh` for
+`the` is the commonest way a thumb misses, and calling it two edits puts it out
+of reach. There is no index: a deletion index over 70,000 words costs more
+memory than the wordlists themselves. Instead the scan is cut down twice, first
+to words sharing the typed first letter, then to those close enough in length to
+be reachable, which leaves a few hundred words to actually measure. That runs
+only when completion has fewer candidates than the strip has slots, so ordinary
+typing never pays for it.
+
+The limit this accepts: **the first letter has to be right.** A word whose
+first letter was mistyped is not searched at all. That is the price of not
+building the index, and the first letter is the one a thumb gets wrong least
+often.
+
+Corrections rank below completions by construction — a word that was begun
+correctly beats one that has to be repaired — and further-away corrections rank
+below nearer ones.
+
+**A cursor jump is answered by asking the field.** When the cursor arrives
+somewhere the keyboard did not put it, it now reads the word around it back
+over the `InputConnection` instead of giving up (which is what D21's
+conservatism did). Both halves are kept, because correcting a word means
+replacing all of it and not just the part in front of the cursor. This is the
+first place the keyboard reads text back rather than remembering it, and the
+budget is what makes it acceptable: **once per cursor jump, never per
+keystroke.** A read that comes back null is still a refusal to guess.
+
+The same recovery covers a backspace that eats past the start of what was being
+tracked — delete a word and start retyping it, and the strip stays awake — and
+separately, a backspace with nothing in front of the cursor no longer counts as
+losing track at all. It used to, which left the strip dead after clearing a
+field, which is precisely the moment the next word starts.
+
+**A correction only adds a space if the text does not already have one.** At
+the end of the text it does, and in front of another word it does, so
+predictions still chain; in front of an existing space or a comma it does not.
+Without that check, correcting a word inside a finished sentence left two spaces
+behind it every time.
+
+Measured on a laptop, not the Fairphone: a completion costs ~0.2ms, a correction
+~3ms. The device numbers are the ones that matter and are not in yet.
+
+### D24 — Shift carries gestures too
+
+Following D20, which gave space and backspace theirs. Shift is large, has no
+long-press alternate to collide with, and had exactly one behaviour.
+
+- **Double tap locks it.** Caps lock, drawn as a latched shift so the difference
+  between the next letter and every letter is one glance. A single tap unlocks.
+  There is no collision to worry about here: two quick taps on shift previously
+  meant "on, off", which is a null gesture.
+- **Swipe up re-cases the word the cursor is in**, cycling lower →
+  capitalised → shouted. Upward because shift has always pointed that way and
+  nothing else on the key is vertical, and once per swipe like the backspace
+  gesture, because it edits text and a destructive-feeling gesture wants a
+  fixed cost.
+
+The swipe is the direct answer to D22's known cost: the wordlists carry one
+casing per word, so a German noun typed without shift is offered lowercase.
+Fixing it afterwards was four keystrokes and is now one gesture — and it works
+on a word jumped back to, using D23's recovery, as much as on the one being
+typed.
+
+### D25 — How large the suggestions are is a setting
+
+Not a decision anyone made: a number that was guessed at three times from a
+laptop and was fine print, then correct, then shouting, on a phone nobody here
+is holding. It depends on eyesight, on screen size, and on the system font
+scale, which the strip now follows as well.
+
+So the size lives in a slider on the settings screen with a live preview, and
+the band above the keys follows it — larger suggestions make room for
+themselves rather than clipping — down to a floor, because the band is also the
+headroom a long-press popup needs (D21). The keyboard notices the change when a
+field is next focused, which is the next time it is visible anyway.
+
+The general point, worth keeping: **a value that can only be judged by looking
+at it belongs to whoever is looking.** The threshold in D3 is the opposite
+case — that one has to be measured, and a slider for it would be an abdication.
+
+### D26 — A long press on a suggestion joins it to the next word
+
+German runs words together. `Haus` and `Tür` are `Haustür`, and a keyboard that
+puts a space after every accepted suggestion is useless for exactly the half of
+the vocabulary that is longest and most worth completing.
+
+So a **tap** finishes the word — space after it, predictions chain, as before —
+and a **long press** hands the word over bare. What is typed next continues it,
+and the strip keeps completing the whole thing rather than starting over: after
+joining `Haus`, typing `tür` looks up `Haustür`.
+
+The hold is 400ms, longer than a key's (D5 shortened that one, because a key
+long-press is on the path of ordinary typing). Nothing on the strip is, and the
+cost of triggering this by accident is a word inserted without a space rather
+than a missing umlaut.
+
+Not offered for the add-word slot: remembering a word is the same act however
+long the finger stays down, and there is no second meaning available for it.
+
+### D27 — `letvs` means `let's`
+
+The apostrophe is a long-press on `v` (D17), so the way to miss it is to tap the
+key rather than hold it — and what follows an apostrophe is, overwhelmingly, an
+`s`. A word ending in `vs` is otherwise almost nonexistent, which is what makes
+this safe to apply without evidence: when the letters before it are a word, the
+strip offers that word with `'s` on the end. `letvs` → `let's`, `gehtvs` →
+`geht's`, `wievs` → `wie's`.
+
+The candidate has to be **built rather than looked up**, and that is the
+interesting part: the wordlists contain no contractions at all. The frequency
+corpus behind them was tokenised by a tool that split `don't` into `don` and
+`t`, so no contraction ever survived the intersection with the spelling lists
+(recorded in the wordlists' `PROVENANCE.md` as a known gap). Looking `let's` up
+would find nothing; looking `let` up and adding the apostrophe finds it every
+time, and inherits a sensible frequency while it is there.
+
+It covers only `'s`. The other contractions — `don't`, `can't` — need the
+apostrophe in the middle, where there is no such unambiguous signal, and would
+need the wordlists to know the results.
 
 ---
 
@@ -411,7 +705,10 @@ regardless of how clever the model later becomes:
   the drawn key rectangles with slop bolted on.
 
 **Window insets.** `targetSdk 35` makes edge-to-edge mandatory, so the system
-stops insetting the IME window. Unhandled, the system's own hide-keyboard
+stops insetting the IME window — nor the launcher screen's, where the same
+oversight put the status text underneath the clock and the first button behind
+the action bar. The action bar is gone and both screens now pad themselves by
+the system-bar insets. Unhandled, the system's own hide-keyboard
 chevron, IME-switcher globe and gesture pill are composited over the bottom row
 and take its taps. The input view is wrapped in a container carrying the
 navigation-bar inset as bottom padding.
@@ -426,6 +723,14 @@ handles `onUpdateSelection` contradicting it. Most "text got scrambled in app
 X" bugs live here. It is also where the D14 undo window lives, since that
 window is defined in terms of committed-text state.
 
+**The strip is Policy's only visible output** until auto-replace is allowed to
+turn on (step 7). It is built (D21), and the `SuggestionSource` behind it now
+answers with real words from both languages (D22). What it feeds back is a tap,
+which the service turns into "replace the word in progress with this" — the
+narrowest editing operation that still exercises the whole path — or into "add
+this word to the personal store", which is the only way anything is ever
+learned (D8).
+
 **Language inference is not a layer.** There is no component that decides "we
 are in German now". Per D2 and D12, language identity is a property of a
 candidate, resolved per word by the scorer. The D4 indicator reads out the
@@ -437,13 +742,14 @@ scorer's belief; it does not drive anything.
 2. **Typing that is pleasant without any intelligence** — layout constraints
    (D16, D17), umlaut and digit long-press with tuned timing (D5), double-space
    period (D6), space and backspace gestures (D20), keypress trail (D19),
-   suggestion strip present but empty (D9). Daily-drivable, dumb.
-   *Done apart from the strip itself, which is still only reserved space.*
-3. **Editor I/O done properly** — composing regions, selection reconciliation,
-   undo window (D14). No model yet. This is the layer that makes everything
-   above it trustworthy, and the one most likely to be underestimated.
-4. **Dictionaries and personal store** — GPL DE/EN wordlists with provenance
-   (D13), the add-word path (D8/D14), plain lookup-based suggestions.
+   suggestion strip present but empty (D9, D21). Daily-drivable, dumb.
+   *Done.*
+3. **Dictionaries and personal store** — GPL DE/EN wordlists with provenance
+   (D13), the add-word path (D8/D14), plain lookup-based suggestions (D22).
+   *Done.*
+4. **Editor I/O done properly** — composing regions, selection reconciliation,
+   undo window (D14). This is the layer that makes everything above it
+   trustworthy, and the one most likely to be underestimated.
 5. **TouchModel** — probabilistic hit testing, one-thumb drift compensation
    (D15). Measurable against step 2 on typo rate.
 6. **The multilingual model** (D10/D12) — source or train, quantise, integrate
@@ -451,15 +757,27 @@ scorer's belief; it does not drive anything.
 7. **Calibration and threshold tuning** (D3) — the point at which auto-replace
    is allowed to turn on at all.
 
+**Steps 3 and 4 are swapped from the original order**, which had editor I/O
+first. The reason is that editor I/O has nothing to be tested against while the
+strip is empty: composing regions, replacement and the undo window are all
+defined in terms of corrections that do not exist yet, so building them first
+means building to a specification nobody has typed against. Dictionaries produce
+the corrections, and the corrections are what shows whether the editing model
+holds up in real apps. The risk of doing it this way is that step 3 ships
+suggestions on top of the deliberately conservative word tracking described in
+D21 — good enough to offer and replace a word, not good enough to be the final
+answer — and step 4 has to go back over that ground properly rather than
+starting clean.
+
 Steps 2–5 are worth having on their own; a keyboard with a stable layout, a
 generous space bar and no autocorrect is already better than what is being used
 today. Step 6 is where the project either delivers or does not, and it should
-not be started before step 3 is solid.
+not be started before editor I/O is solid.
 
 ## Risks
 
-- **Step 3 is underestimated.** Editor I/O looks like plumbing and is where
-  keyboards actually break. Budget accordingly.
+- **Editor I/O is underestimated.** Now step 4, and it looks like plumbing; it
+  is where keyboards actually break. Budget accordingly.
 - **No suitable small DE+EN model exists off the shelf**, making step 6 a
   training project rather than an integration one. Mitigated by the D12 hedge.
 - **Latency on real hardware.** A model that is fine on a laptop may not hold a
@@ -467,8 +785,9 @@ not be started before step 3 is solid.
   emulator.
 - **No implicit learning (D8) caps the ceiling.** If the add-word path has any
   friction at all, the keyboard will stay wrong about this user's vocabulary
-  indefinitely. This is the accepted cost of the chosen privacy posture, and it
-  makes step 4's UX unusually important.
+  indefinitely. This is the accepted cost of the chosen privacy posture. The
+  path exists now (D22) — one tap in the rightmost slot — and whether it is
+  actually reached in the moment of annoyance is a question for real use.
 - **Daily-driver risk.** A crash makes the phone untypeable. Keep a second
   keyboard installed; consider a crash guard that disables the fancy path
   rather than the service.

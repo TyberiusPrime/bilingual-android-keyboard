@@ -46,6 +46,9 @@ class SuggestionStripView @JvmOverloads constructor(
      */
     var onPick: ((StripEntry, PickStyle) -> Unit)? = null
 
+    /** Called when a slot is pressed, before anything is decided. For haptics (D29). */
+    var onPress: (() -> Unit)? = null
+
     /**
      * What each slot holds, `null` for an empty one.
      *
@@ -91,6 +94,7 @@ class SuggestionStripView @JvmOverloads constructor(
      * [BilingualKeyboardService.onStartInputView].
      */
     private val stripHeight = KeyboardPrefs.stripHeightPx(context)
+    private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.SUGGESTION_LONG_PRESS_MS)
 
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
     private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DIVIDER }
@@ -196,8 +200,9 @@ class SuggestionStripView @JvmOverloads constructor(
                 pressedSlot = if (slot >= 0 && slots[slot] != null) slot else -1
                 longPressFired = false
                 if (pressedSlot >= 0) {
+                    onPress?.invoke()
                     invalidate()
-                    handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    handler.postDelayed(longPressRunnable, longPressMs)
                 }
             }
 
@@ -232,13 +237,6 @@ class SuggestionStripView @JvmOverloads constructor(
     }
 
     private companion object {
-        /**
-         * Longer than a key's long press (D5 shortened that one, because it is
-         * on the path of ordinary typing). Nothing here is, and holding a
-         * suggestion by accident inserts a word.
-         */
-        const val LONG_PRESS_MS = 400L
-
         const val DIVIDER_WIDTH_DP = 1f
         const val SLOT_PADDING_DP = 8f
 

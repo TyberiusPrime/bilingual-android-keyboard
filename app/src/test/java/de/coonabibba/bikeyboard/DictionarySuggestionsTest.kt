@@ -2,6 +2,7 @@ package de.coonabibba.bikeyboard
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -208,5 +209,92 @@ class DictionarySuggestionsTest {
         assertTrue("the user's own words count", source.knows("Coonabibba"))
         assertTrue("case and accents are not new words", source.knows("haus"))
         assertFalse(source.knows("Sonnenblumenweg"))
+    }
+
+    // -- auto-correction (D28) ------------------------------------------------
+
+    /** Typed cleanly, with no key nearby: the touches say nothing helpful. */
+    private fun clean(word: String) = word.map { TypedTouch(it, emptyMap()) }
+
+    /** Typed with the thumb sitting on the border between two keys. */
+    private fun grazing(word: String, index: Int, neighbour: Char) =
+        word.mapIndexed { i, char ->
+            if (i == index) TypedTouch(char, mapOf(neighbour to 0.1f)) else TypedTouch(char, emptyMap())
+        }
+
+    @Test
+    fun `an adjacent-key slip on a common word is corrected with confidence`() {
+        // `haben` typed with the thumb between `b` and `n`.
+        val correction = source().correct("hanen", grazing("hanen", 2, 'b'))
+        assertEquals("haben", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    /**
+     * The same edit, but the thumb was nowhere near: this is a word the typist
+     * may well have meant, and the keyboard has no business replacing it.
+     */
+    @Test
+    fun `the same edit without the touch evidence is not confident`() {
+        val correction = source().correct("hanen", clean("hanen"))
+        assertTrue(
+            "confidence was ${correction?.confidence}",
+            correction == null || correction.confidence < 0.9f,
+        )
+    }
+
+    /** D2: a word valid in either language is valid, however rare. */
+    @Test
+    fun `a word spelled exactly right is never corrected`() {
+        assertNull(source().correct("hallo", clean("hallo")))
+        assertNull(source().correct("house", grazing("house", 0, 'g')))
+    }
+
+    /** D5, the cheapest win there is: the umlaut is a long-press worth skipping. */
+    @Test
+    fun `a missing umlaut is corrected`() {
+        val correction = source().correct("uber", clean("uber"))
+        assertEquals("über", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    @Test
+    fun `a word the keyboard has never heard of is left alone`() {
+        val correction = source().correct("Coonabibba", clean("Coonabibba"))
+        assertTrue(
+            "confidence was ${correction?.confidence}",
+            correction == null || correction.confidence < 0.9f,
+        )
+    }
+
+    @Test
+    fun `a word the user added is never corrected`() {
+        val personal = PersonalStore(folder.newFile()).apply { add("Hauswurz") }
+        val source = DictionarySuggestions(listOf(german, english), personal)
+        assertNull(source.correct("Hauswurz", clean("Hauswurz")))
+    }
+
+    /** Without touches there is no telling a slip from a decision (D28). */
+    @Test
+    fun `nothing is corrected without touches for every character`() {
+        assertNull(source().correct("hanen", emptyList()))
+        assertNull(source().correct("hanen", clean("han")))
+    }
+
+    @Test
+    fun `very short words are left alone`() {
+        assertNull(source().correct("ha", grazing("ha", 1, 'b')))
+    }
+
+    @Test
+    fun `a correction keeps the case that was typed`() {
+        val correction = source().correct("Hanen", grazing("Hanen", 2, 'b'))
+        assertEquals("Haben", correction?.text)
+    }
+
+    @Test
+    fun `a correction says what it replaced, so it can be put back`() {
+        val correction = source().correct("hanen", grazing("hanen", 2, 'b'))
+        assertEquals("hanen", correction?.original)
     }
 }

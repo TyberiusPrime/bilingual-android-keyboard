@@ -31,6 +31,21 @@ data class Suggestion(
 enum class Language { GERMAN, ENGLISH }
 
 /**
+ * A replacement the keyboard is prepared to make on its own (D3, D28).
+ *
+ * [confidence] is what the whole thing turns on, and unlike the strip's
+ * ranking it is meant to be acted upon: above the threshold the word is
+ * replaced without being asked. It carries [original] because a replacement
+ * that cannot be undone is not one that should be made (D14).
+ */
+data class Correction(
+    val text: String,
+    val original: String,
+    val confidence: Float,
+    val language: Language?,
+)
+
+/**
  * Where the strip's contents come from.
  *
  * **This signature is provisional.** The architecture in `docs/design.md` has
@@ -61,6 +76,17 @@ interface SuggestionSource {
      * to store.
      */
     fun knows(word: CharSequence): Boolean = true
+
+    /**
+     * The best replacement for a finished word, with how sure it is.
+     *
+     * [touches] carries where the thumb actually landed for each character
+     * (D28); without it there is no way to tell a slip from a decision, so a
+     * source that is given nothing should be correspondingly unsure. Returning
+     * a correction is not the same as applying one — the threshold that decides
+     * that is the user's (D3).
+     */
+    fun correct(typed: String, touches: List<TypedTouch>): Correction? = null
 }
 
 /**

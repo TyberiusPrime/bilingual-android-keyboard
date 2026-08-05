@@ -31,6 +31,31 @@ object Folding {
     }
 
     /**
+     * The single-character version of [fold], without the allocation.
+     *
+     * [fold] normalises and strips combining marks, which means building two
+     * strings; doing that inside an edit-distance table costs more than the
+     * whole rest of the search put together — it was 18ms per correction before
+     * this existed and a fraction of one after. The cases below are the
+     * accented letters the two wordlists actually contain.
+     *
+     * `ß` folds to `s` rather than to `ss`, which [fold] cannot do and this
+     * cannot avoid; the difference shows up as one extra edit for `strasse`
+     * against `straße`, which is the right sort of wrong.
+     */
+    fun foldChar(char: Char): Char = when (char) {
+        'ä', 'à', 'á', 'â', 'ã', 'å' -> 'a'
+        'ë', 'è', 'é', 'ê' -> 'e'
+        'ï', 'ì', 'í', 'î' -> 'i'
+        'ö', 'ò', 'ó', 'ô', 'õ' -> 'o'
+        'ü', 'ù', 'ú', 'û' -> 'u'
+        'ç' -> 'c'
+        'ñ' -> 'n'
+        'ß' -> 's'
+        else -> char
+    }
+
+    /**
      * Whether [word] starts the way [prefix] does, ignoring case and accents.
      */
     fun startsWith(word: CharSequence, prefix: CharSequence): Boolean =

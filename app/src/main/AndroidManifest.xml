@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        For the keypress tick and the two-pulse pattern that says a word was
+        corrected (D29). A normal permission: granted at install, no prompt,
+        and the keyboard does nothing with it unless the setting asks it to.
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

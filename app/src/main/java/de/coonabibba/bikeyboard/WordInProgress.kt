@@ -39,6 +39,21 @@ class WordInProgress {
     /** The whole word the cursor is in. What gets looked up, and what gets replaced. */
     val full: String get() = builder.toString() + suffix
 
+    private val typedTouches = mutableListOf<TypedTouch>()
+
+    /**
+     * Where the thumb landed for each character of the word, when every one of
+     * them was typed here (D28).
+     *
+     * Empty unless the whole word can be accounted for: a word the cursor
+     * jumped back to was not typed on these keys, and a long-press alternate
+     * came from a popup rather than from a key. Auto-correction refuses to act
+     * without the full set, because half a set is worse than none — it would
+     * make the keyboard confident about exactly the words it knows least about.
+     */
+    val touches: List<TypedTouch>
+        get() = if (typedTouches.size == builder.length && suffix.isEmpty()) typedTouches else emptyList()
+
     var known: Boolean = true
         private set
 
@@ -54,12 +69,17 @@ class WordInProgress {
      * for is now behind a separator, and the word starting here is one we have
      * seen every character of.
      */
-    fun insert(text: CharSequence) {
+    fun insert(text: CharSequence, touch: TypedTouch? = null) {
         text.forEach { char ->
             if (isWordChar(char)) {
                 builder.append(char)
+                // Only a single-character insertion can carry a touch, so
+                // anything longer leaves the list short and the word without
+                // spatial evidence — which is what [touches] checks for.
+                if (touch != null && text.length == 1) typedTouches += touch
             } else {
                 builder.setLength(0)
+                typedTouches.clear()
                 // Whatever followed the cursor is on the far side of a
                 // separator now, so it is a different word.
                 suffix = ""
@@ -78,6 +98,7 @@ class WordInProgress {
     fun deleteOne() {
         if (builder.isNotEmpty()) {
             builder.setLength(builder.length - 1)
+            if (typedTouches.isNotEmpty()) typedTouches.removeAt(typedTouches.size - 1)
         } else {
             known = false
         }
@@ -93,6 +114,7 @@ class WordInProgress {
      */
     fun deleteWord(complete: Boolean) {
         builder.setLength(0)
+        typedTouches.clear()
         suffix = ""
         if (!complete) known = false
     }
@@ -100,6 +122,7 @@ class WordInProgress {
     /** Starts over: a new field, or a cursor movement we cannot account for. */
     fun reset(known: Boolean) {
         builder.setLength(0)
+        typedTouches.clear()
         suffix = ""
         this.known = known
     }
@@ -113,6 +136,7 @@ class WordInProgress {
      */
     fun adopt(word: WordAtCursor) {
         builder.setLength(0)
+        typedTouches.clear()
         builder.append(word.before)
         suffix = word.after
         known = true

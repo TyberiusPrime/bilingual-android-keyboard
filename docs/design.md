@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D27 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D30 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -36,6 +36,10 @@ below.
       with?
 - [ ] Corrections cannot fix a mistyped **first** letter (D23), because the scan
       is bucketed by it. How often does that bite in real typing?
+- [ ] Is the unknown-word prior right (D28)? Everything the auto-correction
+      threshold does, it does relative to that one number, and it was guessed.
+- [ ] Auto-correction cannot reach a word whose first letter was mistyped, and
+      cannot spell `Straße` from `strasse` (D28).
 - [ ] A correction query costs ~3ms on a laptop and has not been timed on the
       phone (D23). Per keystroke, on a word with no completions, that is the
       first thing in this keyboard with a latency budget worth watching.
@@ -76,6 +80,10 @@ below it, corrections are offered and never applied. Two consequences:
 Note the interaction with D2: a word that is valid in the *other* language must
 not be treated as a misspelling. Cross-language false positives are the most
 likely way this feature becomes the thing it was meant to fix.
+
+**Built in D28**, where the calibrated number turns out to rest on the touches
+rather than on the dictionary, and where the rule above became a hard gate: a
+word spelled exactly right is never replaced.
 
 ### D4 — Subtle language indicator, non-interactive
 
@@ -236,6 +244,8 @@ licence recorded per file as they are added, not reconstructed later.
 
 ### D14 — Backspace reverts an auto-correction; the strip offers "add word"
 
+**Built in D28**, along with the auto-replacement it exists to undo.
+
 Immediately after a silent auto-replace, backspace restores exactly what was
 typed rather than deleting a character, and the suggestion strip turns into a
 one-tap "keep this word" affordance.
@@ -261,6 +271,12 @@ carries a spatial likelihood, taps produce a distribution over keys rather than
 a single key, and that distribution is one input to the candidate scorer
 alongside the language model — which is the same architecture D7 requires for
 gesture typing later. Both decisions point at the same boundary.
+
+**Half of this arrived early**, in D28: taps now produce a distribution over
+keys, and the scorer reads it. What is still missing is the part D15 is actually
+about — *learning* that a one-thumb tap drifts predictably, so that the
+distribution is centred where the thumb aims rather than where the key is. The
+geometry is in place for it; the drift is roadmap step 5.
 
 ### D16 — The layer toggle never moves
 
@@ -644,6 +660,87 @@ time, and inherits a sensible frequency while it is there.
 It covers only `'s`. The other contractions — `don't`, `can't` — need the
 apostrophe in the middle, where there is no such unambiguous signal, and would
 need the wordlists to know the results.
+
+### D28 — Auto-correction on space, when the touches agree
+
+D3 said silent replacement was permitted above a tuned confidence threshold and
+that calibration, not ranking, was the hard part. This is that, turned on.
+
+**It fires on space**, because that is the moment a word is finished and the
+last moment changing it is cheap. Not per keystroke: a word being typed is not
+yet wrong.
+
+**Confidence comes from where the thumb landed.** Plain edit distance answers
+"are these two words similar", which is the wrong question — `hanen` is one edit
+from `haben` whether or not the finger was anywhere near `b`. So every typed
+character now carries the keys it nearly hit ([TypedTouch]), substitution costs
+come from that, and the distance is a real number rather than a count
+([SpatialEditDistance]). The same typo scores 0.999 when the thumb was on the
+`b`/`n` border and 0.76 when it was dead centre on `n` — the first is replaced,
+the second is only offered. That distinction is the whole feature.
+
+Each candidate is scored as *how likely is it that this was meant*: how common
+the word is, discounted exponentially by how implausible the slips would have to
+be. The confidence is that score's share of everything on the table **including
+the standing chance that an unknown word was typed deliberately** — a name, a
+codeword, jargon. That prior is what the threshold is really measured against,
+and it is the most load-bearing guess in the file.
+
+Two hard rules sit in front of the arithmetic, and neither is negotiable:
+
+- **A word spelled exactly right is never touched**, however rare, however
+  common its neighbour. Under D2 a word valid in the other language is valid,
+  and cross-language false positives are the way this feature becomes the thing
+  it was meant to fix.
+- **No touches, no correction.** A word the cursor jumped back to (D23) was not
+  typed here, and half a set of touches would make the keyboard confident about
+  exactly the words it knows least about.
+
+**It says so twice.** A wash of purple rises from the space bar to the top of
+the keys, and the vibration is two pulses rather than one (D29). Both exist
+because the typist is looking at the text rather than at the keyboard: one is
+caught out of the corner of an eye, the other needs no eye at all. The flash
+starts at the space bar because that is the key that caused it.
+
+**Backspace puts it back** — D14, finally built. The keystroke immediately
+after a replacement restores exactly what was typed, space and all, and the
+strip turns into an offer to remember the word, which under D8 is the only way
+the keyboard ever learns anything. Anything other than that one backspace closes
+the window.
+
+Measured on a laptop: 1.5ms per space. It was 18ms before the edit-distance
+table stopped normalising Unicode in its inner loop, which is worth recording
+because the profile is entirely unlike the rest of the keyboard — thousands of
+tiny comparisons rather than one lookup.
+
+Known limits: the search is bucketed by first letter (D23), so `hte` cannot
+reach `the`. And `ß` folds to `s` one character at a time here, so `strasse`
+does not reach `Straße` cheaply enough to be corrected.
+
+### D29 — Haptics, three states
+
+Off, light, strong. Not a switch, because "on" means something different on
+every phone, and because the difference between the two strengths is what makes
+a correction distinguishable from a keypress by feel alone.
+
+A keypress is one tick, as short as the hardware will honour, since it happens
+hundreds of times a minute and anything longer is a buzz. An applied correction
+is **two**: the keyboard did something unasked, and that is worth noticing while
+the thumb is still moving — it is the only signal that D14's undo window is
+open and about to close.
+
+### D30 — The timings are settings
+
+Every duration in the keyboard is now a slider: the long-press delay on a key
+and on a suggestion, how long backspace waits before repeating and how fast it
+then goes, the double-tap window, the correction flash.
+
+They are here for the same reason the suggestion size is (D25). D5 already said
+the long-press delay "must be tuned rather than inherited"; three rounds of
+tuning-by-guess later, the honest version of that is that a hold which feels
+deliberate to one thumb is a stutter to another, and none of it is decidable
+from a laptop. The views read them once when they are built, and a settings
+revision counter tells the service to build them again.
 
 ---
 

@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import android.text.InputType
+import android.view.inputmethod.EditorInfo
 
 /**
  * What the field being typed into permits, decided from its `inputType` alone.
@@ -48,9 +49,8 @@ object FieldPolicy {
      *   have no words to correct.
      *
      * Not consulted here: `IME_FLAG_NO_PERSONALIZED_LEARNING`, which lives in
-     * `imeOptions` and bars *learning* from the field, not suggesting into it.
-     * Nothing learns yet — under D8 only an explicit add-word ever teaches the
-     * keyboard anything — so it has nothing to gate until step 4.
+     * `imeOptions` and bars *learning* from the field rather than suggesting
+     * into it. That is [learningAllowed]'s business.
      */
     fun suggestionsAllowed(inputType: Int): Boolean {
         if (inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
@@ -68,4 +68,16 @@ object FieldPolicy {
             else -> true
         }
     }
+
+    /**
+     * Whether a word typed here may be offered for the personal store.
+     *
+     * Everything [suggestionsAllowed] refuses, plus `IME_FLAG_NO_PERSONALIZED_LEARNING`
+     * — the flag an incognito or private field sets to say "do not remember
+     * this". Under D8 the add-word tap is the only thing that ever writes to the
+     * store, so this one check covers all of the keyboard's learning.
+     */
+    fun learningAllowed(inputType: Int, imeOptions: Int): Boolean =
+        suggestionsAllowed(inputType) &&
+            imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING == 0
 }

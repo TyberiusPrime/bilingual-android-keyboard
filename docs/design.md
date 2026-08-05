@@ -1,8 +1,8 @@
 # Design document
 
-**Status: decisions D1–D21 settled; architecture drafted from them. Roadmap
-step 2 built, step 3 next.** See `docs/android-ime-api.md` for what the platform
-allows and what it withholds.
+**Status: decisions D1–D22 settled; architecture drafted from them. Roadmap
+steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
+for what the platform allows and what it withholds.
 
 ## Problem statement
 
@@ -30,7 +30,12 @@ below.
       arbitrary placement in the layout and the likeliest thing to want changed
       after a week of real use.
 - [ ] Is three the right number of slots in the strip (D21)? Guessed from other
-      keyboards; unanswerable until something fills them.
+      keyboards. Now that the strip has content, it is answerable.
+- [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
+      shift is pressed (D22). Worth a part-of-speech source, or worth living
+      with?
+- [ ] Completion only, no edit distance (D22). Which typos does that leave
+      uncorrected in practice, and is prefix-only enough until the model lands?
 
 ## Decisions
 
@@ -412,6 +417,58 @@ words of unrecorded provenance in the repo (D13) and teach nobody anything about
 whether the design works. The strip renders as bare surface until it has
 something true to say.
 
+### D22 — Two wordlists, one scale, one casing per word
+
+Roadmap step 3, and the first thing in the project that makes the strip say
+anything. Deliberately the dumb version: completions of what has been typed,
+ranked by how common the word is. No edit distance, no context, no model.
+
+**Both lists are queried on every keystroke and compete on one scale.** This is
+D1 and D2 made real rather than promised: a word's weight is its share of its
+own corpus, so a common German word and a common English word are directly
+comparable, and nothing anywhere holds a current language. Typing `inte` offers
+*interessiert*, *interesting*, *interested*; `str` offers *street*, *Straße*,
+*straight*. That is the entire thesis of the project, working, at a point where
+there is no model in the build at all.
+
+**Matching is folded** — lowercased, `ß` as `ss`, accents dropped — so `ube`
+finds `über`. That is the cheap half of D5's mitigation: the umlaut costs a
+long-press, and skipping it now costs a tap on the strip instead.
+
+**One casing per word, and the typist supplies the first letter.** Two entries
+differing only in case would eat two of three slots to say the same thing, so
+the wordlists carry one — the least-capitalised form the spelling list offers,
+which keeps `nicht` over `Nicht` and leaves `Haus` alone because no lowercase
+`haus` exists. A capital the typist types is then applied to the candidate, so
+`Zei` completes to `Zeit`.
+
+The cost, and it is visible: German homographs whose spelling list kept the
+lowercase reading — `zeit`, `leben`, `weg`, `recht` — are offered lowercase
+unless shift is pressed. Telling a noun from an adjective needs a
+part-of-speech signal that no GPL-compatible source here carries, and guessing
+it would capitalise adjectives instead. Recorded in the wordlists' own
+`PROVENANCE.md` alongside the other gaps.
+
+**The personal store is a lexicon with a fixed weight** — about that of the
+two-hundredth most common word, so an added word beats ordinary vocabulary but
+not `the` or `ich`. It is reached by the add-word offer, which occupies the
+strip's rightmost slot whenever the word being typed is one nothing recognises.
+That is D8's requirement met literally: one tap, at the moment of annoyance, no
+settings screen. It is also the only thing in the keyboard that writes to the
+store, which makes `IME_FLAG_NO_PERSONALIZED_LEARNING` a single check rather
+than a policy spread across the codebase.
+
+**What this is not:** it is not correction. There is no edit distance, so a
+typo that is not a prefix of the intended word gets nothing. The confidence on
+each candidate is its share of the matching mass — a unigram
+*P(word | prefix)* — which is honest but is not the calibrated number D3 wants,
+and nothing is ever replaced silently. D3 and step 7 are untouched.
+
+Measured on a laptop, not the Fairphone: 70,000 entries load in ~75ms, and a
+query costs ~0.2ms. The load happens once per service on a background thread,
+so the first moment of a session has an empty strip rather than a stalled one.
+The device numbers are the ones that matter and are not in yet.
+
 ---
 
 ## Architecture
@@ -488,11 +545,12 @@ X" bugs live here. It is also where the D14 undo window lives, since that
 window is defined in terms of committed-text state.
 
 **The strip is Policy's only visible output** until auto-replace is allowed to
-turn on (step 7). It is built (D21) and wired to a `SuggestionSource` that
-returns nothing; step 3 replaces that object and the strip lights up without
-anything else moving. What it feeds back is a tap, which the service turns into
-"replace the word in progress with this" — the narrowest editing operation that
-still exercises the whole path.
+turn on (step 7). It is built (D21), and the `SuggestionSource` behind it now
+answers with real words from both languages (D22). What it feeds back is a tap,
+which the service turns into "replace the word in progress with this" — the
+narrowest editing operation that still exercises the whole path — or into "add
+this word to the personal store", which is the only way anything is ever
+learned (D8).
 
 **Language inference is not a layer.** There is no component that decides "we
 are in German now". Per D2 and D12, language identity is a property of a
@@ -508,7 +566,8 @@ scorer's belief; it does not drive anything.
    suggestion strip present but empty (D9, D21). Daily-drivable, dumb.
    *Done.*
 3. **Dictionaries and personal store** — GPL DE/EN wordlists with provenance
-   (D13), the add-word path (D8/D14), plain lookup-based suggestions.
+   (D13), the add-word path (D8/D14), plain lookup-based suggestions (D22).
+   *Done.*
 4. **Editor I/O done properly** — composing regions, selection reconciliation,
    undo window (D14). This is the layer that makes everything above it
    trustworthy, and the one most likely to be underestimated.
@@ -547,8 +606,9 @@ not be started before editor I/O is solid.
   emulator.
 - **No implicit learning (D8) caps the ceiling.** If the add-word path has any
   friction at all, the keyboard will stay wrong about this user's vocabulary
-  indefinitely. This is the accepted cost of the chosen privacy posture, and it
-  makes step 4's UX unusually important.
+  indefinitely. This is the accepted cost of the chosen privacy posture. The
+  path exists now (D22) — one tap in the rightmost slot — and whether it is
+  actually reached in the moment of annoyance is a question for real use.
 - **Daily-driver risk.** A crash makes the phone untypeable. Keep a second
   keyboard installed; consider a crash guard that disables the fancy path
   rather than the service.

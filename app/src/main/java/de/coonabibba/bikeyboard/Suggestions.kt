@@ -17,10 +17,6 @@ data class Suggestion(val text: String, val confidence: Float)
 /**
  * Where the strip's contents come from.
  *
- * Empty until roadmap step 4 lands dictionaries and the personal store. The
- * interface exists now so that the strip, the tap handling and the editor
- * bookkeeping around it can be built and tested against something.
- *
  * **This signature is provisional.** The architecture in `docs/design.md` has
  * the candidate set produced from a *sequence of touch points* (D7, D15) and
  * scored in sentence context by one multilingual model (D2, D12); a prefix of
@@ -29,7 +25,7 @@ data class Suggestion(val text: String, val confidence: Float)
  * service's [BilingualKeyboardService.refreshSuggestions] and the source
  * implementation.
  */
-fun interface SuggestionSource {
+interface SuggestionSource {
 
     /**
      * Candidates for the word currently being typed, best first.
@@ -39,15 +35,50 @@ fun interface SuggestionSource {
      * prediction rather than a correction (D9 says the strip carries both).
      */
     fun suggest(word: CharSequence): List<Suggestion>
+
+    /**
+     * Whether [word] is one this source recognises.
+     *
+     * Drives the add-word offer (D8): a word nothing has heard of is one worth
+     * asking about. A source that cannot answer should claim to know
+     * everything, so that it never offers to add a word it would then be unable
+     * to store.
+     */
+    fun knows(word: CharSequence): Boolean = true
 }
 
 /**
- * The source until step 4. Keeps the strip present and empty, which is exactly
- * what roadmap step 2 asks for: the height is spent, the layout never moves,
- * and nothing pretends to know a word it has no dictionary for.
+ * Nothing to offer. Used while the wordlists are still being read off disk, so
+ * the strip is empty for the first moment of a session rather than absent.
  */
 object NoSuggestions : SuggestionSource {
     override fun suggest(word: CharSequence): List<Suggestion> = emptyList()
+}
+
+/**
+ * What one slot of the strip holds.
+ *
+ * Two kinds, because the strip does two jobs: it offers words, and it is where
+ * the user's only feedback channel lives (D8, D14).
+ */
+sealed interface StripEntry {
+
+    /** What the strip draws. */
+    val label: String
+
+    /** A candidate. Tapping it replaces the word in progress. */
+    data class Word(val suggestion: Suggestion) : StripEntry {
+        override val label: String get() = suggestion.text
+    }
+
+    /**
+     * An offer to remember a word nothing recognises. Tapping it adds the word
+     * to the personal store and changes nothing in the text — the word is
+     * already typed; what is missing is the keyboard knowing it.
+     */
+    data class AddWord(val word: String) : StripEntry {
+        override val label: String get() = "+ $word"
+    }
 }
 
 /**

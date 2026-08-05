@@ -36,19 +36,22 @@ class SuggestionStripView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
 
-    /** Called when a suggestion is chosen. */
-    var onPick: ((Suggestion) -> Unit)? = null
+    /** Called when a slot is chosen. */
+    var onPick: ((StripEntry) -> Unit)? = null
 
     /**
-     * What to offer, best first. Anything past [SuggestionSlots.CAPACITY] is
-     * dropped rather than scrolled: a suggestion you have to look for is not a
-     * suggestion.
+     * What each slot holds, `null` for an empty one.
+     *
+     * Always exactly [SuggestionSlots.CAPACITY] long, padded here if the caller
+     * gives fewer. Slots are addressed rather than filled left to right so that
+     * the add-word offer can keep the rightmost one to itself and stay in the
+     * same place whether there are two candidates beside it or none.
      */
-    var suggestions: List<Suggestion> = emptyList()
+    var slots: List<StripEntry?> = List(SuggestionSlots.CAPACITY) { null }
         set(value) {
-            val trimmed = value.take(SuggestionSlots.CAPACITY)
-            if (trimmed == field) return
-            field = trimmed
+            val padded = List(SuggestionSlots.CAPACITY) { value.getOrNull(it) }
+            if (padded == field) return
+            field = padded
             // The finger is still down on a slot whose contents just changed
             // underneath it; committing what is there now is not what was
             // aimed at.
@@ -85,7 +88,8 @@ class SuggestionStripView @JvmOverloads constructor(
         val w = width.toFloat()
         val baseline = height / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
 
-        suggestions.forEachIndexed { index, suggestion ->
+        slots.forEachIndexed { index, entry ->
+            if (entry == null) return@forEachIndexed
             val left = SuggestionSlots.left(w, index)
             val right = SuggestionSlots.right(w, index)
 
@@ -95,7 +99,7 @@ class SuggestionStripView @JvmOverloads constructor(
 
             // A divider only between two occupied slots, never trailing off
             // into the empty part of the strip.
-            if (index > 0) {
+            if (index > 0 && slots[index - 1] != null) {
                 canvas.drawRect(
                     left,
                     height * 0.25f,
@@ -105,9 +109,13 @@ class SuggestionStripView @JvmOverloads constructor(
                 )
             }
 
+            // The add-word offer is not a word to insert, so it does not look
+            // like one.
+            textPaint.color = if (entry is StripEntry.AddWord) ADD_WORD_FG else Color.WHITE
+
             val room = right - left - 2f * SLOT_PADDING_DP * density
             val label = TextUtils.ellipsize(
-                suggestion.text,
+                entry.label,
                 textPaint,
                 room,
                 TextUtils.TruncateAt.END,
@@ -121,7 +129,7 @@ class SuggestionStripView @JvmOverloads constructor(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val slot = SuggestionSlots.indexAt(width.toFloat(), event.x)
-                pressedSlot = if (slot in suggestions.indices) slot else -1
+                pressedSlot = if (slot >= 0 && slots[slot] != null) slot else -1
                 if (pressedSlot >= 0) invalidate()
             }
 
@@ -130,7 +138,7 @@ class SuggestionStripView @JvmOverloads constructor(
                 // release point — the same rule the keys follow, for the same
                 // reason: a thumb that rolls sideways meant the thing it landed
                 // on.
-                val chosen = suggestions.getOrNull(pressedSlot)
+                val chosen = slots.getOrNull(pressedSlot)
                 if (pressedSlot >= 0) {
                     pressedSlot = -1
                     invalidate()
@@ -153,5 +161,8 @@ class SuggestionStripView @JvmOverloads constructor(
         const val SLOT_PADDING_DP = 8f
         val PRESSED_BG = Color.parseColor("#3A3A3C")
         val DIVIDER = Color.parseColor("#3A3A3C")
+
+        /** The trail's purple, so "this one is not a word to insert" reads at a glance. */
+        val ADD_WORD_FG = Color.parseColor("#B79CF8")
     }
 }

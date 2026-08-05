@@ -1,6 +1,8 @@
 package de.coonabibba.bikeyboard
 
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
@@ -13,6 +15,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * The IME. Everything the keyboard is allowed to know about the app it is
@@ -36,7 +40,7 @@ class BilingualKeyboardService : InputMethodService() {
             onCursorStep = ::moveCursor
             onDeleteWord = ::handleDeleteWord
         }
-        suggestionStrip = SuggestionStripView(this).apply { onPick = ::pickSuggestion }
+        suggestionStrip = SuggestionStripView(this).apply { onPick = ::pickEntry }
 
         // Strip above keys. Child clipping is off so that a long-press popup on
         // the top row, drawn by the keyboard view at a negative y, overhangs
@@ -120,6 +124,7 @@ class BilingualKeyboardService : InputMethodService() {
         clearTrail()
 
         suggestionsAllowed = FieldPolicy.suggestionsAllowed(info.inputType)
+        learningAllowed = FieldPolicy.learningAllowed(info.inputType, info.imeOptions)
         // Focus can land in the middle of existing text, and what precedes the
         // cursor there is text this keyboard did not type. Only a cursor at
         // position zero means there is nothing in front of it to be wrong
@@ -377,18 +382,102 @@ class BilingualKeyboardService : InputMethodService() {
     /** False in password, no-suggestion and non-prose fields (see [FieldPolicy]). */
     private var suggestionsAllowed = true
 
+    /** False additionally in fields that ask not to be learned from (D8). */
+    private var learningAllowed = true
+
     /**
-     * Empty until roadmap step 4. The strip, its taps and the editing they
-     * cause are real; the candidates are what is missing, and they are missing
-     * because there are no dictionaries yet rather than because nothing is
-     * wired up.
+     * The shipped wordlists plus the personal store, once they have been read.
+     * [NoSuggestions] until then, which is a moment at the start of a session
+     * and never again — the strip is empty rather than absent, per D9.
      */
-    private val suggestionSource: SuggestionSource = NoSuggestions
+    @Volatile
+    private var suggestionSource: SuggestionSource = NoSuggestions
+
+    /** The user's own words. The only thing that ever teaches this keyboard (D8). */
+    private val personalStore by lazy { PersonalStore(File(filesDir, PERSONAL_WORDS_FILE)) }
+
+    /** Disk work — reading the wordlists, appending a word — never on the typing thread. */
+    private val diskThread = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "bikeyboard-disk").apply { priority = Thread.MIN_PRIORITY }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Once per service, not once per field: this is the whole reason
+        // dictionaries are loaded here rather than in onStartInput.
+        diskThread.execute {
+            personalStore.load()
+            val source = DictionarySuggestions(
+                lexicons = listOf(
+                    Wordlists.load(assets::open, Wordlists.GERMAN),
+                    Wordlists.load(assets::open, Wordlists.ENGLISH),
+                ),
+                personal = personalStore,
+            )
+            suggestionSource = source
+            mainHandler.post(::refreshSuggestions)
+        }
+    }
+
+    override fun onDestroy() {
+        diskThread.shutdown()
+        super.onDestroy()
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private fun refreshSuggestions() {
         if (!::suggestionStrip.isInitialized) return
-        suggestionStrip.suggestions =
-            if (suggestionsAllowed && word.known) suggestionSource.suggest(word.text) else emptyList()
+        if (!suggestionsAllowed || !word.known) {
+            suggestionStrip.slots = emptyList()
+            return
+        }
+
+        val source = suggestionSource
+        val candidates = source.suggest(word.text).map { StripEntry.Word(it) }
+        val offer = addWordOffer(source)
+
+        // The add-word offer keeps the rightmost slot to itself, in the same
+        // place whether or not there are candidates beside it. A feedback
+        // channel that moves around is one that gets mis-tapped, and under D8
+        // it is the only one there is.
+        suggestionStrip.slots = if (offer == null) {
+            candidates
+        } else {
+            List(SuggestionSlots.CAPACITY - 1) { candidates.getOrNull(it) } + offer
+        }
+    }
+
+    /**
+     * The word in progress, if it is worth offering to remember.
+     *
+     * Only for a word nothing recognises, only where the field permits learning,
+     * and only once it is long enough to be a word rather than the start of one.
+     */
+    private fun addWordOffer(source: SuggestionSource): StripEntry.AddWord? {
+        if (!learningAllowed) return null
+        val typed = word.text.toString()
+        if (typed.length < MIN_ADDABLE_LENGTH) return null
+        if (source.knows(typed)) return null
+        return StripEntry.AddWord(typed)
+    }
+
+    private fun pickEntry(entry: StripEntry) {
+        when (entry) {
+            is StripEntry.Word -> pickSuggestion(entry.suggestion)
+            is StripEntry.AddWord -> addWord(entry.word)
+        }
+    }
+
+    /**
+     * Remembers a word. The text is not touched — the word is already typed;
+     * what was missing is the keyboard knowing it.
+     */
+    private fun addWord(text: String) {
+        if (!learningAllowed) return
+        if (!personalStore.add(text)) return
+        diskThread.execute { personalStore.persist() }
+        refreshSuggestions()
     }
 
     /**
@@ -469,6 +558,15 @@ class BilingualKeyboardService : InputMethodService() {
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64
+
+        /** Where the personal store lives, in ordinary credential-encrypted storage (D18). */
+        const val PERSONAL_WORDS_FILE = "personal-words.txt"
+
+        /**
+         * Below this, the word in progress is the start of typing rather than a
+         * word, and offering to remember it would fire on every second letter.
+         */
+        const val MIN_ADDABLE_LENGTH = 3
     }
 
     private fun shouldAutoCapitalise(info: EditorInfo): Boolean {

@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,6 +70,21 @@ class FieldPolicyTest {
         )
         assertFalse(FieldPolicy.isPassword(text()))
         assertFalse(FieldPolicy.isPassword(InputType.TYPE_CLASS_NUMBER))
+    }
+
+    /** D8: the store is the only thing that learns, so this is the whole gate. */
+    @Test
+    fun `a field that asks not to be learned from is not learned from`() {
+        assertTrue(FieldPolicy.learningAllowed(text(), 0))
+        assertFalse(
+            FieldPolicy.learningAllowed(text(), EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING),
+        )
+    }
+
+    @Test
+    fun `nothing is learned where nothing may be suggested`() {
+        assertFalse(FieldPolicy.learningAllowed(text(InputType.TYPE_TEXT_VARIATION_PASSWORD), 0))
+        assertFalse(FieldPolicy.learningAllowed(InputType.TYPE_CLASS_NUMBER, 0))
     }
 
     /** Numeric fields open on the symbol layer, so the check has to be exact. */

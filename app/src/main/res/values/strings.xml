@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Bilingual Keyboard</string>
+    <string name="ime_name">Bilingual Keyboard</string>
+    <string name="subtype_label">Bilingual</string>
+    <string name="settings_title">Keyboard settings</string>
+    <string name="settings_placeholder">Nothing to configure yet.</string>
+    <string name="action_enable">1. Enable in system settings</string>
+    <string name="action_select">2. Select as active keyboard</string>
+    <string name="status_enabled">Status: enabled.</string>
+    <string name="status_not_enabled">Status: not enabled yet.</string>
+</resources>

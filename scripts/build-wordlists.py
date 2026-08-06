@@ -88,10 +88,15 @@ ALLOWED = re.compile(r"^[a-z][a-z'-]*$")
 def fold(word: str) -> str:
     """Reduce a word to the letters someone types when they skip the accents.
 
-    `über` folds together with `uber`, `Straße` with `strasse`. **This must stay
-    identical to `Folding.fold` in the app** — the wordlists are written in
-    folded order and the app binary-searches them without re-sorting.
-    `WordlistAssetTest` checks that the two agree, on the real files.
+    `über` folds together with `uber`, `Straße` with `strasse`. **This must agree
+    with `Folding.fold` in the app** — the wordlists are written in folded order
+    and the app binary-searches them without re-sorting.
+
+    The two are no longer the same implementation. This one decomposes and
+    strips combining marks, which is the general answer; the app uses a table of
+    the fifteen non-ASCII characters these two wordlists actually contain, which
+    is thirteen times faster and enough. They agree on every word in both files,
+    and `WordlistAssetTest` checks that on the real data rather than on trust.
     """
     lowered = word.lower().replace("ß", "ss")
     decomposed = unicodedata.normalize("NFD", lowered)

@@ -713,6 +713,15 @@ table stopped normalising Unicode in its inner loop, which is worth recording
 because the profile is entirely unlike the rest of the keyboard — thousands of
 tiny comparisons rather than one lookup.
 
+That led to a second question worth writing down: **does a German and English
+keyboard need Unicode normalisation at all?** The two wordlists contain fifteen
+non-ASCII characters between them — `ä ü ö ß Ä Ü Ö é ñ â ê à á ó è` — every one
+precomposed, and the keyboard can type four of them. So the whole of folding is
+now a table rather than a normaliser: thirteen times faster, and it agrees with
+the old implementation on every one of the 70,000 shipped words. The cost is
+that an accent from outside those two languages is no longer folded away, which
+makes it match nothing — the right answer, since it is not a word here either.
+
 Known limits: the search is bucketed by first letter (D23), so `hte` cannot
 reach `the`. And `ß` folds to `s` one character at a time here, so `strasse`
 does not reach `Straße` cheaply enough to be corrected.

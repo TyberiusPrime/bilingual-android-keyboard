@@ -323,12 +323,22 @@ class SettingsActivity : AppCompatActivity() {
      * names the culprit outright.
      */
     private fun addHapticDiagnosis(into: LinearLayout) {
-        val report = Haptics(this, KeyboardPrefs.HapticLevel.LIGHT)
-            .diagnose()
-            .joinToString("\n") { (label, value) -> "$label: $value" }
+        val haptics = Haptics(this, KeyboardPrefs.HapticLevel.LIGHT)
+
+        // The conclusion first, when there is one. A list of readings is data;
+        // this is the sentence the reader came for.
+        haptics.verdict()?.let { verdict ->
+            into.addView(
+                TextView(this).apply {
+                    text = verdict
+                    setPadding(0, dp(16), 0, 0)
+                },
+            )
+        }
+
         into.addView(
             TextView(this).apply {
-                text = report
+                text = haptics.diagnose().joinToString("\n") { (label, value) -> "$label: $value" }
                 alpha = 0.7f
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setPadding(0, dp(16), 0, 0)

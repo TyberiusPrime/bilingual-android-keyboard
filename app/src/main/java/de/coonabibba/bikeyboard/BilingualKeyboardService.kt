@@ -48,7 +48,17 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private var viewsBuiltForRevision = -1
 
-    private var haptics = Haptics(this, KeyboardPrefs.HapticLevel.OFF)
+    /**
+     * Null until the input view is built, and deliberately not a placeholder
+     * instance.
+     *
+     * A `Service` field initialiser runs before `attachBaseContext`, so anything
+     * built here is handed a context that cannot answer questions yet. A
+     * placeholder object that merely *happens* not to ask any is one refactor
+     * away from crashing the keyboard on launch — which is exactly how it
+     * crashed once.
+     */
+    private var haptics: Haptics? = null
     private var autoCorrectEnabled = KeyboardPrefs.DEFAULT_AUTO_CORRECT
     private var autoCorrectConfidence = KeyboardPrefs.DEFAULT_AUTO_CORRECT_CONFIDENCE / 100f
 
@@ -68,11 +78,11 @@ class BilingualKeyboardService : InputMethodService() {
             onCursorStep = ::moveCursor
             onDeleteWord = ::handleDeleteWord
             onShiftSwipeUp = ::cycleWordCase
-            onPress = { haptics.keyPress(this) }
+            onPress = { haptics?.keyPress(this) }
         }
         suggestionStrip = SuggestionStripView(this).apply {
             onPick = ::pickEntry
-            onPress = { haptics.keyPress(this) }
+            onPress = { haptics?.keyPress(this) }
         }
 
         // Strip above keys. Child clipping is off so that a long-press popup on
@@ -587,7 +597,7 @@ class BilingualKeyboardService : InputMethodService() {
         // at the keyboard: the flash is caught out of the corner of an eye, and
         // the double tick is felt without looking at all (D28, D29).
         keyboardView.flashCorrection()
-        haptics.correction()
+        haptics?.correction()
         return correction
     }
 

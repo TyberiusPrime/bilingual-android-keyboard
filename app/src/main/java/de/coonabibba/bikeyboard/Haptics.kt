@@ -46,12 +46,32 @@ class Haptics(
     private val route: KeyboardPrefs.HapticRoute = KeyboardPrefs.HapticRoute.AUTO,
 ) {
 
-    private val vibrator: Vibrator? = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-            context.getSystemService(VibratorManager::class.java)?.defaultVibrator
-
-        else -> @Suppress("DEPRECATION") context.getSystemService(Vibrator::class.java)
-    }?.takeIf { it.hasVibrator() }
+    /**
+     * Resolved on first use, never in the constructor.
+     *
+     * **This is load-bearing.** An earlier version looked the vibrator up in a
+     * field initialiser, which was survivable only by accident: the first branch
+     * of the lookup returned null for [KeyboardPrefs.HapticLevel.OFF] without
+     * touching the context, and the service happened to build its placeholder at
+     * that level. Removing that branch turned the same line into a crash on
+     * every launch, because a `Service` field initialiser runs before
+     * `attachBaseContext` and `getSystemService` on a context with no base is a
+     * null dereference.
+     *
+     * Being lazy makes the hazard structural rather than incidental: there is no
+     * level, and no caller, for which constructing this object can touch the
+     * system.
+     */
+    private val vibrator: Vibrator? by lazy(LazyThreadSafetyMode.NONE) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Vibrator::class.java)
+            }
+        }.getOrNull()?.takeIf { it.hasVibrator() }
+    }
 
     /** False when the phone has no vibrator at all, which the settings screen says out loud. */
     val available: Boolean get() = vibrator != null
@@ -209,6 +229,26 @@ class Haptics(
                 supportName(supportsEffect(vibrator, VibrationEffect.EFFECT_DOUBLE_CLICK))
         }
         return lines
+    }
+
+    /**
+     * The conclusion the diagnosis supports, or null when the numbers do not
+     * name a culprit.
+     *
+     * A list of readings is data; this is the sentence the reader actually
+     * wants. It exists because the reading that matters here — touch feedback
+     * muted at the system level while the motor is fine — is invisible unless
+     * someone knows that "Insistent" and "USAGE_ALARM" are the same thing.
+     */
+    fun verdict(): String? {
+        if (vibrator == null) return null
+        val muted = systemTouchFeedback() == false || touchIntensity() == 0
+        if (!muted) return null
+        return "The motor works, but this phone has touch feedback switched off " +
+            "system-wide, which silences every route except Insistent. Either " +
+            "turn touch feedback back on in the system settings, or keep " +
+            "Insistent selected above — note that alarm-strength vibration can " +
+            "still be suppressed by Do Not Disturb."
     }
 
     /**

@@ -43,10 +43,9 @@ below.
 - [ ] A correction query costs ~3ms on a laptop and has not been timed on the
       phone (D23). Per keystroke, on a word with no completions, that is the
       first thing in this keyboard with a latency budget worth watching.
-- [ ] **Which haptic route works on this phone, if any?** Two rewrites have now
-      produced nothing (D29). The settings screen prints what the phone admits
-      to and offers each route as a button; the answer has to come back from a
-      finger, because no API here reports whether the motor moved.
+- [x] **Which haptic route works on this phone?** Only Insistent (D29) — so the
+      motor is fine and this phone has touch feedback muted system-wide. Two
+      rounds of tuning constants were spent on a switch in another app.
 - [ ] Is the order within an accent popup right (D32)? `é è ê ë` is alphabetical
       by accent name and nothing better, and the ones past the third are a slide
       most of the way across a key row.
@@ -813,6 +812,37 @@ sentence the keyboard can then say to the user instead of buzzing at them.
 
 The amplitudes went up again as well, to 160 and 255 out of 255. Asking for half
 power on a phone that is already scaling the request down is asking for nothing.
+
+**The answer, on the phone: only Insistent.** Which settles it — the motor is
+fine, the code was always fine, and this phone has touch feedback muted at the
+system level. Every route tagged as touch feedback was being scaled to zero on
+its way to the hardware, silently, with no error and nothing to read from inside
+the process. Two rounds of tuning constants were spent on a switch in a different
+app.
+
+So the settings screen now leads with the *conclusion* rather than the readings:
+the motor works, touch feedback is off system-wide, either turn it back on or
+keep Insistent — and a warning that alarm-strength vibration can still be
+suppressed by Do Not Disturb. Automatic deliberately does **not** escalate to the
+alarm route on its own. Someone who muted touch feedback on purpose should not
+be buzzed at by a keyboard whose haptics default to on; the escape hatch is
+there, it is discoverable, and taking it should be a decision.
+
+**A crash came out of this round, and the mechanism is worth keeping.** The
+service held a placeholder `Haptics(this, OFF)` in a *field initialiser*. That
+runs during `Service` construction, before `attachBaseContext`, so the context
+has no base and `getSystemService` on it is a null dereference. It had survived
+only by accident: the old lookup's first branch returned null for `OFF` without
+touching the context, and `OFF` was exactly what the placeholder passed.
+Rewriting the lookup deleted that branch and turned the same line into a crash
+on every launch — of the keyboard, and of the settings screen too, because
+opening it starts the IME in the same process.
+
+Two fixes, because one of them is only a fix and the other removes the class:
+the vibrator lookup is `by lazy`, so no level and no caller can make construction
+touch the system; and the service holds `Haptics?` rather than a placeholder,
+because an object that merely *happens* not to ask its context anything is one
+refactor away from this exact crash.
 
 ### D30 — The timings are settings
 

@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D35 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D36 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -327,7 +327,9 @@ The first alternate of every key is drawn small in its corner, so the digits and
 umlauts are discoverable without holding each key to find out. D32 later hung
 the other European accents off the same keys, *behind* these — so "every digit
 is one hold away" stays literally true rather than becoming "one hold and a
-slide away". There is a test for it.
+slide away". There is a test for it. D36 is the other half of that promise: the
+first alternate is also where the finger already is, which stopped being true
+the moment any key had more than one.
 
 ### D18 — Not `directBootAware`
 
@@ -1144,6 +1146,42 @@ candidate is found. **The lever for that is the falloff slider** (D34) rather
 than a new index — at a falloff of 3 the same correction scores 0.83 — which is
 the right place for it, because "correct a word on the strength of the letters
 alone" is a preference and not a fact.
+
+### D36 — The first alternate goes under the finger
+
+A long-press popup lays its cells out **from the key outwards in one direction**,
+with the first alternate centred on the key being held.
+
+The old rule centred the whole row on the key, and that is fine for one cell and
+wrong for every number above it: with four alternates the first one lands a cell
+and a half to the left of the thumb, so the smallest drift selects something
+else. Holding `u` for `ü` gave `ù`. Holding `n` for `!` gave `ñ`.
+
+This is a regression D32 caused and D17 predicted the shape of. Every key had one
+alternate until the accents were added, so "centred on the key" and "under the
+finger" were the same position and nothing distinguished them. `a` went on
+working afterwards purely by luck: it sits near the left edge, so clamping the
+row onto the screen shoved cell zero back under the thumb — which is why `ä` was
+reported fine while `ü` and `ö` were not.
+
+The rule now:
+
+- **Cell zero is centred on the key.** It is the one drawn in the corner, the one
+  a plain hold commits, and under D17 and D32 the one the key is understood to
+  carry. Nothing else may occupy the position the finger is already in.
+- **The rest extend one way**, towards whichever side has more room — leftwards
+  for keys on the right of the board, rightwards for those on the left. That is
+  the same answer as picking a direction per key, without a table to maintain.
+- **A row that will not fit is shifted bodily**, never re-ordered, because
+  re-ordering is how cell zero moves out from under the finger again.
+
+Index order is consequently not screen order — a leftward row has cell zero as
+its rightmost rectangle — which costs nothing because the hit test walks the
+rectangles rather than dividing by width. It buys something, too: a finger that
+drifts off the far side of cell zero stays on cell zero.
+
+The arithmetic is in `AlternatePopup`, out of the view and tested, because this
+was wrong for two releases in a way that reads perfectly plausibly.
 
 ---
 

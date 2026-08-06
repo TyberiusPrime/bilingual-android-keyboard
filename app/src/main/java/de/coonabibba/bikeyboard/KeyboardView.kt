@@ -475,22 +475,22 @@ class KeyboardView @JvmOverloads constructor(
 
         val cellWidth = max(target.bounds.width(), MIN_POPUP_CELL_DP * density)
         val cellHeight = target.bounds.height()
-        val totalWidth = cellWidth * labels.size
 
-        // Anchor over the key, then clamp so the popup stays on screen.
-        var left = target.bounds.centerX() - totalWidth / 2f
-        left = left.coerceIn(keyGap, max(keyGap, width - totalWidth - keyGap))
+        // The first alternate goes under the finger and the rest extend one way
+        // from it; see [AlternatePopup] for why that is the whole design.
+        val lefts = AlternatePopup.cellLefts(
+            count = labels.size,
+            keyCentre = target.bounds.centerX(),
+            cellWidth = cellWidth,
+            viewWidth = width.toFloat(),
+            gap = keyGap,
+        )
         // Negative is allowed, up to the headroom the strip provides: a popup
         // that lands on the key you are holding is a popup you cannot read.
         val top = max(-popupHeadroom, target.bounds.top - cellHeight - keyGap)
 
         alternateBounds = labels.indices.map { index ->
-            RectF(
-                left + index * cellWidth,
-                top,
-                left + (index + 1) * cellWidth - keyGap,
-                top + cellHeight,
-            )
+            RectF(lefts[index], top, lefts[index] + cellWidth - keyGap, top + cellHeight)
         }
         alternateLabels = labels
         alternatesFor = target
@@ -498,6 +498,15 @@ class KeyboardView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * The cell under [x], or -1 beyond the row.
+     *
+     * Index order is not screen order: a popup on the right of the board runs
+     * leftwards (D36), so cell zero is the rightmost rectangle. Testing every
+     * rectangle rather than dividing by width is what makes that a non-issue —
+     * and it means a finger that drifts off the far side of cell zero keeps
+     * cell zero, which is the right answer for the alternate the key advertises.
+     */
     private fun alternateAt(x: Float): Int =
         alternateBounds.indexOfFirst { x >= it.left && x <= it.right + keyGap }
 

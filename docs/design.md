@@ -773,11 +773,23 @@ Known limits: the search is bucketed by first letter (D23), so `hte` cannot
 reach `the`. And `ß` folds to `s` one character at a time here, so `strasse`
 does not reach `Straße` cheaply enough to be corrected.
 
-### D29 — Haptics, three states
+### D29 — Haptics: three states, per event
 
 Off, light, strong. Not a switch, because "on" means something different on
 every phone, and because the difference between the two strengths is what makes
 a correction distinguishable from a keypress by feel alone.
+
+**And two of them, one per event**, once the route was finally working and the
+levels could be judged. A keypress tick and a correction knock are not the same
+message: the first is texture, hundreds a minute, and plenty of people want none
+of it; the second is *news* — a word was changed unasked and the undo window is
+open. Wanting silence while typing and a firm knock on a replacement is an
+entirely coherent position, and one shared control could not express it.
+
+The defaults keep this decision's original claim: light for keys, strong for
+corrections, so the two do not feel the same unless someone deliberately makes
+them. Splitting the setting reads the old single value as a fallback, so nobody
+who had already chosen Strong found themselves reset.
 
 A keypress is one tick, as short as the hardware will honour, since it happens
 hundreds of times a minute and anything longer is a buzz. An applied correction

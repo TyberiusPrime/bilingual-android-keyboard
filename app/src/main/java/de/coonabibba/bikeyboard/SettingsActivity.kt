@@ -203,12 +203,46 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
-     * Three states rather than a switch: off, and two strengths, because "on"
-     * means different things on different phones and the strong setting is
-     * what makes a correction distinguishable from a keypress by feel alone.
+     * A row of three per event: off, and two strengths.
+     *
+     * Three states rather than a switch because "on" means something different
+     * on every phone. Two rows rather than one because a keypress tick and a
+     * correction knock are not the same message and nobody has to want them in
+     * the same amount — silence while typing and a firm knock when a word is
+     * replaced is a coherent position, and one slider could not say it.
      */
     private fun addHaptics(into: LinearLayout) {
         into.addView(section(R.string.settings_section_haptics))
+
+        KeyboardPrefs.HapticEvent.entries.forEach { event -> addHapticLevels(into, event) }
+
+        if (!Haptics.fromPrefs(this).available) {
+            into.addView(
+                TextView(this).apply {
+                    setText(R.string.setting_haptics_unavailable)
+                    alpha = 0.7f
+                    setPadding(0, dp(8), 0, 0)
+                },
+            )
+            return
+        }
+        addHapticRoutes(into)
+        addHapticDiagnosis(into)
+    }
+
+    /** One labelled row of Off / Light / Strong, for one kind of event. */
+    private fun addHapticLevels(into: LinearLayout, event: KeyboardPrefs.HapticEvent) {
+        into.addView(
+            TextView(this).apply {
+                setText(
+                    when (event) {
+                        KeyboardPrefs.HapticEvent.KEY_PRESS -> R.string.setting_haptics_key_press
+                        KeyboardPrefs.HapticEvent.CORRECTION -> R.string.setting_haptics_correction
+                    },
+                )
+                setPadding(0, dp(12), 0, dp(4))
+            },
+        )
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -227,17 +261,19 @@ class SettingsActivity : AppCompatActivity() {
         ).forEach { (level, label) ->
             val button = Button(this).apply {
                 setText(label)
-                setOnClickListener {
-                    KeyboardPrefs.setHaptics(this@SettingsActivity, level)
+                setOnClickListener { view ->
+                    KeyboardPrefs.setHaptics(this@SettingsActivity, event, level)
                     showSelected(level)
-                    // Feel it now rather than by going back to the keyboard —
-                    // and through the route that is actually configured, or the
-                    // button lies about what the keyboard will do.
-                    Haptics(
+                    // Feel it now rather than by going back to the keyboard, as
+                    // the event it belongs to — so the correction row plays the
+                    // double knock rather than a tick — and through the route
+                    // that is actually configured, or the button lies about what
+                    // the keyboard will do.
+                    Haptics.sample(
                         this@SettingsActivity,
                         level,
                         KeyboardPrefs.hapticRoute(this@SettingsActivity),
-                    ).keyPress(this)
+                    ).fire(KeyboardPrefs.hapticRoute(this@SettingsActivity), view, event)
                 }
             }
             buttons += level to button
@@ -248,20 +284,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         into.addView(row)
-        showSelected(KeyboardPrefs.haptics(this))
-
-        if (!Haptics.fromPrefs(this).available) {
-            into.addView(
-                TextView(this).apply {
-                    setText(R.string.setting_haptics_unavailable)
-                    alpha = 0.7f
-                    setPadding(0, dp(8), 0, 0)
-                },
-            )
-            return
-        }
-        addHapticRoutes(into)
-        addHapticDiagnosis(into)
+        showSelected(KeyboardPrefs.haptics(this, event))
     }
 
     /**
@@ -289,8 +312,10 @@ class SettingsActivity : AppCompatActivity() {
             buttons.forEach { (its, button) -> button.alpha = if (its == route) 1f else 0.5f }
         }
 
-        val level = KeyboardPrefs.haptics(this).takeIf { it != KeyboardPrefs.HapticLevel.OFF }
-            ?: KeyboardPrefs.HapticLevel.STRONG
+        // Always audible to the finger while hunting for a route that works,
+        // even if keypress feedback is set to off — the question here is whether
+        // the phone can buzz at all, not how hard it should.
+        val level = KeyboardPrefs.HapticLevel.STRONG
 
         listOf(
             KeyboardPrefs.HapticRoute.AUTO to R.string.setting_haptics_route_auto,
@@ -306,7 +331,8 @@ class SettingsActivity : AppCompatActivity() {
                     showSelected(route)
                     // Through the same code path the keyboard uses, or the test
                     // proves nothing about the keyboard.
-                    Haptics(this@SettingsActivity, level, route).fire(route, view, correction = false)
+                    Haptics.sample(this@SettingsActivity, level, route)
+                        .fire(route, view, KeyboardPrefs.HapticEvent.KEY_PRESS)
                 }
             }
             buttons += route to button

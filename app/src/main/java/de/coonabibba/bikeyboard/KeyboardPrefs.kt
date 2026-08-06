@@ -140,10 +140,36 @@ object KeyboardPrefs {
 
     // -- haptics -------------------------------------------------------------
 
-    /** How hard the keyboard buzzes, if at all (D29). */
+    /** The single level this used to have, kept only so old settings survive. */
     const val HAPTICS = "haptics"
 
     enum class HapticLevel { OFF, LIGHT, STRONG }
+
+    /**
+     * The two things the keyboard has to say, each with its own level (D29).
+     *
+     * Separate because they are not the same message and people do not want
+     * them in the same amount. A keypress tick is texture — hundreds a minute,
+     * and plenty of typists want none of it. A correction is *news*: the
+     * keyboard changed a word unasked and the undo window is open. Wanting
+     * silence while typing and a firm knock when something is replaced is an
+     * entirely coherent position, and one shared slider could not express it.
+     *
+     * The defaults encode D29's original point that the two must not feel the
+     * same: light for keys, strong for corrections.
+     */
+    enum class HapticEvent(val key: String, val default: HapticLevel) {
+        KEY_PRESS("haptics_key_press", HapticLevel.LIGHT),
+        CORRECTION("haptics_correction", HapticLevel.STRONG),
+    }
+
+    /** Both levels at once, which is how [Haptics] wants them. */
+    data class HapticLevels(val keyPress: HapticLevel, val correction: HapticLevel) {
+        fun forEvent(event: HapticEvent): HapticLevel = when (event) {
+            HapticEvent.KEY_PRESS -> keyPress
+            HapticEvent.CORRECTION -> correction
+        }
+    }
 
     /**
      * *Which way* the keyboard asks the phone to buzz.
@@ -236,17 +262,30 @@ object KeyboardPrefs {
         of(context).getInt(AUTO_CORRECT_CONFIDENCE, DEFAULT_AUTO_CORRECT_CONFIDENCE)
             .coerceIn(MIN_CONFIDENCE, MAX_CONFIDENCE) / 100f
 
-    fun haptics(context: Context): HapticLevel =
-        runCatching {
-            HapticLevel.valueOf(
-                of(context).getString(HAPTICS, HapticLevel.LIGHT.name) ?: HapticLevel.LIGHT.name,
-            )
-        }.getOrDefault(HapticLevel.LIGHT)
+    /**
+     * How hard to buzz for one kind of event.
+     *
+     * Falls back to the old single-level setting before the default, so that
+     * splitting this in two did not silently reset anybody's choice — someone
+     * who had set Strong keeps Strong for both until they say otherwise.
+     */
+    fun haptics(context: Context, event: HapticEvent): HapticLevel {
+        val prefs = of(context)
+        val name = prefs.getString(event.key, null)
+            ?: prefs.getString(HAPTICS, null)
+            ?: event.default.name
+        return runCatching { HapticLevel.valueOf(name) }.getOrDefault(event.default)
+    }
 
-    fun setHaptics(context: Context, level: HapticLevel) {
+    fun haptics(context: Context): HapticLevels = HapticLevels(
+        keyPress = haptics(context, HapticEvent.KEY_PRESS),
+        correction = haptics(context, HapticEvent.CORRECTION),
+    )
+
+    fun setHaptics(context: Context, event: HapticEvent, level: HapticLevel) {
         val prefs = of(context)
         prefs.edit()
-            .putString(HAPTICS, level.name)
+            .putString(event.key, level.name)
             .putInt(REVISION, prefs.getInt(REVISION, 0) + 1)
             .apply()
     }

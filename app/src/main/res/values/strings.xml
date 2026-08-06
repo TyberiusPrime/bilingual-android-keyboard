@@ -18,6 +18,8 @@
     <string name="setting_auto_correct">Correct a word when sure</string>
     <string name="setting_auto_correct_off">Corrections are only ever offered, never applied.</string>
     <string name="setting_confidence">Replace only above: %1$d%%</string>
+    <string name="setting_haptics_key_press">When you press a key</string>
+    <string name="setting_haptics_correction">When a word is auto-corrected</string>
     <string name="setting_haptics_off">Off</string>
     <string name="setting_haptics_light">Light</string>
     <string name="setting_haptics_strong">Strong</string>

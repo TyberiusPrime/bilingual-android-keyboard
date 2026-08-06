@@ -81,6 +81,27 @@ class KeyboardPrefsTest {
         )
     }
 
+    /**
+     * D29's original point, now enforceable: a correction must not feel like a
+     * keypress. Separate levels made that a default rather than a guarantee, so
+     * at least let the defaults still say it.
+     */
+    @Test
+    fun `a correction is louder than a keypress by default`() {
+        assertTrue(
+            KeyboardPrefs.HapticEvent.CORRECTION.default >
+                KeyboardPrefs.HapticEvent.KEY_PRESS.default,
+        )
+    }
+
+    @Test
+    fun `haptic event keys are distinct and not the legacy key`() {
+        val keys = KeyboardPrefs.HapticEvent.entries.map { it.key }
+        assertEquals(keys.size, keys.distinct().size)
+        // Sharing the old name would make the migration read its own output.
+        assertTrue(KeyboardPrefs.HAPTICS !in keys)
+    }
+
     @Test
     fun `the suggestion size range holds its default`() {
         assertTrue(

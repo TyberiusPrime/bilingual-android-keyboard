@@ -42,7 +42,7 @@ import android.view.View
  */
 class Haptics(
     private val context: Context,
-    private val level: KeyboardPrefs.HapticLevel,
+    private val levels: KeyboardPrefs.HapticLevels,
     /**
      * Deliberately without a default. The route was a setting that nothing read
      * for one whole round — the settings screen's test buttons named a route
@@ -60,6 +60,13 @@ class Haptics(
             KeyboardPrefs.haptics(context),
             KeyboardPrefs.hapticRoute(context),
         )
+
+        /** One level for both events, for the settings screen's own samples. */
+        fun sample(
+            context: Context,
+            level: KeyboardPrefs.HapticLevel,
+            route: KeyboardPrefs.HapticRoute,
+        ): Haptics = Haptics(context, KeyboardPrefs.HapticLevels(level, level), route)
 
         private const val LIGHT_MS = 25L
         private const val STRONG_MS = 55L
@@ -108,16 +115,10 @@ class Haptics(
      * [view] is only needed by [KeyboardPrefs.HapticRoute.VIEW]; the other
      * routes drive the motor directly and ignore it.
      */
-    fun keyPress(view: View?) {
-        if (level == KeyboardPrefs.HapticLevel.OFF) return
-        fire(route, view, correction = false)
-    }
+    fun keyPress(view: View?) = fire(route, view, KeyboardPrefs.HapticEvent.KEY_PRESS)
 
     /** Two knocks: something was changed for you, and you have one keystroke to say no. */
-    fun correction() {
-        if (level == KeyboardPrefs.HapticLevel.OFF) return
-        fire(route, view = null, correction = true)
-    }
+    fun correction() = fire(route, view = null, event = KeyboardPrefs.HapticEvent.CORRECTION)
 
     /**
      * Plays one route, or tries them in order for [KeyboardPrefs.HapticRoute.AUTO].
@@ -126,30 +127,34 @@ class Haptics(
      * the whole test bench, and it has to go through the same code the keyboard
      * uses or it proves nothing.
      */
-    fun fire(route: KeyboardPrefs.HapticRoute, view: View?, correction: Boolean) {
+    fun fire(route: KeyboardPrefs.HapticRoute, view: View?, event: KeyboardPrefs.HapticEvent) {
+        val level = levels.forEvent(event)
+        if (level == KeyboardPrefs.HapticLevel.OFF) return
+        val correction = event == KeyboardPrefs.HapticEvent.CORRECTION
         when (route) {
             KeyboardPrefs.HapticRoute.AUTO -> {
                 // The stock path first — it is what every other keyboard on the
                 // phone feels like, and it is already tuned. A correction has no
                 // view-feedback constant meaning "two knocks", so it goes
                 // straight to the motor.
-                if (!correction && viewFeedback(view)) return
-                if (predefined(correction)) return
-                pulse(correction, VibrationAttributes.USAGE_TOUCH)
+                if (!correction && viewFeedback(level, view)) return
+                if (predefined(level, correction)) return
+                pulse(level, correction, VibrationAttributes.USAGE_TOUCH)
             }
 
-            KeyboardPrefs.HapticRoute.VIEW -> viewFeedback(view)
-            KeyboardPrefs.HapticRoute.PREDEFINED -> predefined(correction)
-            KeyboardPrefs.HapticRoute.PULSE -> pulse(correction, VibrationAttributes.USAGE_TOUCH)
+            KeyboardPrefs.HapticRoute.VIEW -> viewFeedback(level, view)
+            KeyboardPrefs.HapticRoute.PREDEFINED -> predefined(level, correction)
+            KeyboardPrefs.HapticRoute.PULSE ->
+                pulse(level, correction, VibrationAttributes.USAGE_TOUCH)
             // USAGE_ALARM is not scaled by the touch-feedback intensity slider,
             // which is exactly the point: this is the route that answers "is the
             // motor alive at all".
             KeyboardPrefs.HapticRoute.INSISTENT ->
-                pulse(correction, VibrationAttributes.USAGE_ALARM)
+                pulse(level, correction, VibrationAttributes.USAGE_ALARM)
         }
     }
 
-    private fun viewFeedback(view: View?): Boolean {
+    private fun viewFeedback(level: KeyboardPrefs.HapticLevel, view: View?): Boolean {
         val target = view ?: return false
         val constant = if (level == KeyboardPrefs.HapticLevel.STRONG) {
             HapticFeedbackConstants.LONG_PRESS
@@ -170,7 +175,7 @@ class Haptics(
      * all, so making it the only path can be worse than the plain pulse it
      * replaced.
      */
-    private fun predefined(correction: Boolean): Boolean {
+    private fun predefined(level: KeyboardPrefs.HapticLevel, correction: Boolean): Boolean {
         val vibrator = vibrator ?: return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val effect = when {
@@ -183,17 +188,17 @@ class Haptics(
         return true
     }
 
-    private fun pulse(correction: Boolean, usage: Int) {
+    private fun pulse(level: KeyboardPrefs.HapticLevel, correction: Boolean, usage: Int) {
         val vibrator = vibrator ?: return
-        val ms = tickMs()
+        val ms = tickMs(level)
         val effect = if (correction) {
             VibrationEffect.createWaveform(
                 longArrayOf(0, ms, CORRECTION_GAP_MS, ms),
-                intArrayOf(0, amplitude(), 0, amplitude()),
+                intArrayOf(0, amplitude(level), 0, amplitude(level)),
                 -1,
             )
         } else {
-            VibrationEffect.createOneShot(ms, amplitude())
+            VibrationEffect.createOneShot(ms, amplitude(level))
         }
         send(vibrator, effect, usage)
     }
@@ -213,12 +218,12 @@ class Haptics(
      * be felt at all. Twelve milliseconds, the first attempt, is below what a
      * linear resonant actuator can answer.
      */
-    private fun tickMs(): Long = when (level) {
+    private fun tickMs(level: KeyboardPrefs.HapticLevel): Long = when (level) {
         KeyboardPrefs.HapticLevel.STRONG -> STRONG_MS
         else -> LIGHT_MS
     }
 
-    private fun amplitude(): Int = when (level) {
+    private fun amplitude(level: KeyboardPrefs.HapticLevel): Int = when (level) {
         KeyboardPrefs.HapticLevel.OFF -> 0
         // Not a fraction of full any more. Light was at 120/255 and reported as
         // nothing; on a phone whose motor is already being scaled down by a

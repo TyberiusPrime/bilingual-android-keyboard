@@ -741,6 +741,34 @@ the old implementation on every one of the 70,000 shipped words. The cost is
 that an accent from outside those two languages is no longer folded away, which
 makes it match nothing — the right answer, since it is not a word here either.
 
+**Why the same typo is corrected only sometimes.** Because it is not the same
+typo. Confidence is a smooth function of where the thumb landed, so two presses
+that produce identical text can sit either side of the threshold. Measured
+against the shipped wordlists, `sttong` → `strong` at the default 90%:
+
+| Distance from `r`, in key widths | Confidence |
+| --- | --- |
+| 0.1 | 98% |
+| 0.3 | 94% |
+| 0.4 | 88% |
+| 0.6 | 64% |
+| 0.9 | 18% |
+
+So it corrects from roughly the left third of the `t` key and not from the rest
+of it. That is the feature working — without the touches there is no way to tell
+a slip from a decision, and a keyboard that replaced `sttong` on the strength of
+the letters alone would replace deliberate words too.
+
+The corpus matters as much as the thumb, which is less obvious: at an identical
+0.3 key widths, `teh` → `the` scores 99%, `hellp` → `hello` 97%, and
+`wrold` → `world` only 80% — below the threshold, uncorrected. Frequency is part
+of the evidence, so the same slip on a rarer word survives. Arguably right, and
+worth knowing before reading the threshold as a promise.
+
+The lever for all of this is the confidence slider. `DictionarySuggestionsTest`
+pins the shape rather than the numbers: monotonic, and spanning the threshold —
+a curve that did neither would make the setting meaningless.
+
 Known limits: the search is bucketed by first letter (D23), so `hte` cannot
 reach `the`. And `ß` folds to `s` one character at a time here, so `strasse`
 does not reach `Straße` cheaply enough to be corrected.
@@ -843,6 +871,17 @@ the vibrator lookup is `by lazy`, so no level and no caller can make constructio
 touch the system; and the service holds `Haptics?` rather than a placeholder,
 because an object that merely *happens* not to ask its context anything is one
 refactor away from this exact crash.
+
+**And then the route setting turned out to be written and never read.** The test
+buttons named their route explicitly, so they worked and proved the mechanism;
+the keyboard and the level buttons both constructed `Haptics` without one and
+silently took the `AUTO` default — which on this phone is the one thing that
+does not work. So the diagnosis was right, the fix was in the code, and none of
+it reached the keys.
+
+The constructor parameter no longer has a default, and `Haptics.fromPrefs` reads
+both settings together. A parameter that can be forgotten will be; the type
+system is the only thing here that reliably remembers.
 
 ### D30 — The timings are settings
 

@@ -43,8 +43,34 @@ import android.view.View
 class Haptics(
     private val context: Context,
     private val level: KeyboardPrefs.HapticLevel,
-    private val route: KeyboardPrefs.HapticRoute = KeyboardPrefs.HapticRoute.AUTO,
+    /**
+     * Deliberately without a default. The route was a setting that nothing read
+     * for one whole round — the settings screen's test buttons named a route
+     * explicitly and worked, while the keyboard and the level buttons quietly
+     * took the default and stayed silent. A parameter that can be forgotten will
+     * be; [fromPrefs] is how callers should get one anyway.
+     */
+    private val route: KeyboardPrefs.HapticRoute,
 ) {
+
+    companion object {
+        /** Both settings, read together, which is the only way they are correct. */
+        fun fromPrefs(context: Context): Haptics = Haptics(
+            context,
+            KeyboardPrefs.haptics(context),
+            KeyboardPrefs.hapticRoute(context),
+        )
+
+        private const val LIGHT_MS = 25L
+        private const val STRONG_MS = 55L
+
+        /** The gap between the two knocks of a correction. */
+        private const val CORRECTION_GAP_MS = 70L
+
+        /** Out of 255. Both are high, because the system scales them down again. */
+        private const val LIGHT_AMPLITUDE = 160
+        private const val STRONG_AMPLITUDE = 255
+    }
 
     /**
      * Resolved on first use, never in the constructor.
@@ -314,15 +340,4 @@ class Haptics(
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
 
-    private companion object {
-        const val LIGHT_MS = 25L
-        const val STRONG_MS = 55L
-
-        /** The gap between the two knocks of a correction. */
-        const val CORRECTION_GAP_MS = 70L
-
-        /** Out of 255. Both are high, because the system scales them down again. */
-        const val LIGHT_AMPLITUDE = 160
-        const val STRONG_AMPLITUDE = 255
-    }
 }

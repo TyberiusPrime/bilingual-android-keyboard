@@ -230,8 +230,14 @@ class SettingsActivity : AppCompatActivity() {
                 setOnClickListener {
                     KeyboardPrefs.setHaptics(this@SettingsActivity, level)
                     showSelected(level)
-                    // Feel it now rather than by going back to the keyboard.
-                    Haptics(this@SettingsActivity, level).keyPress(this)
+                    // Feel it now rather than by going back to the keyboard —
+                    // and through the route that is actually configured, or the
+                    // button lies about what the keyboard will do.
+                    Haptics(
+                        this@SettingsActivity,
+                        level,
+                        KeyboardPrefs.hapticRoute(this@SettingsActivity),
+                    ).keyPress(this)
                 }
             }
             buttons += level to button
@@ -244,7 +250,7 @@ class SettingsActivity : AppCompatActivity() {
         into.addView(row)
         showSelected(KeyboardPrefs.haptics(this))
 
-        if (!Haptics(this, KeyboardPrefs.HapticLevel.LIGHT).available) {
+        if (!Haptics.fromPrefs(this).available) {
             into.addView(
                 TextView(this).apply {
                     setText(R.string.setting_haptics_unavailable)
@@ -300,7 +306,7 @@ class SettingsActivity : AppCompatActivity() {
                     showSelected(route)
                     // Through the same code path the keyboard uses, or the test
                     // proves nothing about the keyboard.
-                    Haptics(this@SettingsActivity, level).fire(route, view, correction = false)
+                    Haptics(this@SettingsActivity, level, route).fire(route, view, correction = false)
                 }
             }
             buttons += route to button
@@ -323,7 +329,7 @@ class SettingsActivity : AppCompatActivity() {
      * names the culprit outright.
      */
     private fun addHapticDiagnosis(into: LinearLayout) {
-        val haptics = Haptics(this, KeyboardPrefs.HapticLevel.LIGHT)
+        val haptics = Haptics.fromPrefs(this)
 
         // The conclusion first, when there is one. A list of readings is data;
         // this is the sentence the reader came for.

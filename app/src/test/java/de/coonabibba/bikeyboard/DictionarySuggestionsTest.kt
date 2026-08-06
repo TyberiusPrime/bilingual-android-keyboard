@@ -243,6 +243,38 @@ class DictionarySuggestionsTest {
         )
     }
 
+    /**
+     * The property behind "why does it only *sometimes* correct that?" (D28).
+     *
+     * Confidence falls smoothly as the thumb moves away from the key the word
+     * needed, so the same typo crosses the threshold or does not depending on
+     * where in the key it landed. Two keystrokes that look identical in the text
+     * are not identical here, and that is the design rather than a bug: without
+     * the touches there is no way to tell a slip from a decision.
+     *
+     * What the test pins is that the curve is *monotonic* and spans the
+     * threshold. If it ever stopped doing either, the setting would be
+     * meaningless — a slider that changes nothing until it changes everything.
+     */
+    @Test
+    fun `confidence falls as the thumb moves away from the intended key`() {
+        fun confidenceAt(cost: Float): Float {
+            val touches = "hanen".mapIndexed { index, char ->
+                if (index == 2) TypedTouch(char, mapOf('b' to cost)) else TypedTouch(char, emptyMap())
+            }
+            return source().correct("hanen", touches)?.confidence ?: 0f
+        }
+
+        // The last point is a full key width away, which is the most the touch
+        // model will say about a neighbour at all (`TypedTouch.FAR`).
+        val curve = listOf(0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 1f).map(::confidenceAt)
+        curve.zipWithNext { nearer, further ->
+            assertTrue("confidence rose with distance: $curve", nearer > further)
+        }
+        assertTrue("a graze should be confident: $curve", curve.first() > 0.9f)
+        assertTrue("a whole key away should not be: $curve", curve.last() < 0.9f)
+    }
+
     /** D2: a word valid in either language is valid, however rare. */
     @Test
     fun `a word spelled exactly right is never corrected`() {

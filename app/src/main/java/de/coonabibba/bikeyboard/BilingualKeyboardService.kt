@@ -64,7 +64,7 @@ class BilingualKeyboardService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         viewsBuiltForRevision = KeyboardPrefs.revision(this)
-        haptics = Haptics(this, KeyboardPrefs.haptics(this))
+        haptics = Haptics.fromPrefs(this)
         autoCorrectEnabled = KeyboardPrefs.autoCorrect(this)
         autoCorrectConfidence = KeyboardPrefs.autoCorrectConfidence(this)
         spaceGesture = SpaceGesture(KeyboardPrefs.timing(this, KeyboardPrefs.DOUBLE_TAP_MS))

@@ -198,7 +198,6 @@ class DictionarySuggestions(
 
         val folded = Folding.fold(typed)
         if (folded.isEmpty()) return null
-        val bucket = folded.substring(0, 1)
 
         var best: Candidate? = null
         var bestScore = 0f
@@ -206,17 +205,20 @@ class DictionarySuggestions(
         // beat rather than merely lead.
         var mass = UNKNOWN_WORD_PRIOR
 
+        val buckets = firstLetters(folded, touches.first())
         lexicons.forEach { lexicon ->
-            for (index in lexicon.completions(bucket)) {
-                val word = lexicon.wordAt(index)
-                if (abs(word.length - typed.length) > MAX_SLIP_COST) continue
-                val cost = SpatialEditDistance.between(touches, word, MAX_SLIP_COST)
-                if (cost > MAX_SLIP_COST) continue
-                val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
-                mass += score
-                if (score > bestScore) {
-                    bestScore = score
-                    best = Candidate(word, score, lexicon.language)
+            buckets.forEach { bucket ->
+                for (index in lexicon.completions(bucket)) {
+                    val word = lexicon.wordAt(index)
+                    if (abs(word.length - typed.length) > MAX_SLIP_COST) continue
+                    val cost = SpatialEditDistance.between(touches, word, MAX_SLIP_COST)
+                    if (cost > MAX_SLIP_COST) continue
+                    val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
+                    mass += score
+                    if (score > bestScore) {
+                        bestScore = score
+                        best = Candidate(word, score, lexicon.language)
+                    }
                 }
             }
         }
@@ -229,6 +231,47 @@ class DictionarySuggestions(
             confidence = bestScore / mass,
             language = winner.language,
         )
+    }
+
+    /**
+     * Which first-letter buckets to search for a correction (D35).
+     *
+     * The scan is bucketed by first letter, which for a long time meant a
+     * mistyped first letter was simply out of reach: `xontinue` found nothing at
+     * all, because nothing starting with `x` is within a slip of it. Scanning
+     * the whole dictionary instead is the obvious fix and the wrong one — it is
+     * twenty-five times the work, on every keystroke (D33).
+     *
+     * Two extra buckets are enough for nearly all of it, and both come from
+     * evidence already in hand:
+     *
+     * - **Where the thumb actually was.** `x` and `c` are adjacent, so the touch
+     *   on `xontinue` already carries `c` as a near miss. Only the closest
+     *   neighbours are worth following: a first letter a long way off scores so
+     *   badly that it could never clear the threshold, so scanning its bucket is
+     *   work spent to produce a candidate that will be refused.
+     * - **The second letter typed.** `hte` is not a mistyped `t`, it is a
+     *   transposed one, and the intended first letter is sitting right there.
+     *
+     * At most [MAX_FIRST_LETTERS], so the cost has a ceiling no matter how
+     * ambiguous the touch was.
+     */
+    private fun firstLetters(folded: String, first: TypedTouch): Set<String> {
+        val letters = LinkedHashSet<String>()
+        letters += folded.substring(0, 1)
+        // A transposed first pair. Cheap to include and it is the single
+        // commonest way the first letter comes out wrong.
+        if (folded.length > 1) letters += folded.substring(1, 2)
+
+        first.alternatives.entries
+            .filter { it.value <= FIRST_LETTER_REACH }
+            .sortedBy { it.value }
+            .forEach { (char, _) ->
+                if (letters.size >= MAX_FIRST_LETTERS) return@forEach
+                val letter = Folding.foldChar(char)
+                if (letter.isLetter()) letters += letter.toString()
+            }
+        return letters
     }
 
     /** Whether any source has this exact spelling — see [Lexicon.knowsExactly]. */
@@ -305,6 +348,21 @@ class DictionarySuggestions(
          * from anything but an explicit add, being wrong about it is expensive.
          */
         const val UNKNOWN_WORD_PRIOR = 1e-6f
+
+        /**
+         * How near a neighbour of the first press has to be for its bucket to
+         * be worth scanning (D35).
+         *
+         * Half a key width. Beyond that the substitution is dear enough that
+         * the candidate loses to the unknown-word prior anyway — measured:
+         * `zomorrow` reaches `tomorrow` and is scored at 0.40, well under any
+         * threshold worth having. Refusing to look is the same answer for a
+         * fraction of the work.
+         */
+        const val FIRST_LETTER_REACH = 0.5f
+
+        /** A ceiling on the scan, however ambiguous the first touch was. */
+        const val MAX_FIRST_LETTERS = 4
 
         /**
          * What a correction is worth against a word that was typed correctly,

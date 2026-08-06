@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D34 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D35 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -34,12 +34,15 @@ below.
 - [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
       shift is pressed (D22). Worth a part-of-speech source, or worth living
       with?
-- [ ] Corrections cannot fix a mistyped **first** letter (D23), because the scan
-      is bucketed by it. How often does that bite in real typing?
+- [x] **Corrections cannot fix a mistyped first letter.** Fixed in D35 for the
+      cases with evidence — an adjacent-key slip or a transposed first pair —
+      by widening the buckets rather than adding an index. A first letter typed
+      dead centre on the wrong key stays out of reach, and the falloff slider is
+      the lever for it.
 - [ ] Is the unknown-word prior right (D28)? Everything the auto-correction
       threshold does, it does relative to that one number, and it was guessed.
-- [ ] Auto-correction cannot reach a word whose first letter was mistyped, and
-      cannot spell `Straße` from `strasse` (D28).
+- [ ] Auto-correction still cannot spell `Straße` from `strasse` (D28), `ß`
+      folding one character at a time.
 - [ ] The `'s` contractions are systematically under-weighted (D34): their share
       is allocated across all 29,467 possessive stems, so `that's` lands near the
       threshold where `don't` clears it easily. Worth a better estimator?
@@ -776,8 +779,8 @@ without changing how abruptly it arrives. `DictionarySuggestionsTest` pins the
 shape rather than the numbers: monotonic, spanning the threshold, and moving in
 the direction each slider claims.
 
-Known limits: the search is bucketed by first letter (D23), so `hte` cannot
-reach `the`. And `ß` folds to `s` one character at a time here, so `strasse`
+Known limits: `hte` used to be unable to reach `the`, the search being bucketed
+by first letter (D23) — fixed in D35 for the cases the touches can evidence. And `ß` folds to `s` one character at a time here, so `strasse`
 does not reach `Straße` cheaply enough to be corrected.
 
 ### D29 — Haptics: three states, per event
@@ -1093,6 +1096,54 @@ it as a `var` rather than a constructor argument — reloading thirty-five thous
 words because a slider moved would be absurd — pushed in when the input view is
 rebuilt and again when the dictionaries finish loading, since either can be the
 later of the two.
+
+### D35 — A mistyped first letter, without scanning the dictionary
+
+The correction scan is bucketed by first letter, which for a long time meant a
+mistyped first letter was simply unreachable: `xontinue` found nothing at all,
+because nothing beginning with `x` is within a slip of it.
+
+The obvious fix is to stop bucketing, or to add a second index by *last* letter.
+Both were measured against the shipped lists rather than guessed at, and the
+surprise is that the last-letter index is not expensive — the length filter and
+the budget early-exit prune far harder than bucket sizes suggest:
+
+| Typed | First-letter bucket | Whole dictionary | Last-letter bucket |
+| --- | --- | --- | --- |
+| `xontinue` | 0.06 ms, nothing | 75 ms | 2.7 ms → `continue` |
+| `zomorrow` | 1.09 ms, nothing | 15 ms | 0.03 ms → `tomorrow` |
+| `hte` | 0.16 ms → `he` | 1.7 ms | 0.33 ms → `the` |
+
+**It was rejected anyway, and for a better reason than cost.** Look at what the
+found candidates score: `zomorrow` reaches `tomorrow` and is rated 0.40, `vonnte`
+reaches `könnte` at 0.22. A first letter the thumb was nowhere near is a
+full-price substitution, and a full-price substitution loses to the unknown-word
+prior. The index would find the word and the scorer would refuse it — paying 2.7
+ms on every keystroke (D33) to arrive at the same answer.
+
+So the buckets are widened instead, from evidence already in hand:
+
+- **The neighbours of the first press**, when the touch was within half a key of
+  one. That threshold is not arbitrary: measured against a real key geometry, a
+  press 30% of the way from `x` towards `c` reaches `continue` at 0.82, at 20%
+  it is 0.53, and at dead centre 0.06. Half a key is roughly where a candidate
+  stops being able to clear any threshold worth having, so the cases excluded
+  are exactly the ones that would have been refused.
+- **The second letter typed**, because `hte` is not a mistyped `t` but a
+  transposed one, and the intended first letter is sitting right there.
+
+Four buckets at most. Worst case 2–3 ms against 0.3–1.1 ms before, and — the
+thing that made a single pass safe rather than needing a two-pass fallback — it
+does not dilute the existing answers: the extra candidates are all far enough
+away that their share of the mass is invisible. `hanen` → `haben` goes from
+0.794 to 0.782.
+
+What remains out of reach is a first letter typed dead centre on the wrong key,
+where there is genuinely no evidence: `xontinue` scores 0.06 whether or not the
+candidate is found. **The lever for that is the falloff slider** (D34) rather
+than a new index — at a falloff of 3 the same correction scores 0.83 — which is
+the right place for it, because "correct a word on the strength of the letters
+alone" is a preference and not a fact.
 
 ---
 

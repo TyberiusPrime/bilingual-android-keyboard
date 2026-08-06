@@ -327,6 +327,42 @@ class DictionarySuggestionsTest {
         assertTrue("$fussy should fall below $default", fussy < default)
     }
 
+    // -- a first letter that came out wrong (D35) -----------------------------
+
+    /**
+     * `hte` for `the`: the intended first letter is the second one typed, so
+     * its bucket gets searched too.
+     */
+    @Test
+    fun `a transposed first pair is within reach`() {
+        val correction = source().correct("ahben", clean("ahben"))
+        assertEquals("haben", correction?.text)
+    }
+
+    /**
+     * `xontinue` for `continue`: the thumb was between the two keys, and the
+     * touch says so, so the neighbour's bucket gets searched.
+     */
+    @Test
+    fun `a neighbouring first letter is within reach when the touch says so`() {
+        val touches = "jaben".mapIndexed { index, char ->
+            if (index == 0) TypedTouch(char, mapOf('h' to 0.2f)) else TypedTouch(char, emptyMap())
+        }
+        val correction = source().correct("jaben", touches)
+        assertEquals("haben", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    /**
+     * And not otherwise. A first letter the thumb was nowhere near is a letter
+     * the typist chose — scanning its bucket would cost real time to produce a
+     * candidate the threshold refuses anyway.
+     */
+    @Test
+    fun `a distant first letter is still out of reach`() {
+        assertNull(source().correct("jaben", clean("jaben")))
+    }
+
     /** D2: a word valid in either language is valid, however rare. */
     @Test
     fun `a word spelled exactly right is never corrected`() {

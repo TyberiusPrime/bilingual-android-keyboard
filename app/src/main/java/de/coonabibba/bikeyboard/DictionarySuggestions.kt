@@ -38,9 +38,9 @@ class DictionarySuggestions(
 
     private class Candidate(val word: String, val weight: Float, val language: Language?)
 
-    override fun suggest(word: CharSequence): List<Suggestion> {
+    override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates {
         val prefix = Folding.fold(word)
-        if (prefix.length < MIN_PREFIX) return emptyList()
+        if (prefix.length < MIN_PREFIX) return Candidates.NONE
 
         val typed = word.toString()
         val candidates = mutableListOf<Candidate>()
@@ -64,13 +64,69 @@ class DictionarySuggestions(
 
         addApostropheS(typed, candidates)
 
-        // Completions only answer a word that was begun correctly. When there
-        // are few or none — a typo, or a whole word the cursor jumped back to
-        // (D23) — look for words a small number of edits away instead.
-        if (candidates.size < SuggestionSlots.CAPACITY) {
-            addCorrections(prefix, candidates)
+        val correction = scanNearby(typed, touches, into = candidates)
+        return Candidates(rank(typed, candidates), correction)
+    }
+
+    /**
+     * The one search, and both things the keyboard does with it (D37).
+     *
+     * A word within a slip or two is two answers at once: a candidate for the
+     * strip, and — if it is the best of them — what the space bar would
+     * substitute. Producing them separately meant two scans per keystroke with
+     * different reach, so the strip could not offer `don't` for `dont` even as
+     * the space bar was about to insert it.
+     *
+     * The scan is skipped when there is nothing to learn: a word already spelled
+     * exactly right is never replaced (D28), and once there are three
+     * completions the strip has no room for a correction anyway.
+     */
+    private fun scanNearby(
+        typed: String,
+        touches: List<TypedTouch>,
+        into: MutableList<Candidate>,
+    ): Correction? {
+        // D28's hard gate, and the reason the scan can often be skipped
+        // outright: a word in either dictionary is a word, however rare.
+        val correcting = !knowsExactly(typed)
+        val filling = into.size < SuggestionSlots.CAPACITY
+        if (!correcting && !filling) return null
+
+        var best: Candidate? = null
+        var bestScore = 0f
+        // The typed word standing as it is, which is what a correction has to
+        // beat rather than merely lead.
+        var mass = UNKNOWN_WORD_PRIOR
+
+        forEachNearby(typed, touches) { lexicon, index, cost ->
+            val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
+            if (correcting) {
+                mass += score
+                if (score > bestScore) {
+                    bestScore = score
+                    best = Candidate(lexicon.wordAt(index), score, lexicon.language)
+                }
+            }
+            // Cost zero is the word itself, which is not a correction. It gets
+            // here because folding makes `uber` and `über` one lookup — and
+            // `über`, at ACCENT, is a correction worth offering.
+            if (filling && cost > 0f) {
+                into += Candidate(lexicon.wordAt(index), score, lexicon.language)
+            }
         }
 
+        val winner = best ?: return null
+        if (!correcting || winner.word.equals(typed, ignoreCase = true)) return null
+        return Correction(
+            text = applyTypedCase(winner.word, typed),
+            original = typed,
+            confidence = bestScore / mass,
+            language = winner.language,
+        )
+    }
+
+    /** Ranks the candidates and trims them to what the strip can show. */
+    private fun rank(typed: String, candidates: List<Candidate>): List<Suggestion> {
         if (candidates.isEmpty()) return emptyList()
 
         // Confidence is the candidate's share of everything that matches: a
@@ -128,36 +184,36 @@ class DictionarySuggestions(
     }
 
     /**
-     * Words a few edits away from what was typed.
+     * Every dictionary word within a slip or two of [typed], with what the slip
+     * costs.
      *
-     * Scanned rather than indexed: a deletion index over 70,000 words costs
-     * more memory than the wordlists themselves, and two filters make the scan
-     * cheap enough without it. Only words sharing the typed first letter are
-     * considered — which is the one letter a thumb rarely gets wrong, and is
-     * the honest limit of this approach — and within those, only the ones whose
-     * length is close enough to be reachable. Folding, the expensive part, then
-     * happens for a few hundred words rather than a few thousand.
+     * [touches] must be one per character of [typed]. Where the keyboard has no
+     * record of where the thumb was — a word the cursor jumped back to (D23) —
+     * the caller supplies untouched ones and every substitution is full price.
+     * That is the right answer rather than a degraded one: without the touches
+     * there is nothing to say a slip was likelier than a decision.
      */
-    private fun addCorrections(folded: String, into: MutableList<Candidate>) {
-        if (folded.length < MIN_CORRECTION_LENGTH) return
-        val maxDistance = if (folded.length >= LONG_WORD) 2 else 1
-        val bucket = folded.substring(0, 1)
+    private inline fun forEachNearby(
+        typed: String,
+        touches: List<TypedTouch>,
+        onMatch: (lexicon: Lexicon, index: Int, cost: Float) -> Unit,
+    ) {
+        if (typed.length < MIN_CORRECTION_LENGTH) return
+        if (touches.size != typed.length) return
+        val folded = Folding.fold(typed)
+        if (folded.isEmpty()) return
 
-        lexicons.forEach { lexicon ->
-            for (index in lexicon.completions(bucket)) {
-                val word = lexicon.wordAt(index)
-                if (abs(word.length - folded.length) > maxDistance) continue
-                val distance = EditDistance.between(Folding.fold(word), folded, maxDistance)
-                if (distance !in 1..maxDistance) continue
-                // A correction is worth less than a word that was typed
-                // correctly, and worth less the further away it is. This keeps
-                // corrections under completions when both are on offer, and
-                // orders them by how common the word is within each distance.
-                into += Candidate(
-                    word,
-                    lexicon.weightAt(index) / CORRECTION_PENALTY[distance - 1],
-                    lexicon.language,
-                )
+        searchPrefixes(folded, touches.first()).forEach { bucket ->
+            lexicons.forEach { lexicon ->
+                for (index in lexicon.completions(bucket)) {
+                    val word = lexicon.wordAt(index)
+                    // A length gap alone can put a word out of reach, and
+                    // checking it is far cheaper than the distance itself.
+                    if (abs(word.length - typed.length) > MAX_SLIP_COST) continue
+                    val cost = SpatialEditDistance.between(touches, word, MAX_SLIP_COST)
+                    if (cost > MAX_SLIP_COST) continue
+                    onMatch(lexicon, index, cost)
+                }
             }
         }
     }
@@ -191,87 +247,53 @@ class DictionarySuggestions(
      *   there is no way to tell a slip from a decision, and a word the cursor
      *   jumped back to (D23) was not typed here at all.
      */
-    override fun correct(typed: String, touches: List<TypedTouch>): Correction? {
-        if (typed.length < MIN_AUTO_CORRECT_LENGTH) return null
-        if (touches.size != typed.length) return null
-        if (knowsExactly(typed)) return null
-
-        val folded = Folding.fold(typed)
-        if (folded.isEmpty()) return null
-
-        var best: Candidate? = null
-        var bestScore = 0f
-        // The typed word standing as it is, which is what the correction has to
-        // beat rather than merely lead.
-        var mass = UNKNOWN_WORD_PRIOR
-
-        val buckets = firstLetters(folded, touches.first())
-        lexicons.forEach { lexicon ->
-            buckets.forEach { bucket ->
-                for (index in lexicon.completions(bucket)) {
-                    val word = lexicon.wordAt(index)
-                    if (abs(word.length - typed.length) > MAX_SLIP_COST) continue
-                    val cost = SpatialEditDistance.between(touches, word, MAX_SLIP_COST)
-                    if (cost > MAX_SLIP_COST) continue
-                    val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
-                    mass += score
-                    if (score > bestScore) {
-                        bestScore = score
-                        best = Candidate(word, score, lexicon.language)
-                    }
-                }
-            }
-        }
-
-        val winner = best ?: return null
-        if (winner.word.equals(typed, ignoreCase = true)) return null
-        return Correction(
-            text = applyTypedCase(winner.word, typed),
-            original = typed,
-            confidence = bestScore / mass,
-            language = winner.language,
-        )
-    }
-
     /**
-     * Which first-letter buckets to search for a correction (D35).
+     * Which slices of the dictionary to search for a correction (D35, D37).
      *
-     * The scan is bucketed by first letter, which for a long time meant a
+     * The scan is bucketed by folded prefix, which for a long time meant a
      * mistyped first letter was simply out of reach: `xontinue` found nothing at
      * all, because nothing starting with `x` is within a slip of it. Scanning
      * the whole dictionary instead is the obvious fix and the wrong one — it is
      * twenty-five times the work, on every keystroke (D33).
      *
-     * Two extra buckets are enough for nearly all of it, and both come from
-     * evidence already in hand:
+     * Three slices, and the last two are **two characters wide**, which is what
+     * makes them nearly free:
      *
-     * - **Where the thumb actually was.** `x` and `c` are adjacent, so the touch
-     *   on `xontinue` already carries `c` as a near miss. Only the closest
-     *   neighbours are worth following: a first letter a long way off scores so
-     *   badly that it could never clear the threshold, so scanning its bucket is
-     *   work spent to produce a candidate that will be refused.
-     * - **The second letter typed.** `hte` is not a mistyped `t`, it is a
-     *   transposed one, and the intended first letter is sitting right there.
+     * - **What was typed**, one character, because a slip anywhere after the
+     *   first letter leaves that letter standing.
+     * - **The first two letters swapped.** `hte` is not a mistyped `t` but a
+     *   transposed one, and a transposed pair means the word begins `th` — so
+     *   there is no reason to walk every word beginning with `t`. That
+     *   distinction is worth a great deal in German, where `e` is the second
+     *   letter of half the language: as a whole bucket it cost 53ms, as a
+     *   two-character prefix it is a rounding error.
+     * - **A near neighbour of the first press, then the second letter typed.**
+     *   `x` and `c` are adjacent, so the touch on `xontinue` already carries `c`
+     *   as a near miss, and the word it wants begins `co`. Only the closest
+     *   neighbours are followed: a first letter a long way off scores so badly
+     *   it could never clear the threshold, so its slice is work spent to
+     *   produce a candidate that will be refused.
      *
-     * At most [MAX_FIRST_LETTERS], so the cost has a ceiling no matter how
-     * ambiguous the touch was.
+     * The narrower slices assume the *other* of the first two letters came out
+     * right, which is the difference between chasing one slip and chasing two.
      */
-    private fun firstLetters(folded: String, first: TypedTouch): Set<String> {
-        val letters = LinkedHashSet<String>()
-        letters += folded.substring(0, 1)
-        // A transposed first pair. Cheap to include and it is the single
-        // commonest way the first letter comes out wrong.
-        if (folded.length > 1) letters += folded.substring(1, 2)
+    private fun searchPrefixes(folded: String, first: TypedTouch): Set<String> {
+        val prefixes = LinkedHashSet<String>()
+        prefixes += folded.substring(0, 1)
+        if (folded.length < 2) return prefixes
+
+        val second = folded[1]
+        prefixes += "$second${folded[0]}"
 
         first.alternatives.entries
             .filter { it.value <= FIRST_LETTER_REACH }
             .sortedBy { it.value }
             .forEach { (char, _) ->
-                if (letters.size >= MAX_FIRST_LETTERS) return@forEach
+                if (prefixes.size >= MAX_SEARCH_PREFIXES) return@forEach
                 val letter = Folding.foldChar(char)
-                if (letter.isLetter()) letters += letter.toString()
+                if (letter.isLetter()) prefixes += "$letter$second"
             }
-        return letters
+        return prefixes
     }
 
     /** Whether any source has this exact spelling — see [Lexicon.knowsExactly]. */
@@ -308,21 +330,16 @@ class DictionarySuggestions(
         const val STEM_MIN = 2
 
         /**
-         * Below this, a word is too short to correct: nearly every three-letter
-         * word is one edit from several others, so the suggestions would be
-         * noise and the typing is quicker than reading them.
+         * Shorter than this and the keyboard has no business looking: half the
+         * two- and three-letter strings are one slip from several words, so
+         * both the offer and the replacement would be noise, and the typing is
+         * over before the reading would be.
+         *
+         * One floor, where there were two — the strip refused under four and
+         * the correction under three (D37). Nothing justified the gap; they
+         * were written months apart.
          */
-        const val MIN_CORRECTION_LENGTH = 4
-
-        /** From here up, two edits are allowed. Below it, one. */
-        const val LONG_WORD = 6
-
-        /**
-         * Shorter than this and the keyboard has no business replacing
-         * anything: half the two- and three-letter strings are one slip from
-         * several words, and the typing is over before the reading would be.
-         */
-        const val MIN_AUTO_CORRECT_LENGTH = 3
+        const val MIN_CORRECTION_LENGTH = 3
 
         /**
          * The most implausible a set of slips may be and still be considered.
@@ -362,13 +379,6 @@ class DictionarySuggestions(
         const val FIRST_LETTER_REACH = 0.5f
 
         /** A ceiling on the scan, however ambiguous the first touch was. */
-        const val MAX_FIRST_LETTERS = 4
-
-        /**
-         * What a correction is worth against a word that was typed correctly,
-         * by distance. Steep, so a completion always wins a slot from a
-         * correction, and a near miss always wins from a far one.
-         */
-        val CORRECTION_PENALTY = floatArrayOf(50f, 2_500f)
+        const val MAX_SEARCH_PREFIXES = 4
     }
 }

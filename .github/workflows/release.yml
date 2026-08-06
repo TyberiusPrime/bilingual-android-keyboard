@@ -1,0 +1,170 @@
+name: Release
+
+# Tag a commit and the APK for it appears on the releases page.
+#
+#     git tag -a v0.2.0 -m "..." && git push origin v0.2.0
+#
+# Or run it by hand from the Actions tab with a version, which builds and
+# publishes without moving a tag — useful for a dry run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, without the leading v (e.g. 0.2.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish the release APK
+    runs-on: ubuntu-latest
+    permissions:
+      # To create the release and attach the APK to it.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Release notes are generated from the history since the last tag.
+          fetch-depth: 0
+
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            name="${{ inputs.version }}"
+          else
+            name="${GITHUB_REF_NAME#v}"
+          fi
+          # Three dot-separated numbers, so the version code below is
+          # well defined and the tag cannot quietly mean something else.
+          if ! printf '%s' "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version '$name' is not major.minor.patch" >&2
+            exit 1
+          fi
+          # Monotonic with the version rather than with the number of CI runs,
+          # so re-running a release cannot produce a different code — and so a
+          # later version always outranks an earlier one on the device.
+          IFS=. read -r major minor patch <<< "$name"
+          code=$(( major * 10000 + minor * 100 + patch ))
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "tag=v$name" >> "$GITHUB_OUTPUT"
+          echo "Building $name (versionCode $code)"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # A release gets at least the scrutiny a pull request does. Publishing an
+      # APK whose tests were never run is how a broken keyboard reaches the one
+      # device that cannot type a bug report.
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Lint
+        run: ./gradlew lintDebug --stacktrace
+
+      - name: Decode the signing key
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "No RELEASE_KEYSTORE_BASE64 secret; falling back to the committed key."
+            echo "signed=debug-key" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+          echo "keystore=${RUNNER_TEMP}/release.keystore" >> "$GITHUB_OUTPUT"
+          echo "signed=release-key" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble release APK
+        env:
+          BIKEYBOARD_VERSION_NAME: ${{ steps.version.outputs.name }}
+          BIKEYBOARD_VERSION_CODE: ${{ steps.version.outputs.code }}
+          RELEASE_KEYSTORE: ${{ steps.signing.outputs.keystore }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Name the APK after the version
+        id: apk
+        run: |
+          set -euo pipefail
+          src=$(find app/build/outputs/apk/release -name '*.apk' | head -n1)
+          name="bilingual-keyboard-${{ steps.version.outputs.name }}.apk"
+          mkdir -p artifacts
+          cp "$src" "artifacts/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "artifacts/$name" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Cheap, and it catches the one failure that survives a green build: an
+      # APK that assembles, uploads, and cannot be installed.
+      - name: Verify the APK is signed
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          # -V so 9.0.0 sorts before 35.0.0 rather than after it.
+          apksigner=$(find "$sdk/build-tools" -name apksigner -type f | sort -V | tail -n1)
+          if [ -z "$apksigner" ]; then
+            echo "::error::no apksigner under $sdk/build-tools" >&2
+            exit 1
+          fi
+          "$apksigner" verify --print-certs "artifacts/${{ steps.apk.outputs.name }}"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          APK: artifacts/${{ steps.apk.outputs.name }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Sideload with:"
+            echo
+            echo '```'
+            echo "scripts/install.sh ${{ steps.apk.outputs.name }}"
+            echo '```'
+            echo
+            echo "\`sha256\` \`${{ steps.apk.outputs.sha256 }}\`"
+            echo
+            if [ "$SIGNED" = "debug-key" ]; then
+              echo "> Signed with the repository's committed key, which is public."
+              echo "> That is enough for the APK to install and to upgrade in place,"
+              echo "> and it proves nothing about who built it. Set the"
+              echo "> \`RELEASE_KEYSTORE_BASE64\` secret to sign properly."
+              echo
+            fi
+            echo "**This is a different app from the debug builds** — those carry a"
+            echo "\`.debug\` package suffix, so a release installs alongside one"
+            echo "rather than replacing it, with its own settings and its own"
+            echo "learned words. Uninstall the debug copy first if you only want one."
+          } > notes.md
+          # --notes-file plus --generate-notes: ours first, then the commit log.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --title "$TAG" \
+              --notes-file notes.md \
+              --generate-notes
+          fi

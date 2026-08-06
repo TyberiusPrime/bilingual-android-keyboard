@@ -168,6 +168,34 @@ object KeyboardPrefs {
     fun confidenceFalloff(context: Context): Float =
         value(context, CORRECTION.first { it.key == CONFIDENCE_FALLOFF }) / 10f
 
+    /**
+     * Whether the recent-keypress trail is drawn (D19, D38).
+     *
+     * Two answers, because the question is asked in two places and the same
+     * person can reasonably answer it differently. Ordinary fields default to
+     * showing it; password fields default to not. **Neither is a veto** — the
+     * toggle key rules in both, and writes to whichever of these applies to the
+     * field in front of it.
+     *
+     * The trail is an accessibility feature before it is a decoration: it says
+     * what was just typed, which is worth most to the person who cannot easily
+     * check by reading the field. Refusing to show it in a password box is
+     * exactly the wrong place to overrule that, since a password is the string
+     * hardest to verify by looking at it.
+     */
+    const val SHOW_TRAIL = "show_trail"
+    const val DEFAULT_SHOW_TRAIL = true
+
+    const val SHOW_TRAIL_IN_PASSWORDS = "show_trail_in_passwords"
+    const val DEFAULT_SHOW_TRAIL_IN_PASSWORDS = false
+
+    /** Which of the two settings governs the field currently being typed into. */
+    fun trailKey(inPassword: Boolean): String =
+        if (inPassword) SHOW_TRAIL_IN_PASSWORDS else SHOW_TRAIL
+
+    fun trailDefault(inPassword: Boolean): Boolean =
+        if (inPassword) DEFAULT_SHOW_TRAIL_IN_PASSWORDS else DEFAULT_SHOW_TRAIL
+
     // -- haptics -------------------------------------------------------------
 
     /** The single level this used to have, kept only so old settings survive. */
@@ -283,6 +311,12 @@ object KeyboardPrefs {
     fun timing(context: Context, range: Range): Long = value(context, range).toLong()
 
     fun timing(context: Context, key: String): Long = value(context, key).toLong()
+
+    fun showTrail(context: Context, inPassword: Boolean): Boolean =
+        of(context).getBoolean(trailKey(inPassword), trailDefault(inPassword))
+
+    fun setShowTrail(context: Context, inPassword: Boolean, show: Boolean) =
+        putBoolean(context, trailKey(inPassword), show)
 
     fun autoCorrect(context: Context): Boolean =
         of(context).getBoolean(AUTO_CORRECT, DEFAULT_AUTO_CORRECT)

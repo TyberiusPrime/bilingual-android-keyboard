@@ -224,6 +224,59 @@ class LayoutsTest {
         }
     }
 
+    // -- the cursor-steering key and the trail toggle (D38) -------------------
+
+    /**
+     * One key steers, so the gesture has one home. More than one and a vertical
+     * drag would mean different things in different places.
+     *
+     * The letter layer only: the symbol layer has no `h`, and hanging the
+     * gesture on whatever happens to occupy that position instead would be
+     * arbitrary. Moving the cursor is something you do while writing words.
+     */
+    @Test
+    fun `exactly one letter key steers the cursor by lines`() {
+        val steering = Layouts.letters.rows.flatten().filter { it.steersLines }
+        assertEquals(1, steering.size)
+        assertEquals(Layouts.LINE_STEERING_KEY.toString(), steering.single().label)
+    }
+
+    @Test
+    fun `no other layer claims the gesture`() {
+        assertTrue(Layouts.symbols.rows.flatten().none { it.steersLines })
+    }
+
+    /**
+     * The gesture is a vertical drag on a letter, so the key must not also be
+     * carrying a long-press: the hold timer and the drag would race.
+     */
+    @Test
+    fun `the steering key has no long-press of its own`() {
+        val steering = Layouts.letters.rows.flatten().first { it.steersLines }
+        assertEquals(emptyList<String>(), steering.longPress)
+    }
+
+    /** D38: exactly one trail toggle, in the same place on every layer. */
+    @Test
+    fun `the trail toggle is present once per layer and never moves`() {
+        val positions = Layer.entries.map { layer ->
+            val rows = Layouts.forLayer(layer).rows
+            val toggles = rows.flatten().filter { it.action == KeyAction.ToggleTrail }
+            assertEquals("layer $layer", 1, toggles.size)
+            val rowIndex = rows.indexOfFirst { row -> row.any { it.action == KeyAction.ToggleTrail } }
+            rowIndex to rows[rowIndex].indexOfFirst { it.action == KeyAction.ToggleTrail }
+        }
+        assertEquals("the toggle moves between layers", 1, positions.distinct().size)
+    }
+
+    /** Both of its faces have to be something, or the key goes blank when toggled. */
+    @Test
+    fun `the trail toggle has a label for either state`() {
+        assertTrue(Layouts.TRAIL_ON_LABEL.isNotEmpty())
+        assertTrue(Layouts.TRAIL_OFF_LABEL.isNotEmpty())
+        assertTrue(Layouts.TRAIL_ON_LABEL != Layouts.TRAIL_OFF_LABEL)
+    }
+
     private companion object {
         const val MAX_ALTERNATES = 6
     }

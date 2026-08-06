@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D36 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D38 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -26,9 +26,8 @@ below.
 - [ ] Does the umlaut correction from D5 apply inside English words too
       (`uber` → `über`)? Probably not, but it is a real ambiguity.
 - [ ] Emoji: search, recents, skin tones — entirely unaddressed so far.
-- [ ] **Are `7` on `j` and `9` on `l` acceptable?** See D17; this is the one
-      arbitrary placement in the layout and the likeliest thing to want changed
-      after a week of real use.
+- [x] **Are `7` on `j` and `9` on `l` acceptable?** Yes — reported fine after
+      real use on the phone (D17).
 - [ ] Is three the right number of slots in the strip (D21)? Guessed from other
       keyboards. Now that the strip has content, it is answerable.
 - [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
@@ -48,18 +47,19 @@ below.
       threshold where `don't` clears it easily. Worth a better estimator?
 - [ ] Is the falloff's default of 7 right (D34)? It is now a slider, which is an
       admission that nobody here can answer this from a laptop.
-- [ ] A correction query costs ~3ms on a laptop and has not been timed on the
-      phone (D23). Per keystroke, on a word with no completions, that is the
-      first thing in this keyboard with a latency budget worth watching.
+- [x] **Per-keystroke latency.** Confirmed usable on the phone, and since D37
+      it is one search rather than two: 0.2–1.5ms warm on a laptop against the
+      shipped lists, worst case a long German word. Still not profiled on the
+      device itself, but no longer the open question it was.
 - [x] **Which haptic route works on this phone?** Only Insistent (D29) — so the
       motor is fine and this phone has touch feedback muted system-wide. Two
       rounds of tuning constants were spent on a switch in another app.
 - [ ] Is the order within an accent popup right (D32)? `é è ê ë` is alphabetical
       by accent name and nothing better, and the ones past the third are a slide
       most of the way across a key row.
-- [ ] Now that a correction query runs on every keystroke rather than every
-      space (D33), the per-keystroke cost is `suggest()` plus `correct()`.
-      Untimed on the phone, like everything else in this list.
+- [x] **`suggest()` and `correct()` had drifted apart** (D33 patched over it).
+      Unified in D37: one search, two views, and the strip can no longer fail to
+      show a word the space bar is about to insert.
 
 ## Decisions
 
@@ -343,6 +343,12 @@ The last ten insertions are kept as a stack; the five most recent are drawn as
 a colour gradient on the keys themselves — full purple for the most recent,
 fading to the resting key colour by the fifth.
 
+**Switchable from a key, and off *by default* in password fields** — see D38,
+which explains both why it took a while to notice that a picture of the last five
+keys is a picture of part of the password, and why the field defaulting to off is
+as far as that goes. The trail is an accessibility feature, and the person typing
+gets to decide.
+
 Rules:
 
 - **Backspace pops the stack** rather than pushing to it, so deleting walks the
@@ -369,7 +375,9 @@ down payment on step 3, not a substitute for it.
 ### D20 — Space and backspace carry gestures
 
 Both keys do more than one thing, which is affordable because both are large
-and neither has a long-press alternate to collide with.
+and neither has a long-press alternate to collide with. D38 later put a third
+gesture on `h`, which is neither — and pays for it with a longer threshold and a
+direction test.
 
 **Space**
 - Tap inserts a space.
@@ -1182,6 +1190,120 @@ drifts off the far side of cell zero stays on cell zero.
 
 The arithmetic is in `AlternatePopup`, out of the view and tested, because this
 was wrong for two releases in a way that reads perfectly plausibly.
+
+### D37 — The strip and the space bar are one search
+
+`candidatesFor(word, touches)` returns both what the strip should show and what
+space would substitute, from a single scan.
+
+They had drifted into two searches with different reach. The strip walked one
+first-letter bucket with a whole-number edit distance that knew nothing about
+the touches; the correction walked several (D35) with the spatial distance and a
+cheap apostrophe (D34). The visible result was a strip that could not offer
+`don't` for `dont` or `continue` for `xontinue` — words the space bar was about
+to insert, missing from the three slots that exist to show them. D33 had already
+patched over the worst of it by prepending the correction to the strip, which
+worked and was a sign that the split was wrong.
+
+Since D33 made the correction run on every keystroke, it was also twice the
+work. One call halves it.
+
+Three constants collapsed on the way. The strip refused to correct words under
+four letters and the corrector under three, for no reason anyone recorded —
+they were written months apart. And the strip's correction penalty was `50` for
+one edit and `2500` for two, which is `50^distance`, which is
+`exp(−ln(50) × distance)` — the same exponential in the scorer, at a different
+rate. It is now the one rate, the falloff slider.
+
+**Two-character prefixes** are what made the wider reach affordable. A
+transposed first pair means the word begins with those two letters swapped, so
+`hte` needs the words beginning `th`, not every word beginning `t`. A
+substituted first letter means the word begins with the neighbour and then the
+second letter typed, so `xontinue` needs `co`. Both assume the *other* of the
+first two letters came out right, which is the difference between chasing one
+slip and chasing two.
+
+That distinction is worth a great deal in German, where `e` is the second letter
+of half the language: as a whole bucket the transposition slice cost 53ms, as a
+two-character prefix it is a rounding error. The whole query — strip and
+correction together, warm — now measures 0.2–1.5ms against the shipped lists,
+where the two separate searches were 4–8ms.
+
+`EditDistance` was deleted with its tests. It had one caller, and the caller now
+uses the spatial version.
+
+**What the source may not decide** stays with the service: the confidence
+threshold, and D28's rule that a word the keyboard did not watch being typed is
+never replaced. `WordInProgress.fullTouches` hands the search untouched
+placeholders when the touches are unavailable, which is right for *offering* a
+candidate and never right for replacing one — so the service checks the real
+touches before acting.
+
+### D38 — The globe key becomes a trail switch, and `h` steers by line
+
+Two changes to what the keys do, and one of them closes a leak.
+
+**The globe is gone.** The system draws its own IME switcher — in the navigation
+bar on this phone — so a second one cost a key position to duplicate something
+already on screen. `switchToNextInputMethod` goes with it.
+
+**Its position now toggles the keypress trail** (D19), showing `◉` or `○` for
+what it will do rather than what it is. It is the one setting that belongs on a
+key rather than in the settings screen, because the moment it matters is the
+moment somebody is standing behind you, and that is not a moment for three taps
+and a scroll.
+
+Which is the leak. The trail draws the last five keys pressed in purple, and
+until now it did that **in password fields too** — `isPassword` was computed at
+focus and used only to decide whether to capitalise. Five characters of a
+password, held on the keyboard until the next keystroke pushes them along, in
+the one place where the whole design says nothing may be remembered.
+
+When the trail is off the service **does not record it at all**, rather than
+recording it and declining to draw — what is in that list is a description of
+what was typed, and the point of switching it off in a hurry is that the
+description should not exist.
+
+**The first attempt made the field a veto, and that was wrong.** A password
+field forced the trail off whatever the toggle said, which meant pressing the
+key there did nothing at all: it flipped a flag that was then ANDed away. A
+control that silently does nothing is worse than one that is absent, and this
+one was inert in precisely the field where somebody might most want to press it.
+
+The trail is an **accessibility feature** before it is a decoration. It says what
+was just typed, which is worth most to someone who cannot easily check by reading
+the field — and a password box, where the text comes back as dots, is the hardest
+field of all to verify by looking. Refusing to show it there overrules the person
+who needs it in order to protect them from a threat they can see and the keyboard
+cannot: whether anybody is actually standing behind them.
+
+So the field selects *which* answer is remembered rather than overriding it.
+Ordinary fields and password fields keep separate settings; the defaults differ —
+on and off — and neither is a veto. The toggle writes to whichever applies to
+the field in front of it, so it always does something, and turning it on for
+passwords does not quietly change what ordinary fields do.
+
+**`h` steers the cursor by line.** The same gesture as the space bar's, turned
+ninety degrees: drag up or down and the caret follows, one line per 22dp. `h`
+because it is the middle of the home row, reachable with either thumb without
+looking, and because it carries no long-press to race with the drag.
+
+Two guards the space bar does not need. The travel has to be **mostly vertical
+and further** — 18dp against the space bar's 10 — because the space bar cannot
+be typed by accident and a letter can, and a tap that drifts must stay a tap.
+
+And the field has to say it holds more than one line. That is the same
+focus-escape hazard the space-bar drag already guards against, with a worse
+failure mode: a DPAD event the field cannot consume is not swallowed, it falls
+through to focus navigation, focus leaves, and the keyboard disappears
+mid-sentence. Asking "is there a character to the left" answers it for
+horizontal movement; nothing so cheap answers "is there a line above", because a
+wrapped line contains no character that says so.
+
+So the honest statement of the limit: on the first line of a genuine multi-line
+field with something focusable above it, this can still dismiss the keyboard.
+Recoverable by tapping the field, and cheaper than the alternative, which is
+reading the whole text back and counting newlines on every step of a drag.
 
 ---
 

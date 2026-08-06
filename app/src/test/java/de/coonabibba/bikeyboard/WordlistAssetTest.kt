@@ -26,6 +26,9 @@ class WordlistAssetTest {
             ?: error("wordlist $name not found; looked in ${candidates.map { it.absolutePath }}")
     }
 
+    /** No near misses recorded — a word read back rather than typed (D37). */
+    private fun untouched(word: String) = word.map(TypedTouch::untouched)
+
     private fun entries(name: String): List<Pair<String, Long>> =
         asset(name).readLines()
             .filterNot { it.isEmpty() || it.startsWith("#") }
@@ -141,14 +144,14 @@ class WordlistAssetTest {
     @Test
     fun `real lists suggest real words`() {
         val source = realSource()
-        assertTrue("Haus" in source.suggest("hau").map { it.text })
-        assertTrue("keyboard" in source.suggest("keyboa").map { it.text })
+        assertTrue("Haus" in source.suggest("hau", untouched("hau")).map { it.text })
+        assertTrue("keyboard" in source.suggest("keyboa", untouched("keyboa")).map { it.text })
     }
 
     /** D5's cheap win: the umlaut is a long-press, so typing without it must work. */
     @Test
     fun `a skipped umlaut finds the word on the real lists`() {
-        assertTrue("über" in realSource().suggest("ube").map { it.text })
+        assertTrue("über" in realSource().suggest("ube", untouched("ube")).map { it.text })
     }
 
     /**
@@ -162,7 +165,7 @@ class WordlistAssetTest {
         val english = entries("en.txt").map { it.first }.toSet()
         // "in" starts words in both, and nothing about the keyboard's state
         // says which language is being typed.
-        val suggestions = source.suggest("inte").map { it.text }
+        val suggestions = source.suggest("inte", untouched("inte")).map { it.text }
         assertTrue("nothing suggested", suggestions.isNotEmpty())
         assertTrue(
             "no English candidate in $suggestions",

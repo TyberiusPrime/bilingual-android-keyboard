@@ -41,7 +41,8 @@ class DictionarySuggestionsTest {
     private fun source(personal: PersonalStore = PersonalStore(folder.newFile())) =
         DictionarySuggestions(listOf(german, english), personal)
 
-    private fun texts(word: String) = source().suggest(word).map { it.text }
+    /** Typed with no near misses recorded, which is the conservative case. */
+    private fun texts(word: String) = source().suggest(word, clean(word)).map { it.text }
 
     private companion object {
         /** About the size of either shipped corpus. */
@@ -102,7 +103,7 @@ class DictionarySuggestionsTest {
     /** Confidence is a share of the matching mass, so it behaves like a probability. */
     @Test
     fun `confidences are shares between zero and one`() {
-        val suggestions = source().suggest("ha")
+        val suggestions = source().suggest("ha", clean("ha"))
         assertTrue(suggestions.isNotEmpty())
         suggestions.forEach { assertTrue("${it.text}: ${it.confidence}", it.confidence in 0f..1f) }
         assertTrue(
@@ -114,7 +115,7 @@ class DictionarySuggestionsTest {
     @Test
     fun `a personal word outranks ordinary vocabulary`() {
         val personal = PersonalStore(folder.newFile()).apply { add("Hauswurz") }
-        val suggestions = DictionarySuggestions(listOf(german, english), personal).suggest("hau")
+        val suggestions = DictionarySuggestions(listOf(german, english), personal).suggest("hau", clean("hau"))
         assertEquals("Hauswurz", suggestions.first().text)
     }
 
@@ -173,16 +174,60 @@ class DictionarySuggestionsTest {
     }
 
     @Test
-    fun `short words are left alone`() {
-        // Everything three letters long is one edit from half the dictionary.
+    fun `a word near nothing suggests nothing`() {
+        // Two full-price substitutions is past MAX_SLIP_COST, so a short string
+        // that begins like a word still reaches none of them.
         assertEquals(emptyList<String>(), texts("hxu"))
     }
 
     @Test
-    fun `a first letter that is wrong is out of reach, and says so`() {
-        // Only words sharing the first letter are searched, which is the
-        // documented limit of the scan rather than an accident.
+    fun `a first letter that is wrong is out of reach without evidence`() {
+        // The scan follows the first press's near neighbours (D35), and a clean
+        // touch reports none — so `j` for `h` stays a decision, not a slip.
         assertFalse("haben" in texts("jaben"))
+    }
+
+    // -- one search behind both answers (D37) ---------------------------------
+
+    /**
+     * The bug this closes: the strip could not offer a word the space bar was
+     * about to insert. Whatever `correction` says, the strip has to be showing.
+     */
+    @Test
+    fun `whatever space would substitute is on the strip`() {
+        listOf("dont", "hallp", "housr", "ahben").forEach { typed ->
+            val query = source().candidatesFor(typed, clean(typed))
+            val correction = query.correction
+            assertTrue("$typed found no correction", correction != null)
+            assertTrue(
+                "$typed: space gives ${correction!!.text}, strip shows ${query.suggestions.map { it.text }}",
+                correction.text in query.suggestions.map { it.text },
+            )
+        }
+    }
+
+    /** The strip reaches exactly as far as the correction does — including the apostrophe. */
+    @Test
+    fun `the strip offers a contraction for the apostrophe-less spelling`() {
+        assertTrue("don't" in texts("dont"))
+    }
+
+    /** And exactly as far for a transposed first pair. */
+    @Test
+    fun `the strip offers a transposed first pair`() {
+        assertTrue("haben" in texts("ahben"))
+    }
+
+    /**
+     * The two views agree by construction, being one search — but the views are
+     * what the rest of the keyboard calls, so it is worth saying out loud.
+     */
+    @Test
+    fun `the separate views agree with the combined query`() {
+        val touches = clean("hallp")
+        val query = source().candidatesFor("hallp", touches)
+        assertEquals(query.suggestions, source().suggest("hallp", touches))
+        assertEquals(query.correction, source().correct("hallp", touches))
     }
 
     /**
@@ -191,7 +236,7 @@ class DictionarySuggestionsTest {
      */
     @Test
     fun `candidates carry the language they came from`() {
-        val suggestions = source().suggest("ha").associate { it.text to it.language }
+        val suggestions = source().suggest("ha", clean("ha")).associate { it.text to it.language }
         assertEquals(Language.GERMAN, suggestions["haben"])
         assertEquals(Language.ENGLISH, suggestions["have"])
     }
@@ -199,7 +244,7 @@ class DictionarySuggestionsTest {
     @Test
     fun `a personal word belongs to no language`() {
         val personal = PersonalStore(folder.newFile()).apply { add("Hauswurz") }
-        val suggestions = DictionarySuggestions(listOf(german, english), personal).suggest("hau")
+        val suggestions = DictionarySuggestions(listOf(german, english), personal).suggest("hau", clean("hau"))
         assertEquals(null, suggestions.first { it.text == "Hauswurz" }.language)
     }
 

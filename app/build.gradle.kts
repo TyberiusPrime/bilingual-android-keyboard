@@ -15,9 +15,15 @@ android {
         targetSdk = 35
         // Monotonic across CI builds so a newer APK is an upgrade rather than a
         // reinstall. Local builds stay at 1; scripts/install.sh passes -d so a
-        // local build can still replace a CI one.
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "0.1.0"
+        // local build can still replace a CI one. A release overrides both from
+        // its tag, so the number is a property of the version rather than of
+        // however many times CI happened to run.
+        versionCode = (
+            System.getenv("BIKEYBOARD_VERSION_CODE")
+                ?: System.getenv("GITHUB_RUN_NUMBER")
+                ?: "1"
+            ).toInt()
+        versionName = System.getenv("BIKEYBOARD_VERSION_NAME") ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -32,6 +38,30 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+
+        // A release APK has to be signed by *something*: an unsigned one cannot
+        // be installed, and an APK nobody can install is not a release. So this
+        // falls back to the same committed key rather than failing the build.
+        //
+        // The fallback is honest rather than good. A key whose password is in
+        // the repository proves nothing about who built the APK, which is fine
+        // while the only person installing it is the person who wrote it, and
+        // not fine the moment anybody else does. Supply the four environment
+        // variables and the same workflow signs properly, with no other change.
+        create("release") {
+            val keystore = System.getenv("RELEASE_KEYSTORE")
+            if (keystore.isNullOrBlank()) {
+                storeFile = file("debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            } else {
+                storeFile = file(keystore)
+                storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -42,6 +72,10 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
+            // Left off deliberately. The keyboard is one process doing one
+            // thing, so there is nothing to shrink worth the debugging cost of
+            // a stack trace that no longer names its methods.
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

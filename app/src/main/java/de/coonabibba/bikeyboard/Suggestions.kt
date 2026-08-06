@@ -59,13 +59,32 @@ data class Correction(
 interface SuggestionSource {
 
     /**
+     * Everything the keyboard wants to know about the word in progress, from
+     * one search (D37).
+     *
+     * The strip and the space bar are asking the same question — *what else
+     * could this be* — and they used to ask it separately, with different reach
+     * and, since D33 made the correction run per keystroke, twice the work. One
+     * call, one scan, two views of the answer.
+     */
+    fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates
+
+    /**
      * Candidates for the word currently being typed, best first.
      *
      * [word] is the partial word before the cursor, empty when the cursor sits
      * at a word boundary — in which case anything returned is a next-word
      * prediction rather than a correction (D9 says the strip carries both).
+     *
+     * [touches] carries where the thumb landed for each of its characters, one
+     * per character or none at all. It is here for the same reason [correct]
+     * has it, and since D37 for literally the same code: what the strip offers
+     * and what the space bar would do are one search, so they cannot disagree
+     * about what is within reach. A word the cursor jumped back to has no
+     * touches to give, and the caller passes untouched ones.
      */
-    fun suggest(word: CharSequence): List<Suggestion>
+    fun suggest(word: CharSequence, touches: List<TypedTouch>): List<Suggestion> =
+        candidatesFor(word, touches).suggestions
 
     /**
      * Whether [word] is one this source recognises.
@@ -86,7 +105,26 @@ interface SuggestionSource {
      * a correction is not the same as applying one — the threshold that decides
      * that is the user's (D3).
      */
-    fun correct(typed: String, touches: List<TypedTouch>): Correction? = null
+    fun correct(typed: String, touches: List<TypedTouch>): Correction? =
+        candidatesFor(typed, touches).correction
+}
+
+/**
+ * The two answers one search produces.
+ *
+ * [correction] is what the space bar would substitute if the word ended here,
+ * subject only to what this source can judge — the caller still applies its own
+ * policy, which is where the threshold and the "no touches, no correction" rule
+ * live (D28). [suggestions] is what the strip should show, and the correction is
+ * usually but not always among them.
+ */
+data class Candidates(
+    val suggestions: List<Suggestion>,
+    val correction: Correction?,
+) {
+    companion object {
+        val NONE = Candidates(emptyList(), null)
+    }
 }
 
 /**
@@ -94,7 +132,8 @@ interface SuggestionSource {
  * the strip is empty for the first moment of a session rather than absent.
  */
 object NoSuggestions : SuggestionSource {
-    override fun suggest(word: CharSequence): List<Suggestion> = emptyList()
+    override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates =
+        Candidates.NONE
 }
 
 /**

@@ -23,6 +23,22 @@ object FieldPolicy {
         }
     }
 
+    /**
+     * Whether the field holds more than one line, and so has lines to move
+     * between (D38).
+     *
+     * Asked because moving the cursor vertically is done with DPAD events, and
+     * a DPAD event a single-line field cannot consume does not stop there: it
+     * falls through to focus navigation, focus leaves the field, and the
+     * keyboard disappears. The same trap the space-bar drag already guards
+     * against, with a worse failure mode.
+     */
+    fun isMultiLine(inputType: Int): Boolean {
+        if (inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
+        return inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0 ||
+            inputType and InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE != 0
+    }
+
     fun isNumeric(inputType: Int): Boolean =
         when (inputType and InputType.TYPE_MASK_CLASS) {
             InputType.TYPE_CLASS_NUMBER,

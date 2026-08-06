@@ -531,11 +531,24 @@ class BilingualKeyboardService : InputMethodService() {
     private var reverted: String? = null
 
     /**
-     * Replaces the word in front of the cursor if the keyboard is sure enough
-     * (D28). Called when space is pressed, which is the moment the word is
-     * finished and the last moment it is cheap to change.
+     * What pressing space would substitute, recomputed after every keystroke.
+     *
+     * One decision, in one place, read by two things: the strip paints it purple
+     * and the space bar applies it (D33). They used to be separate calculations
+     * against separate thresholds, which meant the purple was an *impression* of
+     * what the keyboard would do rather than a statement of it — and the only
+     * way to find out which was right was to press space.
      */
-    private fun autoCorrect(ic: InputConnection): Correction? {
+    private var pendingCorrection: Correction? = null
+
+    /**
+     * Asks the corrector what it would do with the word as it stands.
+     *
+     * All the gates live here rather than at the point of use, so that the
+     * answer shown in the strip and the answer acted on by space cannot come
+     * apart. Null means space will leave the word alone.
+     */
+    private fun computeCorrection(): Correction? {
         if (!autoCorrectEnabled || !suggestionsAllowed || !word.known) return null
         val typed = word.text.toString()
         if (typed.isEmpty() || word.suffix.isNotEmpty()) return null
@@ -543,7 +556,20 @@ class BilingualKeyboardService : InputMethodService() {
         if (touches.isEmpty()) return null
 
         val correction = suggestionSource.correct(typed, touches) ?: return null
-        if (correction.confidence < autoCorrectConfidence) return null
+        return correction.takeIf { it.confidence >= autoCorrectConfidence }
+    }
+
+    /**
+     * Replaces the word in front of the cursor if the keyboard is sure enough
+     * (D28). Called when space is pressed, which is the moment the word is
+     * finished and the last moment it is cheap to change.
+     *
+     * Applies the decision already made and already shown in the strip; it does
+     * not make a new one.
+     */
+    private fun autoCorrect(ic: InputConnection): Correction? {
+        val correction = pendingCorrection ?: return null
+        val typed = correction.original
 
         ic.beginBatchEdit()
         ic.deleteSurroundingText(typed.length, 0)
@@ -729,6 +755,9 @@ class BilingualKeyboardService : InputMethodService() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private fun refreshSuggestions() {
+        // Before the view guard, because the space bar reads this whether or not
+        // there is a strip to draw it on.
+        pendingCorrection = computeCorrection()
         if (!::suggestionStrip.isInitialized) return
         if (!suggestionsAllowed || !word.known) {
             suggestionStrip.slots = emptyList()
@@ -746,7 +775,7 @@ class BilingualKeyboardService : InputMethodService() {
             return
         }
 
-        val candidates = source.suggest(word.full).map { StripEntry.Word(it) }
+        val candidates = StripEntry.mark(source.suggest(word.full), pendingCorrection)
         val offer = addWordOffer(source, candidates)
 
         // The add-word offer keeps the rightmost slot to itself, in the same

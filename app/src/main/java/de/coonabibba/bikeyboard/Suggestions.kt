@@ -122,8 +122,15 @@ sealed interface StripEntry {
     /** What the strip draws. */
     val label: String
 
-    /** A candidate. Tapping it replaces the word in progress. */
-    data class Word(val suggestion: Suggestion) : StripEntry {
+    /**
+     * A candidate. Tapping it replaces the word in progress.
+     *
+     * [replaces] means **pressing space right now would substitute this word**
+     * — not "this one scores well". It is the strip's purple, and it is set by
+     * asking the corrector the same question space asks, rather than by
+     * comparing a separate number against a separate threshold (D33).
+     */
+    data class Word(val suggestion: Suggestion, val replaces: Boolean = false) : StripEntry {
         override val label: String get() = suggestion.text
     }
 
@@ -134,6 +141,35 @@ sealed interface StripEntry {
      */
     data class AddWord(val word: String) : StripEntry {
         override val label: String get() = "+ $word"
+    }
+
+    companion object {
+
+        /**
+         * Turns ranked candidates into strip entries, marking the one that
+         * pressing space would substitute and making sure it is on screen (D33).
+         *
+         * Ranking and correcting are different questions, so the corrector's
+         * answer is not always the first candidate — and it is occasionally not
+         * among them at all. Showing it anyway, in front, is the point of the
+         * exercise: the purple word is a warning about the next keystroke, and a
+         * warning that is sometimes absent is not one.
+         */
+        fun mark(suggestions: List<Suggestion>, correction: Correction?): List<Word> {
+            if (correction == null) return suggestions.map { Word(it) }
+            // The first match, not every match: one word is going to be
+            // substituted, so one word is purple.
+            val chosen = suggestions.indexOfFirst { it.text == correction.text }
+            if (chosen >= 0) {
+                return suggestions.mapIndexed { index, it -> Word(it, replaces = index == chosen) }
+            }
+            return listOf(
+                Word(
+                    Suggestion(correction.text, correction.confidence, correction.language),
+                    replaces = true,
+                ),
+            ) + suggestions.map { Word(it) }
+        }
     }
 }
 

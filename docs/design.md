@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D32 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D33 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -43,15 +43,16 @@ below.
 - [ ] A correction query costs ~3ms on a laptop and has not been timed on the
       phone (D23). Per keystroke, on a word with no completions, that is the
       first thing in this keyboard with a latency budget worth watching.
-- [ ] Are the haptics felt now? The first version produced nothing on the phone
-      even on strong; the rewrite (D29) is reasoned about rather than observed,
-      and the only way to know is to hold the thing.
+- [ ] **Which haptic route works on this phone, if any?** Two rewrites have now
+      produced nothing (D29). The settings screen prints what the phone admits
+      to and offers each route as a button; the answer has to come back from a
+      finger, because no API here reports whether the motor moved.
 - [ ] Is the order within an accent popup right (D32)? `é è ê ë` is alphabetical
       by accent name and nothing better, and the ones past the third are a slide
       most of the way across a key row.
-- [ ] Should the strip's purple and the auto-correction threshold ever separate?
-      They share one number today (D21, D28), which is right while it is being
-      tuned and may stop being right once it is settled.
+- [ ] Now that a correction query runs on every keystroke rather than every
+      space (D33), the per-keystroke cost is `suggest()` plus `correct()`.
+      Untimed on the phone, like everything else in this list.
 
 ## Decisions
 
@@ -519,15 +520,10 @@ than a policy spread across the codebase.
 **A candidate holding most of the matching mass is drawn in purple** — the same
 purple the keypress trail uses for "this came from the keyboard".
 
-The threshold started as a hardcoded half of the mass, on the grounds that D3's
-auto-replace threshold did not exist yet. It does now (D28), and **the purple
-reads the same setting**. The two are not the same measurement and it is worth
-being clear about that: the strip's is a unigram share among the completions of
-a half-typed word, while a correction's also weighs where the thumb landed. But
-one user-facing number governing both means the purple says "this is the sort of
-thing I would replace for you" — which is the useful thing for it to say while
-that number is being tuned, and it is what makes moving the slider legible
-before a single word gets replaced.
+The rule for *which* candidate has changed twice since; **D33 is the current
+one**, and it is no longer a threshold on this ranking at all. The purple word is
+the one the auto-corrector would substitute if space were pressed — the same
+stored decision, not a second opinion that happens to agree most of the time.
 
 **The add-word offer appears only when nothing else does.** Half-typed words are
 unrecognised nearly all of the time, so an offer keyed on "unknown word" alone
@@ -719,11 +715,12 @@ because the typist is looking at the text rather than at the keyboard: one is
 caught out of the corner of an eye, the other needs no eye at all. The flash
 starts at the space bar because that is the key that caused it.
 
-Both were too faint on the phone to register. The flash is at 230/255 alpha
-rather than 150, holds full strength for the first 45% of its rise before
-fading, and takes 650ms rather than 420 (D30); the vibration is rewritten in
-D29's amendment. Something meant to be caught peripherally has to be well past
-subtle, because peripheral vision is what it is being asked to survive.
+Both were too faint on the phone to register, twice. The flash is now five
+sliders over a live preview (D30) rather than a constant to be guessed at, and
+the vibration is a choice of route with a diagnostic beside it (D29). Something
+meant to be caught peripherally has to be well past subtle, because peripheral
+vision is what it is being asked to survive — and neither of these turned out to
+be tunable from a laptop at all.
 
 **Backspace puts it back** — D14, finally built. The keystroke immediately
 after a replacement restores exactly what was typed, space and all, and the
@@ -761,8 +758,8 @@ is **two**: the keyboard did something unasked, and that is worth noticing while
 the thumb is still moving — it is the only signal that D14's undo window is
 open and about to close.
 
-**Amended after the first version produced nothing at all on the phone, even on
-strong.** Two causes, both worth writing down because both are easy to repeat:
+**Amended twice, and still not felt.** The first round's two causes, both worth
+writing down because both are easy to repeat:
 
 - *"As short as the hardware will honour"* was read as twelve milliseconds. A
   linear resonant actuator needs longer than that to spin up, so the request was
@@ -779,6 +776,44 @@ strong.** Two causes, both worth writing down because both are easy to repeat:
 If the phone reports no vibrator at all, the settings screen says so rather than
 leaving three buttons that quietly do nothing.
 
+**That was not it either**, and the second round changed the approach rather
+than the constants. The reason this cannot be fixed by reasoning is structural:
+**nothing in the Android haptics API reports back**. `vibrate` returns `Unit`.
+The one call that returns a boolean, `performHapticFeedback`, is telling you
+whether the *view* accepted the request, not whether the motor moved. And there
+are at least four independent gates between the request and the hardware:
+
+1. the app's `VIBRATE` permission,
+2. the system-wide touch-feedback switch,
+3. the per-usage intensity slider, which can scale touch haptics to zero,
+4. whether the device actually implements the effect being asked for —
+   `createPredefined` for an unsupported effect is allowed to do nothing, which
+   means the first round's "use the tuned vendor effect" fix could be *worse*
+   than the plain pulse it replaced.
+
+A shut gate is indistinguishable from a dead motor from inside the process. So
+the keyboard stops guessing and does two things instead. It **prints what the
+phone will admit to** — motor present, amplitude control, touch feedback on or
+off, intensity, per-effect support — because the combination usually names the
+culprit outright. And it offers **each route as its own button**, since the only
+instrument that can actually detect a vibration is a finger:
+
+| Route | What it asks |
+| --- | --- |
+| Automatic | view feedback, then predefined, then a pulse |
+| System keyboard tap | `performHapticFeedback(KEYBOARD_TAP)` |
+| Built-in effect | `createPredefined(EFFECT_TICK)` |
+| Plain pulse | `createOneShot`, tagged `USAGE_TOUCH` |
+| Insistent | `createOneShot`, tagged `USAGE_ALARM` |
+
+Whichever is felt becomes the setting. **Insistent is the diagnostic**: alarm
+haptics are not scaled by the touch-feedback slider, so if that one is felt and
+the others are not, the motor is fine and a system setting is off — which is a
+sentence the keyboard can then say to the user instead of buzzing at them.
+
+The amplitudes went up again as well, to 160 and 255 out of 255. Asking for half
+power on a phone that is already scaling the request down is asking for nothing.
+
 ### D30 — The timings are settings
 
 Every duration in the keyboard is now a slider: the long-press delay on a key
@@ -792,11 +827,60 @@ deliberate to one thumb is a stutter to another, and none of it is decidable
 from a laptop. The views read them once when they are built, and a settings
 revision counter tells the service to build them again.
 
-The flash is in that list, and its default moved from 420ms to 650ms after the
-first device round: a gradient that crosses the keyboard in under half a second
-is over before an eye that is on the *text* — which is where it should be —
-comes back to the keys. It also holds full strength for the first 45% of its
-travel now and fades over the rest, instead of fading throughout.
+The flash is in that list, and after two device rounds it is **five** sliders
+rather than one, over a preview that replays the animation as they move:
+
+| Slider | What it changes |
+| --- | --- |
+| Duration | how long the whole rise takes; zero switches it off |
+| Strength | peak opacity, 0–255 |
+| Hold | how much of the rise runs at full strength before fading |
+| Reach | how far up the keys the front climbs |
+| Tail | hard edge at 0, fading all the way back to the space bar at 95 |
+
+The defaults moved with them: 650ms rather than 420, full opacity rather than
+150 then 230, holding for 60% of the rise rather than fading throughout.
+
+The **preview** is the part worth arguing for. Twice now the answer from the
+phone has been "still too subtle", and each round cost a constant edit, a
+rebuild, an install, and a deliberately misspelled word to trigger the thing
+being judged. A `FlashPreviewView` draws a sketch of the bottom of the keyboard
+and runs the identical `CorrectionFlash`, so the number is chosen by looking —
+the same argument D25 makes for the suggestion-size preview, which was settled
+in one round after three without.
+
+### D33 — The strip's purple is the auto-correction decision, not a lookalike
+
+Purple in the strip means **pressing space right now would substitute this
+word**. Not "this candidate scores well".
+
+It has been three things. First a hardcoded half of the matching mass, when
+there was no auto-replace for it to speak for. Then the same *threshold* as the
+auto-correction (D28), which was closer but still two calculations that could
+disagree — the strip's a unigram share among completions, the corrector's a
+touch-weighted share with its own gates. Two measurements sharing one number is
+not the same as one measurement, and the only way to find out which one was
+right was to press space and see.
+
+Now there is one decision. After every keystroke the service asks the corrector
+what it would do with the word as it stands, gates and threshold included, and
+keeps the answer. The strip paints that word purple; the space bar applies that
+same stored answer rather than recomputing. They cannot come apart, and space
+does no work it has not already shown you.
+
+Three consequences fall out, and all three are improvements:
+
+- **A confident completion is no longer purple.** `hel` → `hello` may hold
+  almost all the mass, but space does not turn `hel` into `hello`; it ends the
+  word. The old rule shouted about that constantly.
+- **The correction is shown even when the ranker did not offer it.** Ranking and
+  correcting are different questions and occasionally disagree about what is
+  even a candidate. It goes in front. A warning that is sometimes invisible is
+  not a warning.
+- **One correction query per keystroke** instead of one per space. Measured at
+  1.5ms on a laptop (D28) against a `suggest()` call that is already more
+  expensive, but it is the second thing in this keyboard with a latency budget
+  and it has not been timed on the phone either.
 
 ### D31 — Punctuation takes back the space a suggestion inserted
 

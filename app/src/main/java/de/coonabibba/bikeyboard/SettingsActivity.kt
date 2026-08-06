@@ -48,6 +48,7 @@ class SettingsActivity : AppCompatActivity() {
         addTextSize(content)
         addTimings(content)
         addCorrection(content)
+        addFlash(content)
         addHaptics(content)
 
         val scroll = ScrollView(this).apply {
@@ -157,6 +158,51 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
+     * The five numbers that make up the correction flash, over a preview that
+     * replays it on every slider move.
+     *
+     * The preview is the point. Two rounds of "too subtle" came back from the
+     * phone while this was a constant in a source file, which meant each guess
+     * cost a rebuild, an install, and a deliberately misspelled word. Here the
+     * wave plays as the thumb drags.
+     */
+    private fun addFlash(into: LinearLayout) {
+        into.addView(section(R.string.settings_section_flash))
+
+        val preview = FlashPreviewView(this)
+        val replay = {
+            preview.shape = FlashShape.fromPrefs(this)
+            preview.play()
+        }
+
+        KeyboardPrefs.FLASH.forEach { range ->
+            val label = TextView(this).apply { setPadding(0, dp(12), 0, dp(4)) }
+            val show = { value: Int ->
+                label.text = getString(R.string.setting_value, getString(range.label), value)
+            }
+            into.addView(label)
+            into.addView(
+                slider(range.min, range.max, KeyboardPrefs.value(this, range)) {
+                    show(it)
+                    KeyboardPrefs.putInt(this, range.key, it)
+                    replay()
+                },
+            )
+            show(KeyboardPrefs.value(this, range))
+        }
+
+        into.addView(
+            TextView(this).apply {
+                setText(R.string.setting_flash_hint)
+                alpha = 0.7f
+                setPadding(0, dp(12), 0, dp(4))
+            },
+        )
+        into.addView(preview)
+        preview.setOnClickListener { preview.play() }
+    }
+
+    /**
      * Three states rather than a switch: off, and two strengths, because "on"
      * means different things on different phones and the strong setting is
      * what makes a correction distinguishable from a keypress by feel alone.
@@ -198,10 +244,6 @@ class SettingsActivity : AppCompatActivity() {
         into.addView(row)
         showSelected(KeyboardPrefs.haptics(this))
 
-        // "I get no haptics at all even on strong" has two possible answers and
-        // only the phone knows which: the keyboard is asking wrongly, or there
-        // is nothing to ask. Say which, rather than leaving three buttons that
-        // silently do nothing.
         if (!Haptics(this, KeyboardPrefs.HapticLevel.LIGHT).available) {
             into.addView(
                 TextView(this).apply {
@@ -210,7 +252,88 @@ class SettingsActivity : AppCompatActivity() {
                     setPadding(0, dp(8), 0, 0)
                 },
             )
+            return
         }
+        addHapticRoutes(into)
+        addHapticDiagnosis(into)
+    }
+
+    /**
+     * One button per way of asking the phone to buzz, and a setting recording
+     * which one worked.
+     *
+     * This should not need to exist. It does because the phone reports a working
+     * motor and produces nothing, and **not one of these calls returns whether
+     * the motor moved** — so the only instrument left is a finger. Tap down the
+     * list; whichever is felt, choose it. Insistent is the diagnostic: it asks
+     * with a usage the system does not scale to nothing, so if only that one is
+     * felt, the fault is a system setting rather than this keyboard.
+     */
+    private fun addHapticRoutes(into: LinearLayout) {
+        into.addView(
+            TextView(this).apply {
+                setText(R.string.setting_haptics_route_hint)
+                alpha = 0.7f
+                setPadding(0, dp(16), 0, dp(4))
+            },
+        )
+
+        val buttons = mutableListOf<Pair<KeyboardPrefs.HapticRoute, Button>>()
+        fun showSelected(route: KeyboardPrefs.HapticRoute) {
+            buttons.forEach { (its, button) -> button.alpha = if (its == route) 1f else 0.5f }
+        }
+
+        val level = KeyboardPrefs.haptics(this).takeIf { it != KeyboardPrefs.HapticLevel.OFF }
+            ?: KeyboardPrefs.HapticLevel.STRONG
+
+        listOf(
+            KeyboardPrefs.HapticRoute.AUTO to R.string.setting_haptics_route_auto,
+            KeyboardPrefs.HapticRoute.VIEW to R.string.setting_haptics_route_view,
+            KeyboardPrefs.HapticRoute.PREDEFINED to R.string.setting_haptics_route_predefined,
+            KeyboardPrefs.HapticRoute.PULSE to R.string.setting_haptics_route_pulse,
+            KeyboardPrefs.HapticRoute.INSISTENT to R.string.setting_haptics_route_insistent,
+        ).forEach { (route, label) ->
+            val button = Button(this).apply {
+                setText(label)
+                setOnClickListener { view ->
+                    KeyboardPrefs.setHapticRoute(this@SettingsActivity, route)
+                    showSelected(route)
+                    // Through the same code path the keyboard uses, or the test
+                    // proves nothing about the keyboard.
+                    Haptics(this@SettingsActivity, level).fire(route, view, correction = false)
+                }
+            }
+            buttons += route to button
+            into.addView(
+                button,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        showSelected(KeyboardPrefs.hapticRoute(this))
+    }
+
+    /**
+     * What the phone says about its own motor.
+     *
+     * Four separate gates can each turn a correct vibration request into
+     * silence, and none of them raises an error. Printing them together usually
+     * names the culprit outright.
+     */
+    private fun addHapticDiagnosis(into: LinearLayout) {
+        val report = Haptics(this, KeyboardPrefs.HapticLevel.LIGHT)
+            .diagnose()
+            .joinToString("\n") { (label, value) -> "$label: $value" }
+        into.addView(
+            TextView(this).apply {
+                text = report
+                alpha = 0.7f
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setPadding(0, dp(16), 0, 0)
+            },
+        )
     }
 
     private fun section(title: Int) = TextView(this).apply {

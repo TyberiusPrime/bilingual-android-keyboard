@@ -25,10 +25,10 @@ import kotlin.math.min
  * advance for exactly this.
  *
  * Three things are drawn per slot, and each of them means something: the word,
- * a wash of colour saying which language it came from (D4), and purple text
- * when the candidate holds most of the matching mass. The last of those is
- * appearance only — D3's auto-replace threshold does not exist yet, and this is
- * not it.
+ * a wash of colour saying which language it came from (D4), and purple text on
+ * **the word that pressing space would substitute** (D33). The last of those
+ * started as appearance only, back when there was no auto-replace to speak for;
+ * it is now the same decision the space bar makes, asked one keystroke early.
  *
  * A long-press popup from the top row of keys is drawn *over* this view. The
  * keyboard view is the later child of a container with child clipping switched
@@ -95,21 +95,6 @@ class SuggestionStripView @JvmOverloads constructor(
      */
     private val stripHeight = KeyboardPrefs.stripHeightPx(context)
     private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.SUGGESTION_LONG_PRESS_MS)
-
-    /**
-     * Where a candidate stops being one option among several and starts looking
-     * like the answer — **the same number the auto-correction threshold uses**
-     * (D3, D28), so that one setting governs both what the keyboard says it is
-     * sure about and what it acts on.
-     *
-     * The two confidences are not the same measurement, and it is worth being
-     * clear about that: the strip's is a unigram share among the completions of
-     * a half-typed word, while a correction's also weighs where the thumb
-     * landed. Sharing the threshold means the purple reads as "this is the sort
-     * of thing I would replace for you", which is the useful thing for it to
-     * say while the number is being tuned.
-     */
-    private val confidentAt = KeyboardPrefs.autoCorrectConfidence(context)
 
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
     private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DIVIDER }
@@ -187,12 +172,11 @@ class SuggestionStripView @JvmOverloads constructor(
             textPaint.color = when {
                 // Not a word to insert, so it does not look like one.
                 entry is StripEntry.AddWord -> ADD_WORD_FG
-                // A candidate holding most of the matching mass. Purple is the
-                // keyboard's "this came from the machine" colour, the same one
-                // the keypress trail uses.
-                entry is StripEntry.Word && entry.suggestion.confidence >= confidentAt ->
-                    CONFIDENT_FG
-
+                // The word space would substitute, if space were pressed now
+                // (D33). Purple is the keyboard's "this came from the machine"
+                // colour, the same one the keypress trail and the correction
+                // flash use — and here it is a warning as much as an offer.
+                entry is StripEntry.Word && entry.replaces -> CONFIDENT_FG
                 else -> Color.WHITE
             }
 

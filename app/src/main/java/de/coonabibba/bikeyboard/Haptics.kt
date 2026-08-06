@@ -1,12 +1,13 @@
 package de.coonabibba.bikeyboard
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.content.Context
+import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.view.View
 
@@ -20,23 +21,32 @@ import android.view.View
  * noticeable while the thumb is still moving — it is the only warning that the
  * undo window (D14) is open.
  *
- * The first version of this did nothing at all on a real phone, and the reasons
- * are both worth keeping written down:
+ * ## Why this is more complicated than it should be
  *
- * - **A 12ms pulse is not a feeling.** A linear resonant actuator needs time to
- *   spin up, and asking for twelve milliseconds at a third of full amplitude
- *   moves it imperceptibly. The durations here are longer, and where the
- *   platform offers a *predefined* effect it is used instead, because those are
- *   tuned per device by whoever knows the motor.
- * - **A vibration with no stated purpose can be dropped.** Android routes
- *   haptics by usage; without attributes saying this is touch feedback, the
- *   request competes with ringer and notification settings and may simply be
- *   discarded. Every call here is tagged.
+ * Two rounds on the phone have now produced no vibration at all, and the reason
+ * it is hard to fix blind is that **nothing here reports back**. Every API below
+ * is fire-and-forget: `vibrate` returns `Unit`, and the one call that returns a
+ * boolean returns it about whether the *view* accepted the request, not about
+ * whether the motor moved. There are at least four gates between this code and
+ * the hardware — the app's permission, the system touch-feedback switch, the
+ * per-usage intensity slider, and whether the device implements the particular
+ * effect asked for — and a shut gate looks exactly like a working keyboard on a
+ * phone with a dead motor.
+ *
+ * So this class stops guessing and offers the routes separately, with
+ * [diagnose] reporting what the phone will admit to. The settings screen fires
+ * one route per button; whichever is felt becomes the setting. [KeyboardPrefs.HapticRoute.INSISTENT]
+ * is the load-bearing one for diagnosis: it asks with a usage the system does
+ * *not* scale down to nothing, so if it buzzes and the others do not, the answer
+ * is a system setting rather than this code.
  */
-class Haptics(context: Context, private val level: KeyboardPrefs.HapticLevel) {
+class Haptics(
+    private val context: Context,
+    private val level: KeyboardPrefs.HapticLevel,
+    private val route: KeyboardPrefs.HapticRoute = KeyboardPrefs.HapticRoute.AUTO,
+) {
 
     private val vibrator: Vibrator? = when {
-        level == KeyboardPrefs.HapticLevel.OFF -> null
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             context.getSystemService(VibratorManager::class.java)?.defaultVibrator
 
@@ -49,66 +59,114 @@ class Haptics(context: Context, private val level: KeyboardPrefs.HapticLevel) {
     /**
      * A tick under a key.
      *
-     * The light setting asks the platform for its own keyboard tap first: it is
-     * what every other keyboard on the phone feels like, and it is already
-     * tuned. Only if the view refuses — or the setting is strong, which the
-     * platform effect has no way to express — does this reach for the motor
-     * directly.
+     * [view] is only needed by [KeyboardPrefs.HapticRoute.VIEW]; the other
+     * routes drive the motor directly and ignore it.
      */
     fun keyPress(view: View?) {
         if (level == KeyboardPrefs.HapticLevel.OFF) return
-        if (level == KeyboardPrefs.HapticLevel.LIGHT && view != null) {
-            val played = view.performHapticFeedback(
-                HapticFeedbackConstants.KEYBOARD_TAP,
-                HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING,
-            )
-            if (played) return
-        }
-        play(
-            predefined = if (level == KeyboardPrefs.HapticLevel.STRONG) {
-                VibrationEffect.EFFECT_HEAVY_CLICK
-            } else {
-                VibrationEffect.EFFECT_TICK
-            },
-            fallback = VibrationEffect.createOneShot(tickMs(), amplitude()),
-        )
+        fire(route, view, correction = false)
     }
 
     /** Two knocks: something was changed for you, and you have one keystroke to say no. */
     fun correction() {
         if (level == KeyboardPrefs.HapticLevel.OFF) return
-        val gap = 60L
-        play(
-            predefined = VibrationEffect.EFFECT_DOUBLE_CLICK,
-            fallback = VibrationEffect.createWaveform(
-                longArrayOf(0, tickMs(), gap, tickMs()),
-                intArrayOf(0, amplitude(), 0, amplitude()),
-                -1,
-            ),
+        fire(route, view = null, correction = true)
+    }
+
+    /**
+     * Plays one route, or tries them in order for [KeyboardPrefs.HapticRoute.AUTO].
+     *
+     * Public so the settings screen can fire a named route on demand: that is
+     * the whole test bench, and it has to go through the same code the keyboard
+     * uses or it proves nothing.
+     */
+    fun fire(route: KeyboardPrefs.HapticRoute, view: View?, correction: Boolean) {
+        when (route) {
+            KeyboardPrefs.HapticRoute.AUTO -> {
+                // The stock path first — it is what every other keyboard on the
+                // phone feels like, and it is already tuned. A correction has no
+                // view-feedback constant meaning "two knocks", so it goes
+                // straight to the motor.
+                if (!correction && viewFeedback(view)) return
+                if (predefined(correction)) return
+                pulse(correction, VibrationAttributes.USAGE_TOUCH)
+            }
+
+            KeyboardPrefs.HapticRoute.VIEW -> viewFeedback(view)
+            KeyboardPrefs.HapticRoute.PREDEFINED -> predefined(correction)
+            KeyboardPrefs.HapticRoute.PULSE -> pulse(correction, VibrationAttributes.USAGE_TOUCH)
+            // USAGE_ALARM is not scaled by the touch-feedback intensity slider,
+            // which is exactly the point: this is the route that answers "is the
+            // motor alive at all".
+            KeyboardPrefs.HapticRoute.INSISTENT ->
+                pulse(correction, VibrationAttributes.USAGE_ALARM)
+        }
+    }
+
+    private fun viewFeedback(view: View?): Boolean {
+        val target = view ?: return false
+        val constant = if (level == KeyboardPrefs.HapticLevel.STRONG) {
+            HapticFeedbackConstants.LONG_PRESS
+        } else {
+            HapticFeedbackConstants.KEYBOARD_TAP
+        }
+        return target.performHapticFeedback(
+            constant,
+            HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING,
         )
     }
 
     /**
-     * Plays the device's own tuned effect where there is one, and a plain pulse
-     * where there is not — always tagged as touch feedback so the system routes
-     * it like the keyboard feedback it is.
+     * The vendor's own tuned effect, where the device has one.
+     *
+     * False when it does not, which is the trap the previous version fell into:
+     * `createPredefined` for an unsupported effect is allowed to do nothing at
+     * all, so making it the only path can be worse than the plain pulse it
+     * replaced.
      */
-    private fun play(predefined: Int, fallback: VibrationEffect) {
-        val vibrator = vibrator ?: return
-        val effect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            VibrationEffect.createPredefined(predefined)
-        } else {
-            fallback
+    private fun predefined(correction: Boolean): Boolean {
+        val vibrator = vibrator ?: return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        val effect = when {
+            correction -> VibrationEffect.EFFECT_DOUBLE_CLICK
+            level == KeyboardPrefs.HapticLevel.STRONG -> VibrationEffect.EFFECT_HEAVY_CLICK
+            else -> VibrationEffect.EFFECT_TICK
         }
+        if (supportsEffect(vibrator, effect) == false) return false
+        send(vibrator, VibrationEffect.createPredefined(effect), VibrationAttributes.USAGE_TOUCH)
+        return true
+    }
 
+    private fun pulse(correction: Boolean, usage: Int) {
+        val vibrator = vibrator ?: return
+        val ms = tickMs()
+        val effect = if (correction) {
+            VibrationEffect.createWaveform(
+                longArrayOf(0, ms, CORRECTION_GAP_MS, ms),
+                intArrayOf(0, amplitude(), 0, amplitude()),
+                -1,
+            )
+        } else {
+            VibrationEffect.createOneShot(ms, amplitude())
+        }
+        send(vibrator, effect, usage)
+    }
+
+    private fun send(vibrator: Vibrator, effect: VibrationEffect, usage: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
+            vibrator.vibrate(effect, VibrationAttributes.createForUsage(usage))
         } else {
             @Suppress("DEPRECATION")
-            vibrator.vibrate(effect, TOUCH_FEEDBACK)
+            vibrator.vibrate(effect, audioAttributesFor(usage))
         }
     }
 
+    /**
+     * A plain pulse is longer than a predefined tick because it has to be: the
+     * device effects are shaped waveforms, and a flat request needs duration to
+     * be felt at all. Twelve milliseconds, the first attempt, is below what a
+     * linear resonant actuator can answer.
+     */
     private fun tickMs(): Long = when (level) {
         KeyboardPrefs.HapticLevel.STRONG -> STRONG_MS
         else -> LIGHT_MS
@@ -116,29 +174,115 @@ class Haptics(context: Context, private val level: KeyboardPrefs.HapticLevel) {
 
     private fun amplitude(): Int = when (level) {
         KeyboardPrefs.HapticLevel.OFF -> 0
+        // Not a fraction of full any more. Light was at 120/255 and reported as
+        // nothing; on a phone whose motor is already being scaled down by a
+        // system slider, asking for half is asking for nothing.
         KeyboardPrefs.HapticLevel.LIGHT -> LIGHT_AMPLITUDE
-        KeyboardPrefs.HapticLevel.STRONG -> VibrationEffect.DEFAULT_AMPLITUDE
+        KeyboardPrefs.HapticLevel.STRONG -> STRONG_AMPLITUDE
     }
 
+    /**
+     * What the phone will admit to, as label-and-value pairs for the settings
+     * screen.
+     *
+     * Every line here is a gate that can independently produce silence, and the
+     * point of printing them together is that the combination usually names the
+     * culprit outright: a motor that exists, touch feedback switched off, and a
+     * touch intensity of zero is not a bug in this code.
+     */
+    fun diagnose(): List<Pair<String, String>> {
+        val vibrator = vibrator
+        val lines = mutableListOf<Pair<String, String>>()
+        lines += "Motor" to if (vibrator == null) "none reported" else "present"
+        if (vibrator == null) return lines
+
+        lines += "Amplitude control" to if (vibrator.hasAmplitudeControl()) "yes" else "no"
+        lines += "System touch feedback" to when (systemTouchFeedback()) {
+            null -> "unreadable"
+            true -> "on"
+            false -> "OFF — this alone silences every route but Insistent"
+        }
+        lines += "Touch intensity" to intensityName(touchIntensity())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            lines += "Tick effect" to supportName(supportsEffect(vibrator, VibrationEffect.EFFECT_TICK))
+            lines += "Double-click effect" to
+                supportName(supportsEffect(vibrator, VibrationEffect.EFFECT_DOUBLE_CLICK))
+        }
+        return lines
+    }
+
+    /**
+     * Whether the system-wide touch-feedback switch is on.
+     *
+     * Null when it cannot be read. This gates `performHapticFeedback` outright
+     * and, on newer releases, everything tagged as touch feedback — so it is the
+     * single likeliest reason for "no vibration and no error message".
+     */
+    private fun systemTouchFeedback(): Boolean? = runCatching {
+        // Deprecated as a *write* target; it is still what the platform reads
+        // when it decides whether to honour touch feedback, and there is no
+        // replacement getter.
+        @Suppress("DEPRECATION")
+        Settings.System.getInt(context.contentResolver, Settings.System.HAPTIC_FEEDBACK_ENABLED) != 0
+    }.getOrNull()
+
+    /**
+     * The system's haptic strength slider, 0 (off) to 3 (high), or -1 unknown.
+     *
+     * Read by name rather than through `Vibrator`, whose public getter for this
+     * only arrived in API 35 — and the setting itself has existed, under this
+     * name, for far longer than the getter. A value of zero scales every
+     * touch-tagged vibration to nothing, which is one of the two states that
+     * produce exactly the symptom being chased here.
+     */
+    private fun touchIntensity(): Int = runCatching {
+        Settings.System.getInt(context.contentResolver, "haptic_feedback_intensity")
+    }.getOrDefault(-1)
+
+    /** True, false, or null where the platform is too old to be asked. */
+    private fun supportsEffect(vibrator: Vibrator, effect: Int): Boolean? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return when (vibrator.areEffectsSupported(effect).firstOrNull()) {
+            Vibrator.VIBRATION_EFFECT_SUPPORT_YES -> true
+            Vibrator.VIBRATION_EFFECT_SUPPORT_NO -> false
+            else -> null
+        }
+    }
+
+    private fun supportName(value: Boolean?): String = when (value) {
+        true -> "supported"
+        false -> "not supported — falls back to a plain pulse"
+        null -> "unknown"
+    }
+
+    private fun intensityName(intensity: Int): String = when (intensity) {
+        0 -> "OFF — touch haptics are scaled to nothing"
+        1 -> "low"
+        2 -> "medium"
+        3 -> "high"
+        else -> "unreadable"
+    }
+
+    private fun audioAttributesFor(usage: Int): AudioAttributes = AudioAttributes.Builder()
+        .setUsage(
+            if (usage == VibrationAttributes.USAGE_ALARM) {
+                AudioAttributes.USAGE_ALARM
+            } else {
+                AudioAttributes.USAGE_ASSISTANCE_SONIFICATION
+            },
+        )
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .build()
+
     private companion object {
-        /**
-         * Long enough for the motor to actually move. The first attempt at this
-         * was 12ms, which on an LRA is a request the hardware answers by doing
-         * nothing perceptible at all.
-         */
-        const val LIGHT_MS = 20L
-        const val STRONG_MS = 40L
+        const val LIGHT_MS = 25L
+        const val STRONG_MS = 55L
 
-        /** Out of 255, for the light pulse; strong uses whatever the device calls default. */
-        const val LIGHT_AMPLITUDE = 120
+        /** The gap between the two knocks of a correction. */
+        const val CORRECTION_GAP_MS = 70L
 
-        /**
-         * Says "this is a response to a touch", which is how the system decides
-         * whether to play it at all.
-         */
-        val TOUCH_FEEDBACK: AudioAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
+        /** Out of 255. Both are high, because the system scales them down again. */
+        const val LIGHT_AMPLITUDE = 160
+        const val STRONG_AMPLITUDE = 255
     }
 }

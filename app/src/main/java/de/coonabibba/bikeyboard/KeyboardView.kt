@@ -1,13 +1,10 @@
 package de.coonabibba.bikeyboard
 
-import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Shader
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
@@ -18,7 +15,6 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
-import android.view.animation.DecelerateInterpolator
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -233,7 +229,6 @@ class KeyboardView @JvmOverloads constructor(
     private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.KEY_LONG_PRESS_MS)
     private val repeatDelayMs = KeyboardPrefs.timing(context, KeyboardPrefs.REPEAT_DELAY_MS)
     private val repeatIntervalMs = KeyboardPrefs.timing(context, KeyboardPrefs.REPEAT_INTERVAL_MS)
-    private val flashMs = KeyboardPrefs.timing(context, KeyboardPrefs.FLASH_MS)
 
     private val density = resources.displayMetrics.density
     private val keyGap = 3f * density
@@ -310,82 +305,24 @@ class KeyboardView @JvmOverloads constructor(
         super.onDetachedFromWindow()
         dismissLongPress()
         stopRepeat()
-        flash?.cancel()
-        flash = null
+        flash.cancel()
         activePointers.clear()
     }
 
     // -- the correction flash (D28) ------------------------------------------
 
-    private var flash: ValueAnimator? = null
-    private var flashProgress = 0f
-    private val flashPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-
     /**
-     * A wash of colour rising from the space bar to the top of the keys.
-     *
-     * The keyboard just changed a word without being asked, and the typist is
-     * looking at the text rather than at the keys — so the signal has to be
-     * something caught out of the corner of an eye. It starts at the space bar
-     * because that is the key that caused it, and it rises because that is the
-     * direction of the word it changed.
-     *
-     * Deliberately not a flash *of* the word: the strip is where words live,
-     * and colouring one there would say "here is a suggestion" when the point
-     * is that something already happened.
+     * See [CorrectionFlash]. Its shape is read once when the view is built, like
+     * every other setting here; the service rebuilds the view when it changes.
      */
-    fun flashCorrection() {
-        if (flashMs <= 0L) return
-        flash?.cancel()
-        flash = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = flashMs
-            interpolator = DecelerateInterpolator()
-            addUpdateListener {
-                flashProgress = it.animatedValue as Float
-                invalidate()
-            }
-            start()
-        }
-    }
+    private val flash = CorrectionFlash(FlashShape.fromPrefs(context), ::invalidate)
+
+    fun flashCorrection() = flash.start()
 
     private fun drawFlash(canvas: Canvas) {
-        val animator = flash ?: return
-        if (!animator.isRunning) {
-            flash = null
-            return
-        }
-
+        // From the top of the space bar, because that is the key that caused it.
         val spaceBar = placedKeys.firstOrNull { it.key.action == KeyAction.Space }
-        val from = spaceBar?.bounds?.top ?: height.toFloat()
-        // The wave front climbs from the space bar, and the whole thing holds
-        // at full strength for the first part of its travel before fading. The
-        // first version faded from the moment it started, which at 420ms meant
-        // it was already half gone by the time an eye moved to it.
-        val reach = from * flashProgress
-        val fade = if (flashProgress < FLASH_HOLD) {
-            1f
-        } else {
-            1f - (flashProgress - FLASH_HOLD) / (1f - FLASH_HOLD)
-        }
-        val alpha = (FLASH_ALPHA * fade).toInt().coerceIn(0, 255)
-        if (alpha == 0 || reach <= 0f) return
-
-        // Brightest at the front, trailing away behind it — a wave rather than
-        // a rectangle that appears and disappears.
-        flashPaint.shader = LinearGradient(
-            0f,
-            from,
-            0f,
-            from - reach,
-            intArrayOf(
-                Color.TRANSPARENT,
-                ColorUtils.setAlphaComponent(TRAIL_STRONG, alpha / 2),
-                ColorUtils.setAlphaComponent(TRAIL_STRONG, alpha),
-            ),
-            floatArrayOf(0f, 0.55f, 1f),
-            Shader.TileMode.CLAMP,
-        )
-        canvas.drawRect(0f, from - reach, width.toFloat(), from, flashPaint)
+        flash.draw(canvas, width.toFloat(), spaceBar?.bounds?.top ?: height.toFloat())
     }
 
     private fun placeKeys(width: Float, height: Float): List<PlacedKey> {
@@ -773,12 +710,6 @@ class KeyboardView @JvmOverloads constructor(
     private companion object {
         const val SLOP_DP = 8f
         const val MIN_POPUP_CELL_DP = 40f
-
-        /** How opaque the correction flash is at its brightest. */
-        const val FLASH_ALPHA = 230f
-
-        /** How much of the travel happens at full strength before it fades. */
-        const val FLASH_HOLD = 0.45f
 
         /** Trail entries beyond this depth are drawn as ordinary keys. */
         const val TRAIL_STEPS = 5

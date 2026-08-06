@@ -1,8 +1,9 @@
 # Bilingual Keyboard wordlist — English
 # Vocabulary and casing: SCOWL, via Debian wamerican 2020.12.07-4 (SCOWL licence, permissive)
 # Frequencies: hermitdave/FrequencyWords 2018 en_50k, from OpenSubtitles 2018 (CC BY-SA 4.0)
+# 74 contractions reconstructed from en_full apostrophe tokens; see build-wordlists.py
 # Built by scripts/build-wordlists.py; see PROVENANCE.md
-# 35481 entries, 672676579 corpus occurrences
+# 35555 entries, 675428754 corpus occurrences
 # Sorted by folded form. One entry per line: word<TAB>count
 a	14484562
 AA	1831
@@ -652,6 +653,7 @@ aiming	2864
 aimless	268
 aimlessly	517
 aims	1161
+ain't	129933
 air	100137
 airborne	2162
 airbrush	176
@@ -1271,12 +1273,15 @@ anxiety	5432
 anxious	9354
 anxiously	616
 any	767968
-anybody	112582
+anybody	108897
+anybody's	3685
 anyhow	6523
 anymore	146903
-anyone	228332
+anyone	220859
+anyone's	7473
 anyplace	1618
-anything	640206
+anything	619252
+anything's	20954
 anytime	13761
 anyway	166702
 anywhere	65981
@@ -1492,6 +1497,7 @@ arduous	489
 are	4203821
 area	62755
 areas	9709
+aren't	139088
 arena	3763
 arenas	319
 ares	1383
@@ -4507,7 +4513,8 @@ campuses	216
 Camry	220
 cams	780
 Camus	288
-can	3826118
+can	841219
+can't	2984899
 Canaan	413
 Canada	9533
 Canadian	4179
@@ -7114,7 +7121,9 @@ cough	5883
 coughed	558
 coughing	13093
 coughs	9145
-could	1111837
+could	1080512
+could've	31325
+couldn't	182059
 Coulter	451
 council	20941
 councillor	1114
@@ -8723,6 +8732,7 @@ diction	232
 dictionary	2567
 did	1742764
 diddle	518
+didn't	858653
 Dido	244
 die	214062
 died	138432
@@ -9312,6 +9322,7 @@ Dodson	173
 doe	4361
 doer	433
 does	478174
+doesn't	367474
 dog	125769
 dogfight	206
 dogged	348
@@ -9366,7 +9377,8 @@ Dominique	1709
 domino	955
 dominoes	552
 dominos	169
-don	4158644
+don	914328
+don't	3244316
 Dona	1478
 Donahue	657
 Donald	8151
@@ -10865,10 +10877,13 @@ everlasting	1977
 evermore	355
 Evert	237
 every	388520
-everybody	188532
+everybody	182361
+everybody's	6171
 everyday	12627
-everyone	246032
-everything	519795
+everyone	237979
+everyone's	8053
+everything	502782
+everything's	17013
 everywhere	45430
 Evian	247
 evict	713
@@ -14016,7 +14031,8 @@ gypsum	160
 gypsy	4682
 gyro	407
 gyroscope	166
-h	29291
+h	24553
+h'm	4738
 ha	107974
 Haas	527
 Haber	217
@@ -14039,6 +14055,7 @@ hacksaw	339
 had	1274537
 haddock	427
 Hades	1655
+hadn't	34751
 Hadrian	398
 haemorrhage	406
 haemorrhaging	175
@@ -14320,6 +14337,7 @@ has	1035310
 hash	2472
 hashish	423
 hashtag	806
+hasn't	54960
 hassle	2123
 hassled	302
 hassles	338
@@ -14363,7 +14381,8 @@ Hauptmann	315
 Havana	1859
 have	4764010
 Havel	177
-haven	258463
+haven	56826
+haven't	201637
 havens	245
 haves	176
 having	206106
@@ -14398,7 +14417,10 @@ hazing	510
 hazmat	578
 hazy	821
 HBO	724
-he	5516364
+he	5087461
+he'd	68481
+he'll	179871
+he's	180551
 head	266844
 headache	10008
 headaches	3044
@@ -14621,7 +14643,8 @@ herder	247
 herders	175
 herding	395
 herds	1063
-here	3138591
+here	3035865
+here's	102726
 hereabouts	286
 hereafter	1506
 hereby	4186
@@ -15148,7 +15171,8 @@ hovercraft	297
 hovered	180
 hovering	1384
 hovers	210
-how	2140365
+how	2070311
+how's	70054
 Howard	16500
 howdy	5267
 Howe	1096
@@ -15392,7 +15416,11 @@ hysterical	3868
 hysterically	746
 hysterics	362
 Hyundai	222
-I	27086011
+I	20721894
+I'd	336248
+I'll	883187
+I'm	4381568
+I've	763114
 IA	1550
 Iago	271
 Ian	12239
@@ -16659,6 +16687,7 @@ isle	1766
 isles	1025
 Ismael	311
 Ismail	614
+isn't	335097
 ISO	218
 isolate	2148
 isolated	5409
@@ -16676,7 +16705,10 @@ issued	4881
 issues	19278
 issuing	801
 Istanbul	2565
-it	13631703
+it	12571825
+it'd	169225
+it'll	444486
+it's	446167
 Italian	21021
 Italians	2905
 Italy	13890
@@ -18033,7 +18065,8 @@ lessons	11157
 lest	1633
 Lester	4912
 Lestrade	621
-let	1705262
+let	1649449
+let's	55813
 letdown	311
 lethal	4489
 lethargic	239
@@ -20706,6 +20739,7 @@ mustangs	407
 mustard	3665
 muster	1150
 mustered	208
+mustn't	13478
 musty	403
 mutant	4660
 mutants	1539
@@ -20966,6 +21000,7 @@ needles	3775
 needless	1458
 needlessly	544
 needlework	190
+needn't	4083
 needs	126398
 needy	2202
 nefarious	523
@@ -21237,7 +21272,8 @@ nobles	1734
 noblest	402
 nobly	260
 nobodies	380
-nobody	157014
+nobody	151875
+nobody's	5139
 nocturnal	786
 nod	2666
 nodded	659
@@ -21354,7 +21390,8 @@ noted	3786
 notepad	270
 notes	18614
 noteworthy	165
-nothing	622415
+nothing	602043
+nothing's	20372
 nothingness	765
 nothings	478
 notice	43315
@@ -21733,7 +21770,8 @@ Onassis	176
 once	269704
 oncology	414
 oncoming	366
-one	2263956
+one	2189857
+one's	74099
 oneness	192
 ones	79546
 oneself	2117
@@ -28100,6 +28138,7 @@ shames	208
 shaming	343
 shampoo	2737
 shamrock	410
+shan't	3716
 Shana	611
 Shane	8870
 shanghai	4288
@@ -28163,7 +28202,10 @@ shawl	1111
 Shawn	9321
 Shawna	317
 Shawnee	235
-she	2778359
+she	2562339
+she'd	34491
+she'll	90593
+she's	90936
 Shea	1267
 shear	341
 sheared	204
@@ -28353,9 +28395,11 @@ shot	144772
 shotgun	6226
 shotguns	539
 shots	21399
-should	823711
+should	800504
+should've	23207
 shoulder	17198
 shoulders	9683
+shouldn't	91299
 shout	13856
 shouted	3014
 shouting	35108
@@ -29298,15 +29342,18 @@ somber	1404
 sombre	356
 sombrero	349
 some	1166914
-somebody	171596
+somebody	165980
+somebody's	5616
 someday	18800
 somehow	34291
-someone	401162
+someone	388032
+someone's	13130
 someones	228
 someplace	12156
 somersault	375
 somersaults	211
-something	1038638
+something	1004643
+something's	33995
 somethings	545
 sometime	17142
 sometimes	128779
@@ -31723,7 +31770,8 @@ thankless	370
 thanks	395690
 thanksgiving	8229
 Thar	219
-that	10203742
+that	9869773
+that's	333969
 thatcher	1918
 thaw	963
 thawed	353
@@ -31766,7 +31814,8 @@ therapies	364
 therapist	6866
 therapists	595
 therapy	13278
-there	3148528
+there	3045476
+there's	103052
 thereabouts	277
 thereafter	817
 thereby	1145
@@ -31790,7 +31839,11 @@ Theseus	432
 thesis	2761
 thespian	172
 theta	1881
-they	3060204
+they	2528227
+they'd	37990
+they'll	99783
+they're	307987
+they've	86217
 thick	12143
 thickens	308
 thicker	1509
@@ -34398,6 +34451,7 @@ washing	8817
 Washington	20212
 washout	235
 washroom	1198
+wasn't	243590
 wasp	1249
 wasps	733
 waste	41240
@@ -34466,7 +34520,11 @@ ways	41675
 wayside	259
 wayward	945
 WC	197
-we	6755687
+we	5581297
+we'd	83866
+we'll	220281
+we're	679910
+we've	190333
 weak	27884
 weaken	1178
 weakened	1506
@@ -34596,6 +34654,7 @@ Wendy	9013
 went	321824
 wept	1358
 were	1315964
+weren't	68985
 werewolf	3785
 werewolves	1389
 Wesley	3697
@@ -34630,7 +34689,8 @@ wham	1232
 whammy	295
 wharf	1004
 Wharton	600
-what	6900164
+what	6674321
+what's	225843
 whatchamacallit	190
 whatever	180082
 whatnot	1432
@@ -34651,10 +34711,12 @@ wheeze	225
 wheezes	515
 wheezing	1797
 whelp	176
-when	1531731
+when	1481597
+when's	50134
 whence	767
 whenever	28151
-where	1322226
+where	1278949
+where's	43277
 whereabouts	5453
 whereas	4656
 whereby	518
@@ -34743,7 +34805,12 @@ whittling	169
 whiz	1509
 whizz	216
 whizzing	432
-who	1734491
+who	1376202
+who'd	21532
+who'll	56556
+who're	174564
+who's	56770
+who've	48867
 whoa	136564
 whoever	36535
 whole	257109
@@ -34770,7 +34837,8 @@ whorehouse	1174
 whores	5012
 whose	49808
 whosoever	358
-why	1722797
+why	1666410
+why's	56387
 whys	171
 WI	1995
 Wichita	696
@@ -35035,7 +35103,8 @@ womb	3650
 wombat	192
 women	150803
 womenfolk	213
-won	571621
+won	125678
+won't	445943
 wonder	82903
 wondered	11041
 wonderful	85617
@@ -35141,7 +35210,9 @@ worthless	7177
 worthwhile	2510
 worthy	10519
 Wotan	275
-would	1340070
+would	1302315
+would've	37755
+wouldn't	225009
 wound	21144
 wounded	13763
 wounding	300
@@ -35358,7 +35429,11 @@ York	65880
 Yorkshire	1470
 Yorktown	226
 Yosemite	699
-you	28787591
+you	23783237
+you'd	357372
+you'll	938670
+you're	2897258
+you've	811054
 young	194810
 younger	22961
 youngest	5033

@@ -42,8 +42,14 @@ class KeyboardView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
 
-    /** Called when a key is released. */
-    var onKey: ((Key) -> Unit)? = null
+    /**
+     * Called when a key is released, with where the press landed.
+     *
+     * The touch is what lets a correction tell a slip from a decision (D28);
+     * it is null for keys that do not produce a letter, and for a letter that
+     * arrived from a long-press popup rather than from the key itself.
+     */
+    var onKey: ((Key, TypedTouch?) -> Unit)? = null
 
     /**
      * Called when a long-press alternate is chosen, with the key it came from
@@ -64,6 +70,9 @@ class KeyboardView @JvmOverloads constructor(
     /** Called per word while swiping left on backspace. */
     var onDeleteWord: (() -> Unit)? = null
 
+    /** Called on every press, before anything is decided. For haptics (D29). */
+    var onPress: (() -> Unit)? = null
+
     /**
      * Called when shift is swiped upwards, which re-cases the word the cursor
      * is in (D23). Once per swipe: it edits text, so it wants a fixed and
@@ -78,6 +87,7 @@ class KeyboardView @JvmOverloads constructor(
             stopRepeat()
             activePointers.clear()
             placedKeys = placeKeys(width.toFloat(), height.toFloat())
+            geometry = buildGeometry(placedKeys)
             requestLayout()
             invalidate()
         }
@@ -158,9 +168,30 @@ class KeyboardView @JvmOverloads constructor(
         var stepAnchorX: Float,
         var fired: Boolean = false,
         var dragMode: DragMode = DragMode.NONE,
+        /** Where this press landed, and what else it nearly hit (D28). */
+        val touch: TypedTouch? = null,
     )
 
     private var placedKeys: List<PlacedKey> = emptyList()
+
+    /**
+     * Where the letter keys are, for judging what a touch nearly hit (D28).
+     * Rebuilt with the layout, since the symbol layer has different letters in
+     * different places.
+     */
+    private var geometry: KeyGeometry = KeyGeometry(emptyList(), 0f)
+
+    private fun buildGeometry(placed: List<PlacedKey>): KeyGeometry {
+        val letters = placed.mapNotNull { key ->
+            val text = (key.key.action as? KeyAction.Text)?.text ?: return@mapNotNull null
+            if (text.length != 1) return@mapNotNull null
+            KeyGeometry.Entry(text[0].lowercaseChar(), key.bounds.centerX(), key.bounds.centerY())
+        }
+        // The letter keys are all one width; the space bar and the modifiers are
+        // not letters and are not in here.
+        val width = placed.firstOrNull { it.key.action is KeyAction.Text }?.bounds?.width() ?: 0f
+        return KeyGeometry(letters, width)
+    }
 
     /**
      * Which key each active finger is on, by pointer id.
@@ -186,9 +217,18 @@ class KeyboardView @JvmOverloads constructor(
         override fun run() {
             val touch = activePointers[repeatPointer] ?: return
             onRepeat?.invoke(touch.placed.key)
-            handler.postDelayed(this, REPEAT_INTERVAL_MS)
+            handler.postDelayed(this, repeatIntervalMs)
         }
     }
+
+    /**
+     * Timings are settings (D30): a hold that feels deliberate to one thumb is
+     * a stutter to another. Read once, here — the service rebuilds the input
+     * view when they change.
+     */
+    private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.KEY_LONG_PRESS_MS)
+    private val repeatDelayMs = KeyboardPrefs.timing(context, KeyboardPrefs.REPEAT_DELAY_MS)
+    private val repeatIntervalMs = KeyboardPrefs.timing(context, KeyboardPrefs.REPEAT_INTERVAL_MS)
 
     private val density = resources.displayMetrics.density
     private val keyGap = 3f * density
@@ -240,6 +280,7 @@ class KeyboardView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         placedKeys = placeKeys(w.toFloat(), h.toFloat())
+        geometry = buildGeometry(placedKeys)
         excludeFromSystemGestures(w, h)
     }
 
@@ -264,7 +305,24 @@ class KeyboardView @JvmOverloads constructor(
         super.onDetachedFromWindow()
         dismissLongPress()
         stopRepeat()
+        flash.cancel()
         activePointers.clear()
+    }
+
+    // -- the correction flash (D28) ------------------------------------------
+
+    /**
+     * See [CorrectionFlash]. Its shape is read once when the view is built, like
+     * every other setting here; the service rebuilds the view when it changes.
+     */
+    private val flash = CorrectionFlash(FlashShape.fromPrefs(context), ::invalidate)
+
+    fun flashCorrection() = flash.start()
+
+    private fun drawFlash(canvas: Canvas) {
+        // From the top of the space bar, because that is the key that caused it.
+        val spaceBar = placedKeys.firstOrNull { it.key.action == KeyAction.Space }
+        flash.draw(canvas, width.toFloat(), spaceBar?.bounds?.top ?: height.toFloat())
     }
 
     private fun placeKeys(width: Float, height: Float): List<PlacedKey> {
@@ -359,6 +417,7 @@ class KeyboardView @JvmOverloads constructor(
         }
 
         drawAlternates(canvas)
+        drawFlash(canvas)
     }
 
     private fun drawAlternates(canvas: Canvas) {
@@ -394,7 +453,7 @@ class KeyboardView @JvmOverloads constructor(
         dismissLongPress()
         if (placed.key.longPress.isEmpty()) return
         longPressPointer = pointerId
-        handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+        handler.postDelayed(longPressRunnable, longPressMs)
     }
 
     private fun dismissLongPress() {
@@ -416,22 +475,22 @@ class KeyboardView @JvmOverloads constructor(
 
         val cellWidth = max(target.bounds.width(), MIN_POPUP_CELL_DP * density)
         val cellHeight = target.bounds.height()
-        val totalWidth = cellWidth * labels.size
 
-        // Anchor over the key, then clamp so the popup stays on screen.
-        var left = target.bounds.centerX() - totalWidth / 2f
-        left = left.coerceIn(keyGap, max(keyGap, width - totalWidth - keyGap))
+        // The first alternate goes under the finger and the rest extend one way
+        // from it; see [AlternatePopup] for why that is the whole design.
+        val lefts = AlternatePopup.cellLefts(
+            count = labels.size,
+            keyCentre = target.bounds.centerX(),
+            cellWidth = cellWidth,
+            viewWidth = width.toFloat(),
+            gap = keyGap,
+        )
         // Negative is allowed, up to the headroom the strip provides: a popup
         // that lands on the key you are holding is a popup you cannot read.
         val top = max(-popupHeadroom, target.bounds.top - cellHeight - keyGap)
 
         alternateBounds = labels.indices.map { index ->
-            RectF(
-                left + index * cellWidth,
-                top,
-                left + (index + 1) * cellWidth - keyGap,
-                top + cellHeight,
-            )
+            RectF(lefts[index], top, lefts[index] + cellWidth - keyGap, top + cellHeight)
         }
         alternateLabels = labels
         alternatesFor = target
@@ -439,6 +498,15 @@ class KeyboardView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * The cell under [x], or -1 beyond the row.
+     *
+     * Index order is not screen order: a popup on the right of the board runs
+     * leftwards (D36), so cell zero is the rightmost rectangle. Testing every
+     * rectangle rather than dividing by width is what makes that a non-issue —
+     * and it means a finger that drifts off the far side of cell zero keeps
+     * cell zero, which is the right answer for the alternate the key advertises.
+     */
     private fun alternateAt(x: Float): Int =
         alternateBounds.indexOfFirst { x >= it.left && x <= it.right + keyGap }
 
@@ -453,11 +521,14 @@ class KeyboardView @JvmOverloads constructor(
                 val x = event.getX(index)
                 val hit = keyAt(x, event.getY(index))
                 if (hit != null) {
+                    onPress?.invoke()
+                    val y = event.getY(index)
                     val touch = Touch(
                         placed = hit,
                         downX = x,
-                        downY = event.getY(index),
+                        downY = y,
                         stepAnchorX = x,
+                        touch = typedTouch(hit.key, x, y),
                     )
                     activePointers[pointerId] = touch
 
@@ -465,7 +536,7 @@ class KeyboardView @JvmOverloads constructor(
                         // Repeating keys act on press, so the first delete lands
                         // immediately rather than waiting for the release.
                         touch.fired = true
-                        onKey?.invoke(hit.key)
+                        onKey?.invoke(hit.key, null)
                         startRepeat(pointerId)
                     } else if (activePointers.size == 1) {
                         scheduleLongPress(hit, pointerId)
@@ -498,7 +569,7 @@ class KeyboardView @JvmOverloads constructor(
                     // be under the release point — a tap that drifts off the
                     // keyboard entirely must still type what it started on.
                     if (released != null && !released.fired) {
-                        onKey?.invoke(released.placed.key)
+                        onKey?.invoke(released.placed.key, released.touch)
                     }
                 }
             }
@@ -613,12 +684,25 @@ class KeyboardView @JvmOverloads constructor(
     private fun startRepeat(pointerId: Int) {
         stopRepeat()
         repeatPointer = pointerId
-        handler.postDelayed(repeatRunnable, REPEAT_INITIAL_MS)
+        handler.postDelayed(repeatRunnable, repeatDelayMs)
     }
 
     private fun stopRepeat() {
         handler.removeCallbacks(repeatRunnable)
         repeatPointer = MotionEvent.INVALID_POINTER_ID
+    }
+
+    /**
+     * What a press on [key] at ([x], [y]) says, for a key that types a letter.
+     *
+     * Null for everything else: a space bar has no near misses worth recording,
+     * and neither does a key that produces two characters.
+     */
+    private fun typedTouch(key: Key, x: Float, y: Float): TypedTouch? {
+        val text = (key.action as? KeyAction.Text)?.text ?: return null
+        if (text.length != 1) return null
+        val char = text[0].lowercaseChar()
+        return TypedTouch(char, geometry.alternatives(x, y, char))
     }
 
     private fun keyAt(x: Float, y: Float): PlacedKey? =
@@ -633,21 +717,11 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private companion object {
-        /**
-         * Shorter than the platform's 500ms default. Per D5 this is a key you
-         * hit routinely when typing German, not a rare gesture, and the stock
-         * delay is noticeably too slow for it.
-         */
-        const val LONG_PRESS_MS = 280L
         const val SLOP_DP = 8f
         const val MIN_POPUP_CELL_DP = 40f
 
         /** Trail entries beyond this depth are drawn as ordinary keys. */
         const val TRAIL_STEPS = 5
-
-        /** Auto-repeat: long enough that a normal tap never triggers it. */
-        const val REPEAT_INITIAL_MS = 400L
-        const val REPEAT_INTERVAL_MS = 55L
 
         /** Sideways travel on the space bar before it becomes cursor steering. */
         const val CURSOR_DRAG_START_DP = 10f

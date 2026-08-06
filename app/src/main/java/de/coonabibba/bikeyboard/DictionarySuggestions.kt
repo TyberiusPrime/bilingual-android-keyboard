@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import kotlin.math.abs
+import kotlin.math.exp
 
 /**
  * Suggestions from the shipped wordlists and the personal store.
@@ -24,6 +25,15 @@ import kotlin.math.abs
 class DictionarySuggestions(
     private val lexicons: List<Lexicon>,
     private val personal: PersonalStore,
+    /**
+     * How sharply confidence falls away with the cost of the slips (D34).
+     *
+     * A setting, so `var` — the dictionaries are read once per service and it
+     * would be absurd to reload thirty-five thousand words because a slider
+     * moved. Volatile because the settings screen writes it and the typing
+     * thread reads it.
+     */
+    @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
 ) : SuggestionSource {
 
     private class Candidate(val word: String, val weight: Float, val language: Language?)
@@ -156,6 +166,119 @@ class DictionarySuggestions(
         personal.knows(word) || lexicons.any { it.knows(word) }
 
     /**
+     * What to replace a finished word with, and how sure that is (D28).
+     *
+     * Every candidate is scored as *how likely is it that this word was meant*:
+     * how common the word is, discounted by how implausible the slips would
+     * have to be. The discount is exponential in the spatial cost
+     * ([SpatialEditDistance]), so a letter the thumb was already touching costs
+     * almost nothing and a letter on the other side of the keyboard is out of
+     * reach however common the word.
+     *
+     * The confidence is that score as a share of everything on the table,
+     * including **the possibility that the word was typed correctly and is
+     * simply not in any dictionary** — a name, a codeword, jargon. That prior
+     * is what keeps the keyboard off words it has never heard of, and it is why
+     * the number can be compared against a threshold at all.
+     *
+     * Two hard rules sit in front of the arithmetic:
+     *
+     * - **A word spelled exactly right is never corrected**, even if it is rare
+     *   and even if a far more common word is one slip away. Under D2 a word
+     *   valid in the other language is valid, full stop; that is the failure
+     *   mode most likely to make this feature the thing it was meant to fix.
+     * - **No touches, no correction.** Without knowing where the thumb landed
+     *   there is no way to tell a slip from a decision, and a word the cursor
+     *   jumped back to (D23) was not typed here at all.
+     */
+    override fun correct(typed: String, touches: List<TypedTouch>): Correction? {
+        if (typed.length < MIN_AUTO_CORRECT_LENGTH) return null
+        if (touches.size != typed.length) return null
+        if (knowsExactly(typed)) return null
+
+        val folded = Folding.fold(typed)
+        if (folded.isEmpty()) return null
+
+        var best: Candidate? = null
+        var bestScore = 0f
+        // The typed word standing as it is, which is what the correction has to
+        // beat rather than merely lead.
+        var mass = UNKNOWN_WORD_PRIOR
+
+        val buckets = firstLetters(folded, touches.first())
+        lexicons.forEach { lexicon ->
+            buckets.forEach { bucket ->
+                for (index in lexicon.completions(bucket)) {
+                    val word = lexicon.wordAt(index)
+                    if (abs(word.length - typed.length) > MAX_SLIP_COST) continue
+                    val cost = SpatialEditDistance.between(touches, word, MAX_SLIP_COST)
+                    if (cost > MAX_SLIP_COST) continue
+                    val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
+                    mass += score
+                    if (score > bestScore) {
+                        bestScore = score
+                        best = Candidate(word, score, lexicon.language)
+                    }
+                }
+            }
+        }
+
+        val winner = best ?: return null
+        if (winner.word.equals(typed, ignoreCase = true)) return null
+        return Correction(
+            text = applyTypedCase(winner.word, typed),
+            original = typed,
+            confidence = bestScore / mass,
+            language = winner.language,
+        )
+    }
+
+    /**
+     * Which first-letter buckets to search for a correction (D35).
+     *
+     * The scan is bucketed by first letter, which for a long time meant a
+     * mistyped first letter was simply out of reach: `xontinue` found nothing at
+     * all, because nothing starting with `x` is within a slip of it. Scanning
+     * the whole dictionary instead is the obvious fix and the wrong one — it is
+     * twenty-five times the work, on every keystroke (D33).
+     *
+     * Two extra buckets are enough for nearly all of it, and both come from
+     * evidence already in hand:
+     *
+     * - **Where the thumb actually was.** `x` and `c` are adjacent, so the touch
+     *   on `xontinue` already carries `c` as a near miss. Only the closest
+     *   neighbours are worth following: a first letter a long way off scores so
+     *   badly that it could never clear the threshold, so scanning its bucket is
+     *   work spent to produce a candidate that will be refused.
+     * - **The second letter typed.** `hte` is not a mistyped `t`, it is a
+     *   transposed one, and the intended first letter is sitting right there.
+     *
+     * At most [MAX_FIRST_LETTERS], so the cost has a ceiling no matter how
+     * ambiguous the touch was.
+     */
+    private fun firstLetters(folded: String, first: TypedTouch): Set<String> {
+        val letters = LinkedHashSet<String>()
+        letters += folded.substring(0, 1)
+        // A transposed first pair. Cheap to include and it is the single
+        // commonest way the first letter comes out wrong.
+        if (folded.length > 1) letters += folded.substring(1, 2)
+
+        first.alternatives.entries
+            .filter { it.value <= FIRST_LETTER_REACH }
+            .sortedBy { it.value }
+            .forEach { (char, _) ->
+                if (letters.size >= MAX_FIRST_LETTERS) return@forEach
+                val letter = Folding.foldChar(char)
+                if (letter.isLetter()) letters += letter.toString()
+            }
+        return letters
+    }
+
+    /** Whether any source has this exact spelling — see [Lexicon.knowsExactly]. */
+    private fun knowsExactly(word: String): Boolean =
+        personal.knowsExactly(word) || lexicons.any { it.knowsExactly(word) }
+
+    /**
      * The typist decides the first letter's case; the wordlist decides the rest.
      *
      * Only the first letter, and only upwards: a word stored capitalised stays
@@ -193,6 +316,53 @@ class DictionarySuggestions(
 
         /** From here up, two edits are allowed. Below it, one. */
         const val LONG_WORD = 6
+
+        /**
+         * Shorter than this and the keyboard has no business replacing
+         * anything: half the two- and three-letter strings are one slip from
+         * several words, and the typing is over before the reading would be.
+         */
+        const val MIN_AUTO_CORRECT_LENGTH = 3
+
+        /**
+         * The most implausible a set of slips may be and still be considered.
+         * A little over one full-price substitution, so two cheap ones — a
+         * neighbouring key and a skipped umlaut — stay in reach.
+         */
+        const val MAX_SLIP_COST = 1.6f
+
+        /**
+         * How fast confidence falls away with the cost of the slips, when
+         * nobody has said otherwise. Tuned so that a neighbouring-key slip on a
+         * common word clears a 90% threshold and a full-price substitution does
+         * not — but see [confidenceDecay]: it is a slider now, because where
+         * exactly that boundary should sit is a matter of how one thumb moves.
+         */
+        const val DEFAULT_CONFIDENCE_DECAY = 7f
+
+        /**
+         * The standing chance that a word nobody knows was meant exactly as
+         * typed: a name, a codeword, a piece of jargon. Everything the
+         * threshold does, it does relative to this number, so it is the most
+         * load-bearing guess in the file — and under D8, which forbids learning
+         * from anything but an explicit add, being wrong about it is expensive.
+         */
+        const val UNKNOWN_WORD_PRIOR = 1e-6f
+
+        /**
+         * How near a neighbour of the first press has to be for its bucket to
+         * be worth scanning (D35).
+         *
+         * Half a key width. Beyond that the substitution is dear enough that
+         * the candidate loses to the unknown-word prior anyway — measured:
+         * `zomorrow` reaches `tomorrow` and is scored at 0.40, well under any
+         * threshold worth having. Refusing to look is the same answer for a
+         * fraction of the work.
+         */
+        const val FIRST_LETTER_REACH = 0.5f
+
+        /** A ceiling on the scan, however ambiguous the first touch was. */
+        const val MAX_FIRST_LETTERS = 4
 
         /**
          * What a correction is worth against a word that was typed correctly,

@@ -85,6 +85,12 @@ class PersonalStore(private val file: File) {
         return folded.isNotEmpty() && words.any { Folding.fold(it) == folded }
     }
 
+    /** Whether the store has [word] spelled exactly that way — see [Lexicon.knowsExactly]. */
+    fun knowsExactly(word: CharSequence): Boolean {
+        val lowered = word.toString().lowercase()
+        return words.any { it.lowercase() == lowered }
+    }
+
     /** Every stored word starting with [foldedPrefix], ignoring case and accents. */
     fun completions(foldedPrefix: String): List<String> {
         if (foldedPrefix.isEmpty()) return emptyList()

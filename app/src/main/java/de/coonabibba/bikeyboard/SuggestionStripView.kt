@@ -25,10 +25,10 @@ import kotlin.math.min
  * advance for exactly this.
  *
  * Three things are drawn per slot, and each of them means something: the word,
- * a wash of colour saying which language it came from (D4), and purple text
- * when the candidate holds most of the matching mass. The last of those is
- * appearance only — D3's auto-replace threshold does not exist yet, and this is
- * not it.
+ * a wash of colour saying which language it came from (D4), and purple text on
+ * **the word that pressing space would substitute** (D33). The last of those
+ * started as appearance only, back when there was no auto-replace to speak for;
+ * it is now the same decision the space bar makes, asked one keystroke early.
  *
  * A long-press popup from the top row of keys is drawn *over* this view. The
  * keyboard view is the later child of a container with child clipping switched
@@ -45,6 +45,9 @@ class SuggestionStripView @JvmOverloads constructor(
      * press joins it to whatever is typed next (D26).
      */
     var onPick: ((StripEntry, PickStyle) -> Unit)? = null
+
+    /** Called when a slot is pressed, before anything is decided. For haptics (D29). */
+    var onPress: (() -> Unit)? = null
 
     /**
      * What each slot holds, `null` for an empty one.
@@ -91,6 +94,7 @@ class SuggestionStripView @JvmOverloads constructor(
      * [BilingualKeyboardService.onStartInputView].
      */
     private val stripHeight = KeyboardPrefs.stripHeightPx(context)
+    private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.SUGGESTION_LONG_PRESS_MS)
 
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
     private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DIVIDER }
@@ -168,12 +172,11 @@ class SuggestionStripView @JvmOverloads constructor(
             textPaint.color = when {
                 // Not a word to insert, so it does not look like one.
                 entry is StripEntry.AddWord -> ADD_WORD_FG
-                // A candidate holding most of the matching mass. Purple is the
-                // keyboard's "this came from the machine" colour, the same one
-                // the keypress trail uses.
-                entry is StripEntry.Word && entry.suggestion.confidence >= HIGH_CONFIDENCE ->
-                    CONFIDENT_FG
-
+                // The word space would substitute, if space were pressed now
+                // (D33). Purple is the keyboard's "this came from the machine"
+                // colour, the same one the keypress trail and the correction
+                // flash use — and here it is a warning as much as an offer.
+                entry is StripEntry.Word && entry.replaces -> CONFIDENT_FG
                 else -> Color.WHITE
             }
 
@@ -196,8 +199,9 @@ class SuggestionStripView @JvmOverloads constructor(
                 pressedSlot = if (slot >= 0 && slots[slot] != null) slot else -1
                 longPressFired = false
                 if (pressedSlot >= 0) {
+                    onPress?.invoke()
                     invalidate()
-                    handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    handler.postDelayed(longPressRunnable, longPressMs)
                 }
             }
 
@@ -232,27 +236,11 @@ class SuggestionStripView @JvmOverloads constructor(
     }
 
     private companion object {
-        /**
-         * Longer than a key's long press (D5 shortened that one, because it is
-         * on the path of ordinary typing). Nothing here is, and holding a
-         * suggestion by accident inserts a word.
-         */
-        const val LONG_PRESS_MS = 400L
-
         const val DIVIDER_WIDTH_DP = 1f
         const val SLOT_PADDING_DP = 8f
 
         /** Ceiling on the text, as a fraction of the band, so it cannot clip. */
         const val MAX_TEXT_FRACTION = 0.62f
-
-        /**
-         * Where a candidate stops being one option among several and starts
-         * looking like the answer. Purely how it is drawn — **not** D3's
-         * auto-replace threshold, which does not exist yet and will be a
-         * calibrated number rather than this unigram share. A guess, to be
-         * moved once there is a week of typing to move it against.
-         */
-        const val HIGH_CONFIDENCE = 0.5f
 
         /**
          * How far from the keyboard surface towards a language's hue. Slight,

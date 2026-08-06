@@ -39,16 +39,40 @@ class BilingualKeyboardService : InputMethodService() {
     private var capsLock = false
 
     /** Double-tapping shift latches it; see [DoubleTap]. */
-    private val shiftTaps = DoubleTap()
+    private var shiftTaps = DoubleTap()
 
     /**
-     * The suggestion text size the current input view was built for. The views
-     * read the setting once, so a change means building them again.
+     * Which revision of the settings the current input view was built for. The
+     * views bake sizes and timings in when they are made, so a change means
+     * making them again (D30).
      */
-    private var viewsBuiltForTextSp = 0
+    private var viewsBuiltForRevision = -1
+
+    /**
+     * Null until the input view is built, and deliberately not a placeholder
+     * instance.
+     *
+     * A `Service` field initialiser runs before `attachBaseContext`, so anything
+     * built here is handed a context that cannot answer questions yet. A
+     * placeholder object that merely *happens* not to ask any is one refactor
+     * away from crashing the keyboard on launch — which is exactly how it
+     * crashed once.
+     */
+    private var haptics: Haptics? = null
+    private var autoCorrectEnabled = KeyboardPrefs.DEFAULT_AUTO_CORRECT
+    private var autoCorrectConfidence = KeyboardPrefs.DEFAULT_AUTO_CORRECT_CONFIDENCE / 100f
 
     override fun onCreateInputView(): View {
-        viewsBuiltForTextSp = KeyboardPrefs.suggestionTextSp(this)
+        viewsBuiltForRevision = KeyboardPrefs.revision(this)
+        haptics = Haptics.fromPrefs(this)
+        autoCorrectEnabled = KeyboardPrefs.autoCorrect(this)
+        autoCorrectConfidence = KeyboardPrefs.autoCorrectConfidence(this)
+        // The dictionaries are read once per service, so the falloff is pushed
+        // into the scorer rather than being a reason to reload them (D34).
+        applyFalloff()
+        spaceGesture = SpaceGesture(KeyboardPrefs.timing(this, KeyboardPrefs.DOUBLE_TAP_MS))
+        shiftTaps = DoubleTap(KeyboardPrefs.timing(this, KeyboardPrefs.DOUBLE_TAP_MS))
+
         keyboardView = KeyboardView(this).apply {
             layout = Layouts.forLayer(layer)
             onKey = ::handleKey
@@ -57,8 +81,12 @@ class BilingualKeyboardService : InputMethodService() {
             onCursorStep = ::moveCursor
             onDeleteWord = ::handleDeleteWord
             onShiftSwipeUp = ::cycleWordCase
+            onPress = { haptics?.keyPress(this) }
         }
-        suggestionStrip = SuggestionStripView(this).apply { onPick = ::pickEntry }
+        suggestionStrip = SuggestionStripView(this).apply {
+            onPick = ::pickEntry
+            onPress = { haptics?.keyPress(this) }
+        }
 
         // Strip above keys. Child clipping is off so that a long-press popup on
         // the top row, drawn by the keyboard view at a negative y, overhangs
@@ -128,10 +156,10 @@ class BilingualKeyboardService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        // The size of the suggestions is a setting, and the views bake it in
-        // when they are built. Focusing a field is the natural moment to notice
-        // it has been changed.
-        if (viewsBuiltForTextSp != KeyboardPrefs.suggestionTextSp(this)) {
+        // Sizes and timings are settings, and the views bake them in when they
+        // are built. Focusing a field is the natural moment to notice they have
+        // been changed.
+        if (viewsBuiltForRevision != KeyboardPrefs.revision(this)) {
             setInputView(onCreateInputView())
         }
         applyNavigationBarInset()
@@ -159,6 +187,8 @@ class BilingualKeyboardService : InputMethodService() {
         // where the cursor is, is not that.
         word.reset(known = info.initialSelStart == 0)
         spaceGesture.otherInput()
+        pendingUndo = null
+        reverted = null
         // The launcher screen can take words back out of the store while this
         // service is alive. A stat per focus, and a read only when the file
         // really did change under us.
@@ -166,28 +196,38 @@ class BilingualKeyboardService : InputMethodService() {
         refreshSuggestions()
     }
 
-    private fun handleKey(key: Key) {
+    private fun handleKey(key: Key, touch: TypedTouch?) {
         val ic = currentInputConnection ?: return
         when (val action = key.action) {
             is KeyAction.Text -> {
                 val text = if (shifted) action.text.uppercase() else action.text
-                ic.commitText(text, 1)
-                noteInsertion(key, alternate = false, text = text)
-                consumeShift()
+                commitTyped(ic, key, text, alternate = false, touch = touch)
             }
 
             KeyAction.Space -> {
+                // The word is finished, which is the only moment the keyboard
+                // knows enough to replace it (D28). Before the space, so the
+                // space lands after whatever the word turned out to be.
+                val corrected = autoCorrect(ic)
                 if (spaceGesture.tap(SystemClock.uptimeMillis())) {
                     sentenceEnd(ic, key)
                 } else {
                     insertSpace(ic, key)
                 }
+                // After the space, not before: inserting one is ordinary input
+                // and ordinary input is what closes this window. The space is
+                // part of the same gesture, so it does not count.
+                pendingUndo = corrected
             }
 
             // No double tap here: two quick taps are what you do when you want
             // two letters gone, so it fired constantly by accident. Deleting a
             // word is a leftward swipe instead (D20).
-            KeyAction.Backspace -> deleteOne(ic)
+            KeyAction.Backspace -> {
+                // The one keystroke where backspace is not a deletion (D14).
+                val undo = pendingUndo
+                if (undo == null || !undoCorrection(ic, undo)) deleteOne(ic)
+            }
 
             KeyAction.Enter -> {
                 val action1 = currentInputEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
@@ -237,10 +277,64 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private fun handleAlternate(key: Key, text: String) {
         val ic = currentInputConnection ?: return
-        ic.commitText(text, 1)
-        noteInsertion(key, alternate = true, text = text)
-        consumeShift()
+        // A long-press alternate came from a popup rather than from a key, so
+        // there is no near-miss to record for it.
+        commitTyped(ic, key, text, alternate = true, touch = null)
     }
+
+    /**
+     * Puts typed text into the field, taking back an auto-inserted space first
+     * if the text is punctuation that should hug the word before it (D31).
+     *
+     * The two callers are a tap and a long-press alternate, and both need the
+     * retraction: `,` is a long-press on `b` and `'` one on `v`, so the case the
+     * whole thing exists for arrives through the second one.
+     */
+    private fun commitTyped(
+        ic: InputConnection,
+        key: Key,
+        text: String,
+        alternate: Boolean,
+        touch: TypedTouch?,
+    ) {
+        val retract = retractsAutoSpace(ic, text)
+        // One batch, so the field sees a replacement rather than a deletion
+        // followed by an insertion — and so the cursor arrives once, where
+        // expectedCursor says it should.
+        if (retract) {
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(1, 0)
+            if (expectedCursor > 0) expectedCursor -= 1
+        }
+        ic.commitText(text, 1)
+        if (retract) ic.endBatchEdit()
+        noteInsertion(key, alternate, text, touch)
+        consumeShift()
+
+        if (retract) {
+            // The apostrophe is a word character (D27), so retracting the space
+            // in front of one does not end a word — it joins the punctuation to
+            // the accepted suggestion, and `let` + `'` is now the single word
+            // `let'`. The tracked word was emptied when the suggestion was
+            // accepted and cannot say that, so this is one of the cursor-jump
+            // cases: ask the field (D23). Rare enough to pay an IPC round trip.
+            recoverWordAtCursor()
+            refreshSuggestions()
+        }
+    }
+
+    /**
+     * Whether the space in front of the cursor was put there by accepting a
+     * suggestion and should give way to [text].
+     *
+     * The field is asked what is actually there rather than trusted to still
+     * hold what we committed, because between the two the app may have done
+     * anything at all.
+     */
+    private fun retractsAutoSpace(ic: InputConnection, text: String): Boolean =
+        spaceGesture.afterAcceptedSuggestion &&
+            TextEdits.hugsPreviousWord(text) &&
+            ic.getTextBeforeCursor(1, 0)?.toString() == " "
 
     /**
      * Spends a one-shot shift. A latched one is not spent — that is the whole
@@ -269,7 +363,7 @@ class BilingualKeyboardService : InputMethodService() {
 
     private fun insertSpace(ic: InputConnection, key: Key) {
         ic.commitText(" ", 1)
-        noteInsertion(key, alternate = false, text = " ")
+        noteInsertion(key, alternate = false, text = " ", touch = null)
     }
 
     /**
@@ -333,6 +427,8 @@ class BilingualKeyboardService : InputMethodService() {
         }
         popTrail()
         spaceGesture.otherInput()
+        pendingUndo = null
+        reverted = null
         refreshSuggestions()
     }
 
@@ -425,6 +521,120 @@ class BilingualKeyboardService : InputMethodService() {
         word.adopt(TextEdits.wordAtCursor(before, after))
     }
 
+    // -- auto-correction (D3, D28) -------------------------------------------
+
+    /**
+     * What was replaced, and with what, while backspace still means "no".
+     *
+     * Null unless a correction was applied by the immediately preceding
+     * keystroke. D14 is emphatic about the window being unambiguous: a
+     * backspace that sometimes deletes a character and sometimes restores a
+     * word is worse than either, so anything at all that is not that backspace
+     * closes it.
+     */
+    private var pendingUndo: Correction? = null
+
+    /**
+     * A word that was just put back by an undo, offered to the personal store.
+     *
+     * This is D14's "keep this word": the keyboard was wrong, the typist said
+     * so, and under D8 the add-word tap is the only way that ever teaches it
+     * anything.
+     */
+    private var reverted: String? = null
+
+    /**
+     * What pressing space would substitute, recomputed after every keystroke.
+     *
+     * One decision, in one place, read by two things: the strip paints it purple
+     * and the space bar applies it (D33). They used to be separate calculations
+     * against separate thresholds, which meant the purple was an *impression* of
+     * what the keyboard would do rather than a statement of it — and the only
+     * way to find out which was right was to press space.
+     */
+    private var pendingCorrection: Correction? = null
+
+    /**
+     * Asks the corrector what it would do with the word as it stands.
+     *
+     * All the gates live here rather than at the point of use, so that the
+     * answer shown in the strip and the answer acted on by space cannot come
+     * apart. Null means space will leave the word alone.
+     */
+    private fun computeCorrection(): Correction? {
+        if (!autoCorrectEnabled || !suggestionsAllowed || !word.known) return null
+        val typed = word.text.toString()
+        if (typed.isEmpty() || word.suffix.isNotEmpty()) return null
+        val touches = word.touches
+        if (touches.isEmpty()) return null
+
+        val correction = suggestionSource.correct(typed, touches) ?: return null
+        return correction.takeIf { it.confidence >= autoCorrectConfidence }
+    }
+
+    /**
+     * Replaces the word in front of the cursor if the keyboard is sure enough
+     * (D28). Called when space is pressed, which is the moment the word is
+     * finished and the last moment it is cheap to change.
+     *
+     * Applies the decision already made and already shown in the strip; it does
+     * not make a new one.
+     */
+    private fun autoCorrect(ic: InputConnection): Correction? {
+        val correction = pendingCorrection ?: return null
+        val typed = correction.original
+
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(typed.length, 0)
+        ic.commitText(correction.text, 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += correction.text.length - typed.length
+        word.reset(known = true)
+        word.insert(correction.text)
+        // The trail describes keys that were pressed, and these letters were
+        // not (D19).
+        clearTrail()
+
+        // Both of these exist because the typist is looking at the text and not
+        // at the keyboard: the flash is caught out of the corner of an eye, and
+        // the double tick is felt without looking at all (D28, D29).
+        keyboardView.flashCorrection()
+        haptics?.correction()
+        return correction
+    }
+
+    /**
+     * Backspace immediately after a correction puts back what was typed (D14).
+     *
+     * Exactly what was typed, and the space with it, so the text is where it
+     * would have been had the keyboard kept quiet — and the strip then offers
+     * to remember the word, which is the only way it learns anything (D8).
+     */
+    private fun undoCorrection(ic: InputConnection, correction: Correction): Boolean {
+        val corrected = correction.text
+        // The space that followed the correction is part of what gets undone;
+        // without it the cursor would end up inside the restored word.
+        val before = ic.getTextBeforeCursor(corrected.length + 1, 0) ?: return false
+        if (!before.endsWith("$corrected ")) return false
+
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(corrected.length + 1, 0)
+        ic.commitText("${correction.original} ", 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) {
+            expectedCursor += correction.original.length - corrected.length
+        }
+        pendingUndo = null
+        reverted = correction.original
+        word.reset(known = true)
+        clearTrail()
+        spaceGesture.otherInput()
+        refreshSuggestions()
+        return true
+    }
+
     /** Space-bar drag. One step per character, in either direction. */
     private fun moveCursor(direction: Int) {
         val ic = currentInputConnection ?: return
@@ -456,7 +666,7 @@ class BilingualKeyboardService : InputMethodService() {
      * quick tap, or the first tap after a suggestion put a space there. See
      * [SpaceGesture].
      */
-    private val spaceGesture = SpaceGesture()
+    private var spaceGesture = SpaceGesture()
 
     // -- recent keypress trail ----------------------------------------------
 
@@ -470,12 +680,16 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private val trail = ArrayDeque<TrailEntry>()
 
-    private fun noteInsertion(key: Key, alternate: Boolean, text: String) {
+    private fun noteInsertion(key: Key, alternate: Boolean, text: String, touch: TypedTouch?) {
         trail.addFirst(TrailEntry(key, alternate))
         while (trail.size > TRAIL_CAPACITY) trail.removeLast()
         if (expectedCursor >= 0) expectedCursor += text.length
         publishTrail()
-        word.insert(text)
+        word.insert(text, touch)
+        // Any ordinary input closes the window in which backspace means "no,
+        // put that back" (D14).
+        if (text != " ") reverted = null
+        pendingUndo = null
         // Anything that is not a space breaks up a run of them. The space bar's
         // own taps are recorded by the gesture itself, before it gets here.
         if (text != " ") spaceGesture.otherInput()
@@ -542,7 +756,10 @@ class BilingualKeyboardService : InputMethodService() {
                 personal = personalStore,
             )
             suggestionSource = source
-            mainHandler.post(::refreshSuggestions)
+            mainHandler.post {
+                applyFalloff()
+                refreshSuggestions()
+            }
         }
     }
 
@@ -553,7 +770,21 @@ class BilingualKeyboardService : InputMethodService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * Hands the current falloff setting to the scorer (D34).
+     *
+     * Called both when the input view is rebuilt and when the dictionaries
+     * finish loading, because either can be the later of the two.
+     */
+    private fun applyFalloff() {
+        (suggestionSource as? DictionarySuggestions)?.confidenceDecay =
+            KeyboardPrefs.confidenceFalloff(this)
+    }
+
     private fun refreshSuggestions() {
+        // Before the view guard, because the space bar reads this whether or not
+        // there is a strip to draw it on.
+        pendingCorrection = computeCorrection()
         if (!::suggestionStrip.isInitialized) return
         if (!suggestionsAllowed || !word.known) {
             suggestionStrip.slots = emptyList()
@@ -561,7 +792,17 @@ class BilingualKeyboardService : InputMethodService() {
         }
 
         val source = suggestionSource
-        val candidates = source.suggest(word.full).map { StripEntry.Word(it) }
+        val justReverted = reverted
+        if (justReverted != null && learningAllowed && !source.knows(justReverted)) {
+            // D14: the moment after a correction is taken back is exactly when
+            // the word is worth remembering, and the strip is where the offer
+            // goes.
+            suggestionStrip.slots = List(SuggestionSlots.CAPACITY - 1) { null } +
+                StripEntry.AddWord(justReverted)
+            return
+        }
+
+        val candidates = StripEntry.mark(source.suggest(word.full), pendingCorrection)
         val offer = addWordOffer(source, candidates)
 
         // The add-word offer keeps the rightmost slot to itself, in the same

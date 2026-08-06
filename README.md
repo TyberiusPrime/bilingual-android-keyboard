@@ -3,13 +3,13 @@
 An Android keyboard that is aware of two languages at once, instead of making
 you switch between them.
 
-**Status: it types, it suggests, and it corrects when asked.** German and
-English wordlists are queried together on every keystroke, so a suggestion from
-either language can win a slot mid-sentence without anything switching; typos
-are offered corrections, and tapping back into an earlier word picks it up
-again. What is *not* written is auto-correction — nothing is ever replaced
-without a tap, because the confidence behind it is not yet worth acting on. The
-design is being worked out in [`docs/design.md`](docs/design.md).
+**Status: it types, it suggests, and it corrects.** German and English wordlists
+are queried together on every keystroke, so a suggestion from either language
+can win a slot mid-sentence without anything switching. On space, a word is
+replaced outright when the keyboard is sure — and it is only sure when *where
+your thumb landed* says the letters were a slip rather than a decision. Backspace
+puts it back. The design is being worked out in
+[`docs/design.md`](docs/design.md).
 
 ## What is here
 
@@ -21,7 +21,9 @@ design is being worked out in [`docs/design.md`](docs/design.md).
 | `app/src/main/java/.../SuggestionStripView.kt` | the suggestion strip |
 | `app/src/main/java/.../DictionarySuggestions.kt` | both languages, one ranking |
 | `app/src/main/java/.../SetupActivity.kt` | setup, and the learned-word list |
-| `app/src/main/java/.../SettingsActivity.kt` | settings — suggestion text size |
+| `app/src/main/java/.../TouchModel.kt` | what each tap nearly hit |
+| `app/src/main/java/.../SpatialEditDistance.kt` | distance in slips, not edits |
+| `app/src/main/java/.../SettingsActivity.kt` | sizes, timings, correction, vibration |
 | `app/src/main/assets/wordlists/` | the wordlists, and where they came from |
 | `scripts/build-wordlists.py` | how the wordlists are regenerated |
 | `app/src/main/res/xml/method.xml` | one subtype, deliberately |

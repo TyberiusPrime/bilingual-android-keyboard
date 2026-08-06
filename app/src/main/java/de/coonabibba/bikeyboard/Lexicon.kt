@@ -60,6 +60,28 @@ class Lexicon(
     }
 
     /**
+     * Whether this lexicon has [word] spelled exactly that way, give or take
+     * case.
+     *
+     * Stricter than [knows], and the difference matters: `uber` *knows* `über`
+     * and that is what stops the strip offering to add it to the personal
+     * store, but it is not the same word, and D5 wants the missing umlaut
+     * corrected. Nothing is ever auto-corrected away from a spelling that is
+     * exactly right (D28).
+     */
+    fun knowsExactly(word: CharSequence): Boolean {
+        val folded = Folding.fold(word)
+        if (folded.isEmpty()) return false
+        val lowered = word.toString().lowercase()
+        for (index in completions(folded)) {
+            val candidate = words[index]
+            if (Folding.fold(candidate) != folded) continue
+            if (candidate.lowercase() == lowered) return true
+        }
+        return false
+    }
+
+    /**
      * The indices of every word starting with [foldedPrefix].
      *
      * Found by two binary searches rather than by scanning, so folding happens

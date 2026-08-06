@@ -2,6 +2,7 @@ package de.coonabibba.bikeyboard
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -32,6 +33,9 @@ class DictionarySuggestionsTest {
     private val english = lexicon(
         Language.ENGLISH,
         "have" to 700_000, "hard" to 120_000, "house" to 90_000, "hallway" to 3_000,
+        // Reconstructed by the build script from the halves OpenSubtitles left
+        // behind (D34); the count is the real one from the shipped list.
+        "don't" to 3_244_316,
     )
 
     private fun source(personal: PersonalStore = PersonalStore(folder.newFile())) =
@@ -208,5 +212,209 @@ class DictionarySuggestionsTest {
         assertTrue("the user's own words count", source.knows("Coonabibba"))
         assertTrue("case and accents are not new words", source.knows("haus"))
         assertFalse(source.knows("Sonnenblumenweg"))
+    }
+
+    // -- auto-correction (D28) ------------------------------------------------
+
+    /** Typed cleanly, with no key nearby: the touches say nothing helpful. */
+    private fun clean(word: String) = word.map { TypedTouch(it, emptyMap()) }
+
+    /** Typed with the thumb sitting on the border between two keys. */
+    private fun grazing(word: String, index: Int, neighbour: Char) =
+        word.mapIndexed { i, char ->
+            if (i == index) TypedTouch(char, mapOf(neighbour to 0.1f)) else TypedTouch(char, emptyMap())
+        }
+
+    @Test
+    fun `an adjacent-key slip on a common word is corrected with confidence`() {
+        // `haben` typed with the thumb between `b` and `n`.
+        val correction = source().correct("hanen", grazing("hanen", 2, 'b'))
+        assertEquals("haben", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    /**
+     * The same edit, but the thumb was nowhere near: this is a word the typist
+     * may well have meant, and the keyboard has no business replacing it.
+     */
+    @Test
+    fun `the same edit without the touch evidence is not confident`() {
+        val correction = source().correct("hanen", clean("hanen"))
+        assertTrue(
+            "confidence was ${correction?.confidence}",
+            correction == null || correction.confidence < 0.9f,
+        )
+    }
+
+    /**
+     * The property behind "why does it only *sometimes* correct that?" (D28).
+     *
+     * Confidence falls smoothly as the thumb moves away from the key the word
+     * needed, so the same typo crosses the threshold or does not depending on
+     * where in the key it landed. Two keystrokes that look identical in the text
+     * are not identical here, and that is the design rather than a bug: without
+     * the touches there is no way to tell a slip from a decision.
+     *
+     * What the test pins is that the curve is *monotonic* and spans the
+     * threshold. If it ever stopped doing either, the setting would be
+     * meaningless — a slider that changes nothing until it changes everything.
+     */
+    @Test
+    fun `confidence falls as the thumb moves away from the intended key`() {
+        fun confidenceAt(cost: Float): Float {
+            val touches = "hanen".mapIndexed { index, char ->
+                if (index == 2) TypedTouch(char, mapOf('b' to cost)) else TypedTouch(char, emptyMap())
+            }
+            return source().correct("hanen", touches)?.confidence ?: 0f
+        }
+
+        // The last point is a full key width away, which is the most the touch
+        // model will say about a neighbour at all (`TypedTouch.FAR`).
+        val curve = listOf(0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 1f).map(::confidenceAt)
+        curve.zipWithNext { nearer, further ->
+            assertTrue("confidence rose with distance: $curve", nearer > further)
+        }
+        assertTrue("a graze should be confident: $curve", curve.first() > 0.9f)
+        assertTrue("a whole key away should not be: $curve", curve.last() < 0.9f)
+    }
+
+    /**
+     * D34: a missing apostrophe is a skipped long-press, not a misspelling.
+     *
+     * `dont` is not a word in either language, the apostrophe costs a hold on
+     * `v`, and D6 said from the start that correction was expected to place it
+     * unprompted. Confident even with no touch evidence at all, because there
+     * is none to have — nothing was typed where the apostrophe goes.
+     */
+    @Test
+    fun `a missing apostrophe is corrected without touch evidence`() {
+        val correction = source().correct("dont", clean("dont"))
+        assertEquals("don't", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    /** The cheap apostrophe must not become a cheap anything-else. */
+    @Test
+    fun `a missing letter is still a full-price edit`() {
+        // `hause` -> `Haus` would be free if insertions were cheap in general.
+        val correction = source().correct("hous", clean("hous"))
+        assertTrue(
+            "confidence was ${correction?.confidence}",
+            correction == null || correction.confidence < 0.9f,
+        )
+    }
+
+    /**
+     * The falloff is a setting (D34), and a setting that does nothing is worse
+     * than no setting: it has to move the answer in the direction it claims.
+     */
+    @Test
+    fun `a gentler falloff forgives a press the default rejects`() {
+        val touches = "hanen".mapIndexed { index, char ->
+            if (index == 2) TypedTouch(char, mapOf('b' to 0.9f)) else TypedTouch(char, emptyMap())
+        }
+        fun confidence(source: DictionarySuggestions): Float =
+            source.correct("hanen", touches)?.confidence ?: 0f
+
+        fun sourceWith(decay: Float) =
+            DictionarySuggestions(listOf(german, english), PersonalStore(folder.newFile()), decay)
+
+        val gentle = confidence(sourceWith(2f))
+        // Constructed without the argument, so this is the shipped default.
+        val default = confidence(DictionarySuggestions(listOf(german, english), PersonalStore(folder.newFile())))
+        val fussy = confidence(sourceWith(20f))
+        assertTrue("$gentle should exceed $default", gentle > default)
+        assertTrue("$fussy should fall below $default", fussy < default)
+    }
+
+    // -- a first letter that came out wrong (D35) -----------------------------
+
+    /**
+     * `hte` for `the`: the intended first letter is the second one typed, so
+     * its bucket gets searched too.
+     */
+    @Test
+    fun `a transposed first pair is within reach`() {
+        val correction = source().correct("ahben", clean("ahben"))
+        assertEquals("haben", correction?.text)
+    }
+
+    /**
+     * `xontinue` for `continue`: the thumb was between the two keys, and the
+     * touch says so, so the neighbour's bucket gets searched.
+     */
+    @Test
+    fun `a neighbouring first letter is within reach when the touch says so`() {
+        val touches = "jaben".mapIndexed { index, char ->
+            if (index == 0) TypedTouch(char, mapOf('h' to 0.2f)) else TypedTouch(char, emptyMap())
+        }
+        val correction = source().correct("jaben", touches)
+        assertEquals("haben", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    /**
+     * And not otherwise. A first letter the thumb was nowhere near is a letter
+     * the typist chose — scanning its bucket would cost real time to produce a
+     * candidate the threshold refuses anyway.
+     */
+    @Test
+    fun `a distant first letter is still out of reach`() {
+        assertNull(source().correct("jaben", clean("jaben")))
+    }
+
+    /** D2: a word valid in either language is valid, however rare. */
+    @Test
+    fun `a word spelled exactly right is never corrected`() {
+        assertNull(source().correct("hallo", clean("hallo")))
+        assertNull(source().correct("house", grazing("house", 0, 'g')))
+    }
+
+    /** D5, the cheapest win there is: the umlaut is a long-press worth skipping. */
+    @Test
+    fun `a missing umlaut is corrected`() {
+        val correction = source().correct("uber", clean("uber"))
+        assertEquals("über", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    @Test
+    fun `a word the keyboard has never heard of is left alone`() {
+        val correction = source().correct("Coonabibba", clean("Coonabibba"))
+        assertTrue(
+            "confidence was ${correction?.confidence}",
+            correction == null || correction.confidence < 0.9f,
+        )
+    }
+
+    @Test
+    fun `a word the user added is never corrected`() {
+        val personal = PersonalStore(folder.newFile()).apply { add("Hauswurz") }
+        val source = DictionarySuggestions(listOf(german, english), personal)
+        assertNull(source.correct("Hauswurz", clean("Hauswurz")))
+    }
+
+    /** Without touches there is no telling a slip from a decision (D28). */
+    @Test
+    fun `nothing is corrected without touches for every character`() {
+        assertNull(source().correct("hanen", emptyList()))
+        assertNull(source().correct("hanen", clean("han")))
+    }
+
+    @Test
+    fun `very short words are left alone`() {
+        assertNull(source().correct("ha", grazing("ha", 1, 'b')))
+    }
+
+    @Test
+    fun `a correction keeps the case that was typed`() {
+        val correction = source().correct("Hanen", grazing("Hanen", 2, 'b'))
+        assertEquals("Haben", correction?.text)
+    }
+
+    @Test
+    fun `a correction says what it replaced, so it can be put back`() {
+        val correction = source().correct("hanen", grazing("hanen", 2, 'b'))
+        assertEquals("hanen", correction?.original)
     }
 }

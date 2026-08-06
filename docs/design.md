@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D27 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D36 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -34,11 +34,32 @@ below.
 - [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
       shift is pressed (D22). Worth a part-of-speech source, or worth living
       with?
-- [ ] Corrections cannot fix a mistyped **first** letter (D23), because the scan
-      is bucketed by it. How often does that bite in real typing?
+- [x] **Corrections cannot fix a mistyped first letter.** Fixed in D35 for the
+      cases with evidence — an adjacent-key slip or a transposed first pair —
+      by widening the buckets rather than adding an index. A first letter typed
+      dead centre on the wrong key stays out of reach, and the falloff slider is
+      the lever for it.
+- [ ] Is the unknown-word prior right (D28)? Everything the auto-correction
+      threshold does, it does relative to that one number, and it was guessed.
+- [ ] Auto-correction still cannot spell `Straße` from `strasse` (D28), `ß`
+      folding one character at a time.
+- [ ] The `'s` contractions are systematically under-weighted (D34): their share
+      is allocated across all 29,467 possessive stems, so `that's` lands near the
+      threshold where `don't` clears it easily. Worth a better estimator?
+- [ ] Is the falloff's default of 7 right (D34)? It is now a slider, which is an
+      admission that nobody here can answer this from a laptop.
 - [ ] A correction query costs ~3ms on a laptop and has not been timed on the
       phone (D23). Per keystroke, on a word with no completions, that is the
       first thing in this keyboard with a latency budget worth watching.
+- [x] **Which haptic route works on this phone?** Only Insistent (D29) — so the
+      motor is fine and this phone has touch feedback muted system-wide. Two
+      rounds of tuning constants were spent on a switch in another app.
+- [ ] Is the order within an accent popup right (D32)? `é è ê ë` is alphabetical
+      by accent name and nothing better, and the ones past the third are a slide
+      most of the way across a key row.
+- [ ] Now that a correction query runs on every keystroke rather than every
+      space (D33), the per-keystroke cost is `suggest()` plus `correct()`.
+      Untimed on the phone, like everything else in this list.
 
 ## Decisions
 
@@ -76,6 +97,10 @@ below it, corrections are offered and never applied. Two consequences:
 Note the interaction with D2: a word that is valid in the *other* language must
 not be treated as a misspelling. Cross-language false positives are the most
 likely way this feature becomes the thing it was meant to fix.
+
+**Built in D28**, where the calibrated number turns out to rest on the touches
+rather than on the dictionary, and where the rule above became a hard gate: a
+word spelled exactly right is never replaced.
 
 ### D4 — Subtle language indicator, non-interactive
 
@@ -236,6 +261,8 @@ licence recorded per file as they are added, not reconstructed later.
 
 ### D14 — Backspace reverts an auto-correction; the strip offers "add word"
 
+**Built in D28**, along with the auto-replacement it exists to undo.
+
 Immediately after a silent auto-replace, backspace restores exactly what was
 typed rather than deleting a character, and the suggestion strip turns into a
 one-tap "keep this word" affordance.
@@ -261,6 +288,12 @@ carries a spatial likelihood, taps produce a distribution over keys rather than
 a single key, and that distribution is one input to the candidate scorer
 alongside the language model — which is the same architecture D7 requires for
 gesture typing later. Both decisions point at the same boundary.
+
+**Half of this arrived early**, in D28: taps now produce a distribution over
+keys, and the scorer reads it. What is still missing is the part D15 is actually
+about — *learning* that a one-thumb tap drifts predictably, so that the
+distribution is centred where the thumb aims rather than where the key is. The
+geometry is in place for it; the drift is roadmap step 5.
 
 ### D16 — The layer toggle never moves
 
@@ -291,7 +324,12 @@ rule would put them. Flagged as an open question because it is a guess about a
 habit, and habits are measured rather than reasoned about.
 
 The first alternate of every key is drawn small in its corner, so the digits and
-umlauts are discoverable without holding each key to find out.
+umlauts are discoverable without holding each key to find out. D32 later hung
+the other European accents off the same keys, *behind* these — so "every digit
+is one hold away" stays literally true rather than becoming "one hold and a
+slide away". There is a test for it. D36 is the other half of that promise: the
+first alternate is also where the finger already is, which stopped being true
+the moment any key had more than one.
 
 ### D18 — Not `directBootAware`
 
@@ -489,12 +527,12 @@ store, which makes `IME_FLAG_NO_PERSONALIZED_LEARNING` a single check rather
 than a policy spread across the codebase.
 
 **A candidate holding most of the matching mass is drawn in purple** — the same
-purple the keypress trail uses for "this came from the keyboard". The threshold
-is half the mass, it is a guess, and it is *appearance only*: D3's auto-replace
-threshold does not exist yet and will be a calibrated number rather than a
-unigram share. What it does today is make the eventual threshold legible before
-anything acts on one, which is the cheapest possible way to find out whether it
-sits in the right place.
+purple the keypress trail uses for "this came from the keyboard".
+
+The rule for *which* candidate has changed twice since; **D33 is the current
+one**, and it is no longer a threshold on this ranking at all. The purple word is
+the one the auto-corrector would substitute if space were pressed — the same
+stored decision, not a second opinion that happens to agree most of the time.
 
 **The add-word offer appears only when nothing else does.** Half-typed words are
 unrecognised nearly all of the time, so an offer keyed on "unknown word" alone
@@ -644,6 +682,506 @@ time, and inherits a sensible frequency while it is there.
 It covers only `'s`. The other contractions — `don't`, `can't` — need the
 apostrophe in the middle, where there is no such unambiguous signal, and would
 need the wordlists to know the results.
+
+### D28 — Auto-correction on space, when the touches agree
+
+D3 said silent replacement was permitted above a tuned confidence threshold and
+that calibration, not ranking, was the hard part. This is that, turned on.
+
+**It fires on space**, because that is the moment a word is finished and the
+last moment changing it is cheap. Not per keystroke: a word being typed is not
+yet wrong.
+
+**Confidence comes from where the thumb landed.** Plain edit distance answers
+"are these two words similar", which is the wrong question — `hanen` is one edit
+from `haben` whether or not the finger was anywhere near `b`. So every typed
+character now carries the keys it nearly hit ([TypedTouch]), substitution costs
+come from that, and the distance is a real number rather than a count
+([SpatialEditDistance]). The same typo scores 0.999 when the thumb was on the
+`b`/`n` border and 0.76 when it was dead centre on `n` — the first is replaced,
+the second is only offered. That distinction is the whole feature.
+
+Each candidate is scored as *how likely is it that this was meant*: how common
+the word is, discounted exponentially by how implausible the slips would have to
+be. The confidence is that score's share of everything on the table **including
+the standing chance that an unknown word was typed deliberately** — a name, a
+codeword, jargon. That prior is what the threshold is really measured against,
+and it is the most load-bearing guess in the file.
+
+Two hard rules sit in front of the arithmetic, and neither is negotiable:
+
+- **A word spelled exactly right is never touched**, however rare, however
+  common its neighbour. Under D2 a word valid in the other language is valid,
+  and cross-language false positives are the way this feature becomes the thing
+  it was meant to fix.
+- **No touches, no correction.** A word the cursor jumped back to (D23) was not
+  typed here, and half a set of touches would make the keyboard confident about
+  exactly the words it knows least about.
+
+**It says so twice.** A wash of purple rises from the space bar to the top of
+the keys, and the vibration is two pulses rather than one (D29). Both exist
+because the typist is looking at the text rather than at the keyboard: one is
+caught out of the corner of an eye, the other needs no eye at all. The flash
+starts at the space bar because that is the key that caused it.
+
+Both were too faint on the phone to register, twice. The flash is now five
+sliders over a live preview (D30) rather than a constant to be guessed at, and
+the vibration is a choice of route with a diagnostic beside it (D29). Something
+meant to be caught peripherally has to be well past subtle, because peripheral
+vision is what it is being asked to survive — and neither of these turned out to
+be tunable from a laptop at all.
+
+**Backspace puts it back** — D14, finally built. The keystroke immediately
+after a replacement restores exactly what was typed, space and all, and the
+strip turns into an offer to remember the word, which under D8 is the only way
+the keyboard ever learns anything. Anything other than that one backspace closes
+the window.
+
+Measured on a laptop: 1.5ms per space. It was 18ms before the edit-distance
+table stopped normalising Unicode in its inner loop, which is worth recording
+because the profile is entirely unlike the rest of the keyboard — thousands of
+tiny comparisons rather than one lookup.
+
+That led to a second question worth writing down: **does a German and English
+keyboard need Unicode normalisation at all?** The two wordlists contain fifteen
+non-ASCII characters between them — `ä ü ö ß Ä Ü Ö é ñ â ê à á ó è` — every one
+precomposed, and the keyboard can type four of them. So the whole of folding is
+now a table rather than a normaliser: thirteen times faster, and it agrees with
+the old implementation on every one of the 70,000 shipped words. The cost is
+that an accent from outside those two languages is no longer folded away, which
+makes it match nothing — the right answer, since it is not a word here either.
+
+**Why the same typo is corrected only sometimes.** Because it is not the same
+typo. Confidence is a smooth function of where the thumb landed, so two presses
+that produce identical text can sit either side of the threshold. Measured
+against the shipped wordlists, `sttong` → `strong` at the default 90%:
+
+| Distance from `r`, in key widths | Confidence |
+| --- | --- |
+| 0.1 | 98% |
+| 0.3 | 94% |
+| 0.4 | 88% |
+| 0.6 | 64% |
+| 0.9 | 18% |
+
+So it corrects from roughly the left third of the `t` key and not from the rest
+of it. That is the feature working — without the touches there is no way to tell
+a slip from a decision, and a keyboard that replaced `sttong` on the strength of
+the letters alone would replace deliberate words too.
+
+The corpus matters as much as the thumb, which is less obvious: at an identical
+0.3 key widths, `teh` → `the` scores 99%, `hellp` → `hello` 97%, and
+`wrold` → `world` only 80% — below the threshold, uncorrected. Frequency is part
+of the evidence, so the same slip on a rarer word survives. Arguably right, and
+worth knowing before reading the threshold as a promise.
+
+There are two levers, the threshold and the falloff — see D34, where the
+falloff became a slider precisely because the threshold alone moves the boundary
+without changing how abruptly it arrives. `DictionarySuggestionsTest` pins the
+shape rather than the numbers: monotonic, spanning the threshold, and moving in
+the direction each slider claims.
+
+Known limits: `hte` used to be unable to reach `the`, the search being bucketed
+by first letter (D23) — fixed in D35 for the cases the touches can evidence. And `ß` folds to `s` one character at a time here, so `strasse`
+does not reach `Straße` cheaply enough to be corrected.
+
+### D29 — Haptics: three states, per event
+
+Off, light, strong. Not a switch, because "on" means something different on
+every phone, and because the difference between the two strengths is what makes
+a correction distinguishable from a keypress by feel alone.
+
+**And two of them, one per event**, once the route was finally working and the
+levels could be judged. A keypress tick and a correction knock are not the same
+message: the first is texture, hundreds a minute, and plenty of people want none
+of it; the second is *news* — a word was changed unasked and the undo window is
+open. Wanting silence while typing and a firm knock on a replacement is an
+entirely coherent position, and one shared control could not express it.
+
+The defaults keep this decision's original claim: light for keys, strong for
+corrections, so the two do not feel the same unless someone deliberately makes
+them. Splitting the setting reads the old single value as a fallback, so nobody
+who had already chosen Strong found themselves reset.
+
+A keypress is one tick, as short as the hardware will honour, since it happens
+hundreds of times a minute and anything longer is a buzz. An applied correction
+is **two**: the keyboard did something unasked, and that is worth noticing while
+the thumb is still moving — it is the only signal that D14's undo window is
+open and about to close.
+
+**Amended twice, and still not felt.** The first round's two causes, both worth
+writing down because both are easy to repeat:
+
+- *"As short as the hardware will honour"* was read as twelve milliseconds. A
+  linear resonant actuator needs longer than that to spin up, so the request was
+  honoured and felt like nothing. Where the platform offers a **predefined**
+  effect — `EFFECT_TICK`, `EFFECT_HEAVY_CLICK`, `EFFECT_DOUBLE_CLICK` — that is
+  used instead, because those are tuned per device by whoever knows the motor;
+  the hand-rolled pulses are only the fallback, and they are 20ms and 40ms now.
+- **A vibration with no stated purpose can be dropped.** Android routes haptics
+  by usage, and an untagged request competes with ringer and notification
+  settings. Every call now carries `VibrationAttributes.USAGE_TOUCH`, and the
+  light setting asks the *view* for `KEYBOARD_TAP` first, which is the path
+  every other keyboard on the phone takes.
+
+If the phone reports no vibrator at all, the settings screen says so rather than
+leaving three buttons that quietly do nothing.
+
+**That was not it either**, and the second round changed the approach rather
+than the constants. The reason this cannot be fixed by reasoning is structural:
+**nothing in the Android haptics API reports back**. `vibrate` returns `Unit`.
+The one call that returns a boolean, `performHapticFeedback`, is telling you
+whether the *view* accepted the request, not whether the motor moved. And there
+are at least four independent gates between the request and the hardware:
+
+1. the app's `VIBRATE` permission,
+2. the system-wide touch-feedback switch,
+3. the per-usage intensity slider, which can scale touch haptics to zero,
+4. whether the device actually implements the effect being asked for —
+   `createPredefined` for an unsupported effect is allowed to do nothing, which
+   means the first round's "use the tuned vendor effect" fix could be *worse*
+   than the plain pulse it replaced.
+
+A shut gate is indistinguishable from a dead motor from inside the process. So
+the keyboard stops guessing and does two things instead. It **prints what the
+phone will admit to** — motor present, amplitude control, touch feedback on or
+off, intensity, per-effect support — because the combination usually names the
+culprit outright. And it offers **each route as its own button**, since the only
+instrument that can actually detect a vibration is a finger:
+
+| Route | What it asks |
+| --- | --- |
+| Automatic | view feedback, then predefined, then a pulse |
+| System keyboard tap | `performHapticFeedback(KEYBOARD_TAP)` |
+| Built-in effect | `createPredefined(EFFECT_TICK)` |
+| Plain pulse | `createOneShot`, tagged `USAGE_TOUCH` |
+| Insistent | `createOneShot`, tagged `USAGE_ALARM` |
+
+Whichever is felt becomes the setting. **Insistent is the diagnostic**: alarm
+haptics are not scaled by the touch-feedback slider, so if that one is felt and
+the others are not, the motor is fine and a system setting is off — which is a
+sentence the keyboard can then say to the user instead of buzzing at them.
+
+The amplitudes went up again as well, to 160 and 255 out of 255. Asking for half
+power on a phone that is already scaling the request down is asking for nothing.
+
+**The answer, on the phone: only Insistent.** Which settles it — the motor is
+fine, the code was always fine, and this phone has touch feedback muted at the
+system level. Every route tagged as touch feedback was being scaled to zero on
+its way to the hardware, silently, with no error and nothing to read from inside
+the process. Two rounds of tuning constants were spent on a switch in a different
+app.
+
+So the settings screen now leads with the *conclusion* rather than the readings:
+the motor works, touch feedback is off system-wide, either turn it back on or
+keep Insistent — and a warning that alarm-strength vibration can still be
+suppressed by Do Not Disturb. Automatic deliberately does **not** escalate to the
+alarm route on its own. Someone who muted touch feedback on purpose should not
+be buzzed at by a keyboard whose haptics default to on; the escape hatch is
+there, it is discoverable, and taking it should be a decision.
+
+**A crash came out of this round, and the mechanism is worth keeping.** The
+service held a placeholder `Haptics(this, OFF)` in a *field initialiser*. That
+runs during `Service` construction, before `attachBaseContext`, so the context
+has no base and `getSystemService` on it is a null dereference. It had survived
+only by accident: the old lookup's first branch returned null for `OFF` without
+touching the context, and `OFF` was exactly what the placeholder passed.
+Rewriting the lookup deleted that branch and turned the same line into a crash
+on every launch — of the keyboard, and of the settings screen too, because
+opening it starts the IME in the same process.
+
+Two fixes, because one of them is only a fix and the other removes the class:
+the vibrator lookup is `by lazy`, so no level and no caller can make construction
+touch the system; and the service holds `Haptics?` rather than a placeholder,
+because an object that merely *happens* not to ask its context anything is one
+refactor away from this exact crash.
+
+**And then the route setting turned out to be written and never read.** The test
+buttons named their route explicitly, so they worked and proved the mechanism;
+the keyboard and the level buttons both constructed `Haptics` without one and
+silently took the `AUTO` default — which on this phone is the one thing that
+does not work. So the diagnosis was right, the fix was in the code, and none of
+it reached the keys.
+
+The constructor parameter no longer has a default, and `Haptics.fromPrefs` reads
+both settings together. A parameter that can be forgotten will be; the type
+system is the only thing here that reliably remembers.
+
+### D30 — The timings are settings
+
+Every duration in the keyboard is now a slider: the long-press delay on a key
+and on a suggestion, how long backspace waits before repeating and how fast it
+then goes, the double-tap window, the correction flash.
+
+They are here for the same reason the suggestion size is (D25). D5 already said
+the long-press delay "must be tuned rather than inherited"; three rounds of
+tuning-by-guess later, the honest version of that is that a hold which feels
+deliberate to one thumb is a stutter to another, and none of it is decidable
+from a laptop. The views read them once when they are built, and a settings
+revision counter tells the service to build them again.
+
+The flash is in that list, and after two device rounds it is **five** sliders
+rather than one, over a preview that replays the animation as they move:
+
+| Slider | What it changes |
+| --- | --- |
+| Duration | how long the whole rise takes; zero switches it off |
+| Strength | peak opacity, 0–255 |
+| Hold | how much of the rise runs at full strength before fading |
+| Reach | how far up the keys the front climbs |
+| Tail | hard edge at 0, fading all the way back to the space bar at 95 |
+
+The defaults moved with them: 650ms rather than 420, full opacity rather than
+150 then 230, holding for 60% of the rise rather than fading throughout.
+
+The **preview** is the part worth arguing for. Twice now the answer from the
+phone has been "still too subtle", and each round cost a constant edit, a
+rebuild, an install, and a deliberately misspelled word to trigger the thing
+being judged. A `FlashPreviewView` draws a sketch of the bottom of the keyboard
+and runs the identical `CorrectionFlash`, so the number is chosen by looking —
+the same argument D25 makes for the suggestion-size preview, which was settled
+in one round after three without.
+
+### D33 — The strip's purple is the auto-correction decision, not a lookalike
+
+Purple in the strip means **pressing space right now would substitute this
+word**. Not "this candidate scores well".
+
+It has been three things. First a hardcoded half of the matching mass, when
+there was no auto-replace for it to speak for. Then the same *threshold* as the
+auto-correction (D28), which was closer but still two calculations that could
+disagree — the strip's a unigram share among completions, the corrector's a
+touch-weighted share with its own gates. Two measurements sharing one number is
+not the same as one measurement, and the only way to find out which one was
+right was to press space and see.
+
+Now there is one decision. After every keystroke the service asks the corrector
+what it would do with the word as it stands, gates and threshold included, and
+keeps the answer. The strip paints that word purple; the space bar applies that
+same stored answer rather than recomputing. They cannot come apart, and space
+does no work it has not already shown you.
+
+Three consequences fall out, and all three are improvements:
+
+- **A confident completion is no longer purple.** `hel` → `hello` may hold
+  almost all the mass, but space does not turn `hel` into `hello`; it ends the
+  word. The old rule shouted about that constantly.
+- **The correction is shown even when the ranker did not offer it.** Ranking and
+  correcting are different questions and occasionally disagree about what is
+  even a candidate. It goes in front. A warning that is sometimes invisible is
+  not a warning.
+- **One correction query per keystroke** instead of one per space. Measured at
+  1.5ms on a laptop (D28) against a `suggest()` call that is already more
+  expensive, but it is the second thing in this keyboard with a latency budget
+  and it has not been timed on the phone either.
+
+### D31 — Punctuation takes back the space a suggestion inserted
+
+Accepting a suggestion finishes the word and puts a space after it (D21), which
+is a guess about what comes next. Two keys are entitled to disagree with that
+guess, and they are the two that follow a finished word:
+
+- **Space**, which turns it into a full stop — that is D6's double-space
+  gesture, already built.
+- **Punctuation**, which takes it away entirely. Tapping `,` after accepting
+  `Haus` should give `Haus,` and not `Haus ,`.
+
+One flag serves both, on `SpaceGesture`: the last interaction was a suggestion
+acceptance that inserted a space, and any other input clears it. Two flags with
+the same lifecycle would only be two things to keep in step.
+
+Which marks hug is a list, not a rule: `, . ! ? ; : ' ’ ) ] } …`. Closing
+brackets and quotes hug and opening ones do not, and the apostrophe hugs because
+the case it exists for is `don` + `'` + `t` (D27) rather than a quotation. The
+field is asked what is actually in front of the cursor before anything is
+deleted, because between our commit and this keystroke the app may have done
+anything at all.
+
+The apostrophe has a second consequence. It is a *word* character (D27), so
+retracting the space in front of one does not end a word, it joins the mark to
+the accepted suggestion — `let` + `'` is now the single word `let'`, and the
+tracked word was emptied when the suggestion was accepted. So a retraction is
+treated as one of D23's cursor-jump cases and the word is read back from the
+field. One IPC round trip, on a keystroke that happens a few times a paragraph.
+
+### D32 — The other European accents, behind the German ones
+
+Long-press alternates are a row, and until now every key offered at most one.
+The rest of the row was free, so the accents of the neighbouring languages go
+there: `é è ê ë` on `e`, `á à â å ã` after `ä` on `a`, `ç č ć` on `c`, `ž ź ż`
+on `z`, `ł` after `9` on `l`, `ñ` after `!` on `n`, and so on.
+
+**The first entry is untouched, and that is the whole design.** It is what is
+drawn small in the corner of the key, and the popup opens with it selected, so
+holding and releasing without sliding still gives it. The German umlaut keeps
+`a o u s` (D17), the digit keeps every key that had one (D17 again — otherwise
+"every digit is one hold away" quietly becomes "one hold and a slide away"), and
+the punctuation keeps `v b n m` (D6). Everything new is reachable only by
+sliding, which is to say only on purpose.
+
+Six is the ceiling, enforced by test: the popup is one row of cells clamped to
+the screen width, and beyond six the far end is unreachable on a phone.
+
+The folding table (D22) grew to match, including for characters no German or
+English word contains — `ø ł ž`. It costs a line each, it means a name typed
+with its accents still finds the personal-store entry typed without them, and it
+cannot disturb the wordlist sort order because none of them occur there.
+
+### D34 — Contractions, and the falloff as a second slider
+
+Two halves of the same complaint: the same typo is corrected only sometimes, and
+`dont` is never corrected at all.
+
+**`dont` was never going to work, because `don't` was not in the dictionary.**
+None of them were. OpenSubtitles tokenises on the apostrophe, so the corpus has
+`don` and a separate `'t` and no contraction ever reaches the frequency list as
+one word — which is why the shipped English list had exactly zero apostrophes in
+35,481 entries, and why `don` sat there with 4.16 million occurrences, six tenths
+of a percent of the corpus, for a verb nobody uses. That count was `don't` filed
+under the wrong key.
+
+Both halves survive, so the mass can be put back. For each apostrophe suffix, its
+total is divided among the stems that can take it, in proportion to how often
+each stem occurs:
+
+```
+count(X'Y) = total(Y) × count(X) / Σ count over stems of Y
+```
+
+Exact where the stem is not a word on its own — `didn`, `isn`, `wouldn` occur
+only as contraction stems and take their whole count with them. An estimate
+where the stem is also a word: nothing can separate the modal `can` from the
+front of `can't`. The results are plausible enough to trust for ranking — `I'm`
+0.60% of the corpus, `don't` 0.45%, `can't` 0.41% — and the allocation is
+**subtracted from the stem**, which is what drops `don` to 914k. That is also
+where the estimate's error goes: an over-allocated `can't` leaves `can` light.
+
+**Possessives are not shipped.** The dictionary holds 29,467 of them against a
+few dozen contractions and cannot tell `it's` from `aardvark's`. Shipping them
+all would nearly double the English list for forms the typist can already
+produce by typing the apostrophe. The `'s` contractions that *are* shipped are
+restricted to pronouns and interrogatives — closed word classes where `'s`
+contracts *is* or *has* — which is a linguistic fact rather than a judgement,
+and the frequencies still come from the corpus. 74 entries in total. German gets
+none: its spelling dictionary has no apostrophe words at all, so `geht's` stays
+a matter for D27's suggestion-side rule.
+
+**A missing apostrophe is now a cheap edit**, 0.15 against a full-price 1.0 for
+any other insertion. The argument is D5's, applied to the other character this
+keyboard makes expensive: `'` is a long-press on `v`, so leaving it out is a
+decision about effort rather than a mistake about spelling, and D6 said from the
+start that correction was expected to place apostrophes unprompted. Dearer than
+the accent's 0.1 on purpose — a skipped umlaut still types a letter, so there is
+a touch to reason about, while a skipped apostrophe leaves no evidence at all.
+
+Measured against the shipped lists at the default threshold: `dont` → `don't`
+99.8%, `didnt` 99.5%, `youre` 99.0%, `doesnt` 99.0%, `couldnt` 98.0%, `ive` →
+`I've` 99.4%. The `'s` set lands lower — `thats` 92%, `theres` 91%, `isnt` 90% —
+because their frequencies are the systematically underestimated ones. `wont`,
+`cant` and `ill` are not touched at all: they are real words, and D28's hard gate
+says a word spelled exactly right is never replaced.
+
+**The falloff is the second slider**, because the threshold alone could not
+answer "this doesn't feel right yet". The threshold sets how sure the keyboard
+must be; the falloff sets how quickly it stops being sure as the thumb moves
+away from the key the word needed. Same word, same typo, varying only the
+falloff:
+
+| Falloff | 0.2 key widths | 0.4 | 0.6 | 0.8 |
+| --- | --- | --- | --- | --- |
+| 3 | 97% | 96% | 93% | 92% |
+| 7 (default) | 97% | 88% | 64% | 31% |
+| 14 | 88% | 31% | 3% | 0% |
+
+Low is forgiving and nearly flat; high corrects only a graze. The scorer takes
+it as a `var` rather than a constructor argument — reloading thirty-five thousand
+words because a slider moved would be absurd — pushed in when the input view is
+rebuilt and again when the dictionaries finish loading, since either can be the
+later of the two.
+
+### D35 — A mistyped first letter, without scanning the dictionary
+
+The correction scan is bucketed by first letter, which for a long time meant a
+mistyped first letter was simply unreachable: `xontinue` found nothing at all,
+because nothing beginning with `x` is within a slip of it.
+
+The obvious fix is to stop bucketing, or to add a second index by *last* letter.
+Both were measured against the shipped lists rather than guessed at, and the
+surprise is that the last-letter index is not expensive — the length filter and
+the budget early-exit prune far harder than bucket sizes suggest:
+
+| Typed | First-letter bucket | Whole dictionary | Last-letter bucket |
+| --- | --- | --- | --- |
+| `xontinue` | 0.06 ms, nothing | 75 ms | 2.7 ms → `continue` |
+| `zomorrow` | 1.09 ms, nothing | 15 ms | 0.03 ms → `tomorrow` |
+| `hte` | 0.16 ms → `he` | 1.7 ms | 0.33 ms → `the` |
+
+**It was rejected anyway, and for a better reason than cost.** Look at what the
+found candidates score: `zomorrow` reaches `tomorrow` and is rated 0.40, `vonnte`
+reaches `könnte` at 0.22. A first letter the thumb was nowhere near is a
+full-price substitution, and a full-price substitution loses to the unknown-word
+prior. The index would find the word and the scorer would refuse it — paying 2.7
+ms on every keystroke (D33) to arrive at the same answer.
+
+So the buckets are widened instead, from evidence already in hand:
+
+- **The neighbours of the first press**, when the touch was within half a key of
+  one. That threshold is not arbitrary: measured against a real key geometry, a
+  press 30% of the way from `x` towards `c` reaches `continue` at 0.82, at 20%
+  it is 0.53, and at dead centre 0.06. Half a key is roughly where a candidate
+  stops being able to clear any threshold worth having, so the cases excluded
+  are exactly the ones that would have been refused.
+- **The second letter typed**, because `hte` is not a mistyped `t` but a
+  transposed one, and the intended first letter is sitting right there.
+
+Four buckets at most. Worst case 2–3 ms against 0.3–1.1 ms before, and — the
+thing that made a single pass safe rather than needing a two-pass fallback — it
+does not dilute the existing answers: the extra candidates are all far enough
+away that their share of the mass is invisible. `hanen` → `haben` goes from
+0.794 to 0.782.
+
+What remains out of reach is a first letter typed dead centre on the wrong key,
+where there is genuinely no evidence: `xontinue` scores 0.06 whether or not the
+candidate is found. **The lever for that is the falloff slider** (D34) rather
+than a new index — at a falloff of 3 the same correction scores 0.83 — which is
+the right place for it, because "correct a word on the strength of the letters
+alone" is a preference and not a fact.
+
+### D36 — The first alternate goes under the finger
+
+A long-press popup lays its cells out **from the key outwards in one direction**,
+with the first alternate centred on the key being held.
+
+The old rule centred the whole row on the key, and that is fine for one cell and
+wrong for every number above it: with four alternates the first one lands a cell
+and a half to the left of the thumb, so the smallest drift selects something
+else. Holding `u` for `ü` gave `ù`. Holding `n` for `!` gave `ñ`.
+
+This is a regression D32 caused and D17 predicted the shape of. Every key had one
+alternate until the accents were added, so "centred on the key" and "under the
+finger" were the same position and nothing distinguished them. `a` went on
+working afterwards purely by luck: it sits near the left edge, so clamping the
+row onto the screen shoved cell zero back under the thumb — which is why `ä` was
+reported fine while `ü` and `ö` were not.
+
+The rule now:
+
+- **Cell zero is centred on the key.** It is the one drawn in the corner, the one
+  a plain hold commits, and under D17 and D32 the one the key is understood to
+  carry. Nothing else may occupy the position the finger is already in.
+- **The rest extend one way**, towards whichever side has more room — leftwards
+  for keys on the right of the board, rightwards for those on the left. That is
+  the same answer as picking a direction per key, without a table to maintain.
+- **A row that will not fit is shifted bodily**, never re-ordered, because
+  re-ordering is how cell zero moves out from under the finger again.
+
+Index order is consequently not screen order — a leftward row has cell zero as
+its rightmost rectangle — which costs nothing because the hit test walks the
+rectangles rather than dividing by width. It buys something, too: a finger that
+drifts off the far side of cell zero stays on cell zero.
+
+The arithmetic is in `AlternatePopup`, out of the view and tested, because this
+was wrong for two releases in a way that reads perfectly plausibly.
 
 ---
 

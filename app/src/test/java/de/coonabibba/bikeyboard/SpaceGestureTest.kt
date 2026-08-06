@@ -59,6 +59,36 @@ class SpaceGestureTest {
     }
 
     /**
+     * The flag punctuation reads to decide whether to take the accepted
+     * suggestion's space back (D31). It has to mean "the last thing that
+     * happened", nothing looser.
+     */
+    @Test
+    fun `the accepted-suggestion flag is set only by an acceptance`() {
+        assertFalse(gesture.afterAcceptedSuggestion)
+        gesture.suggestionAccepted()
+        assertTrue(gesture.afterAcceptedSuggestion)
+    }
+
+    @Test
+    fun `any other input clears the accepted-suggestion flag`() {
+        gesture.suggestionAccepted()
+        gesture.otherInput()
+        assertFalse(gesture.afterAcceptedSuggestion)
+    }
+
+    /**
+     * The space tap spends it: it has already turned the accepted space into a
+     * full stop, so there is nothing left for punctuation to take back.
+     */
+    @Test
+    fun `a space tap spends the accepted-suggestion flag`() {
+        gesture.suggestionAccepted()
+        assertTrue(gesture.tap(1_000L))
+        assertFalse(gesture.afterAcceptedSuggestion)
+    }
+
+    /**
      * The bug in the key-and-timestamp version this replaced: nothing between
      * two spaces ever reset the state, so `space`, letter, `space` typed fast
      * produced a full stop in the middle of a sentence.

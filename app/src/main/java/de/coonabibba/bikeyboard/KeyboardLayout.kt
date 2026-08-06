@@ -58,7 +58,8 @@ data class KeyboardLayout(val rows: List<List<Key>>)
  *  - No key that inserts text borders the space bar, on any layer (D6). This is
  *    the original complaint: a thumb aimed at space must not produce a period.
  *  - Digits 0-9 are all reachable by long-press (D17), and the umlaut keys
- *    carry umlauts rather than digits.
+ *    carry umlauts rather than digits — as the *first* alternate, which is the
+ *    one a plain hold gives and the one drawn in the corner of the key (D32).
  *  - One letter layer, regardless of language (D5). Language awareness is a
  *    matter of prediction, not of layout.
  */
@@ -72,28 +73,38 @@ object Layouts {
      * those two digits move down to the keys nearest below them on a staggered
      * QWERTY: 7 to `j`, 9 to `l`. This is the one arbitrary bit of the layout
      * and the most likely thing here to want changing after a week of use.
+     *
+     * **The first entry is the one the key advertises and the one a plain hold
+     * commits.** It is drawn small in the corner of the key, and the popup opens
+     * with it already selected, so holding and releasing without sliding gives
+     * it. That is what makes the rest of the row free: the accents of the other
+     * European languages hang off the same keys (D32), reachable by sliding,
+     * and the German umlaut or the digit is untouched in front of them.
      */
     private val letterAlternates: Map<Char, List<String>> = mapOf(
         'q' to listOf("1"),
         'w' to listOf("2"),
-        'e' to listOf("3"),
+        'e' to listOf("3", "é", "è", "ê", "ë"),
         'r' to listOf("4"),
         't' to listOf("5"),
-        'y' to listOf("6"),
-        'u' to listOf("ü"),
-        'i' to listOf("8"),
-        'o' to listOf("ö"),
+        'y' to listOf("6", "ý", "ÿ"),
+        'u' to listOf("ü", "ú", "ù", "û"),
+        'i' to listOf("8", "í", "ì", "î", "ï"),
+        'o' to listOf("ö", "ó", "ò", "ô", "õ", "ø"),
         'p' to listOf("0"),
-        'a' to listOf("ä"),
-        's' to listOf("ß"),
+        'a' to listOf("ä", "á", "à", "â", "å", "ã"),
+        's' to listOf("ß", "š", "ś"),
         'j' to listOf("7"),
-        'l' to listOf("9"),
+        'l' to listOf("9", "ł"),
+        // Keys with no digit and no German letter to carry, so the accent leads.
+        'c' to listOf("ç", "č", "ć"),
+        'z' to listOf("ž", "ź", "ż"),
         // Punctuation reachable without the symbol layer. This does not
         // reopen complaint 3: D6 bars punctuation as a *tap target* beside the
         // space bar, and a long-press cannot be hit by accident.
         'v' to listOf("'"),
         'b' to listOf(","),
-        'n' to listOf("!"),
+        'n' to listOf("!", "ñ"),
         'm' to listOf("?"),
     )
 

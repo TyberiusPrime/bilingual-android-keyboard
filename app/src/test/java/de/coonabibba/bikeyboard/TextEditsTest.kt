@@ -112,6 +112,38 @@ class TextEditsTest {
     }
 
     @Test
+    fun `sentence punctuation hugs the word before it`() {
+        listOf(",", ".", "!", "?", ";", ":", "'", "…").forEach {
+            assertTrue("$it should hug", TextEdits.hugsPreviousWord(it))
+        }
+    }
+
+    @Test
+    fun `closing brackets hug and opening ones do not`() {
+        listOf(")", "]", "}").forEach {
+            assertTrue("$it should hug", TextEdits.hugsPreviousWord(it))
+        }
+        listOf("(", "[", "{", "„", "¿", "¡").forEach {
+            assertFalse("$it should not hug", TextEdits.hugsPreviousWord(it))
+        }
+    }
+
+    @Test
+    fun `letters digits and the space itself never hug`() {
+        listOf("a", "Ä", "7", " ", "-", "/", "@").forEach {
+            assertFalse("$it should not hug", TextEdits.hugsPreviousWord(it))
+        }
+    }
+
+    /** Only single characters, so a pasted or composed run is left alone. */
+    @Test
+    fun `a multi-character insertion never hugs`() {
+        assertFalse(TextEdits.hugsPreviousWord(". "))
+        assertFalse(TextEdits.hugsPreviousWord("..."))
+        assertFalse(TextEdits.hugsPreviousWord(""))
+    }
+
+    @Test
     fun `a read that came back empty is no word`() {
         assertEquals("", TextEdits.wordAtCursor(null, null).text)
         assertEquals("word", TextEdits.wordAtCursor("word", null).text)

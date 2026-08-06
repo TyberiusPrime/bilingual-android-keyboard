@@ -67,6 +67,24 @@ object TextEdits {
     fun needsTrailingSpace(next: Char?): Boolean = next == null || isWordChar(next)
 
     /**
+     * Whether [text] is punctuation that belongs tight against the word before
+     * it, with no space in between.
+     *
+     * Accepting a suggestion finishes the word *and* puts a space after it,
+     * which is right when the next thing is another word and wrong when it is a
+     * comma. Rather than ask the typist to backspace, the keyboard takes its own
+     * space back — but only for the marks where there is no argument about it.
+     *
+     * Closing brackets and quotes hug; opening ones do not, which is why `(` and
+     * `„` are absent. The apostrophe hugs because the case it exists for is
+     * `dont` → `don` + `'` + `t` (D27), never a quotation.
+     */
+    fun hugsPreviousWord(text: String): Boolean =
+        text.length == 1 && text[0] in HUGGING
+
+    private const val HUGGING = ",.!?;:'’)]}…"
+
+    /**
      * The word the cursor is sitting in, split at the cursor.
      *
      * Used when the cursor arrives somewhere this keyboard did not put it —

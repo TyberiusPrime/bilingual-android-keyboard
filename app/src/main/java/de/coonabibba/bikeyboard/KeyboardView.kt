@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
@@ -16,6 +17,7 @@ import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 
 /**
@@ -87,6 +89,26 @@ class KeyboardView @JvmOverloads constructor(
      */
     var onShiftSwipeUp: (() -> Unit)? = null
 
+    /**
+     * Called when a whole word has been traced in one stroke (D39).
+     *
+     * The geometry goes with it because the decoder needs to know where the
+     * letters were *for this stroke* — the layout can change between one swipe
+     * and the next, and a path is meaningless without the keyboard it was drawn
+     * on.
+     */
+    var onGlide: ((GesturePath, KeyGeometry) -> Unit)? = null
+
+    /**
+     * Called when the steering gesture claims a letter the previous tap already
+     * typed (D39): tap `h`, press again and drag, and that first `h` has to go.
+     *
+     * Only on the drag. A plain double tap still types both, so `withhold` and
+     * `Rohheit` are unaffected — the gesture costs nothing rather than costing
+     * the doubled letter.
+     */
+    var onRetractSteerTap: (() -> Unit)? = null
+
     var layout: KeyboardLayout = Layouts.letters
         set(value) {
             field = value
@@ -132,6 +154,22 @@ class KeyboardView @JvmOverloads constructor(
         }
 
     /**
+     * Whether a drag off a letter may trace a word (D39).
+     *
+     * Off wherever there are no suggestions — a password box, a field that asks
+     * not to be helped — because a stroke there has no dictionary to be decoded
+     * against and could not produce anything. Switching off the *recording*
+     * rather than the commit is the point: a gesture that visibly draws itself
+     * across the keys and then does nothing is worse than one that is simply
+     * not there, and the ribbon would be a picture of a password.
+     */
+    var glideEnabled: Boolean = true
+        set(value) {
+            field = value
+            if (!value) abandonGlide()
+        }
+
+    /**
      * Recently pressed keys, most recent first. The service owns the stack;
      * this view only renders it.
      */
@@ -173,7 +211,7 @@ class KeyboardView @JvmOverloads constructor(
     private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
     /** What a drag off a key has turned into, if anything. */
-    private enum class DragMode { NONE, CURSOR, LINES, DELETE_WORD, RECASE }
+    private enum class DragMode { NONE, CURSOR, LINES, DELETE_WORD, RECASE, GLIDE }
 
     /**
      * State of one finger currently on the keyboard.
@@ -192,6 +230,12 @@ class KeyboardView @JvmOverloads constructor(
         var dragMode: DragMode = DragMode.NONE,
         /** Where this press landed, and what else it nearly hit (D28). */
         val touch: TypedTouch? = null,
+        /**
+         * Whether this press is the second half of a tap-then-hold on the
+         * steering key, and so may steer by line rather than start a glide
+         * (D39).
+         */
+        val steerArmed: Boolean = false,
     )
 
     private var placedKeys: List<PlacedKey> = emptyList()
@@ -224,6 +268,36 @@ class KeyboardView @JvmOverloads constructor(
      */
     private val activePointers = mutableMapOf<Int, Touch>()
 
+    // -- swiping (D39) --------------------------------------------------------
+
+    /**
+     * The stroke so far, recorded from the moment a finger lands on a letter.
+     *
+     * Recording starts before anything has decided the touch is a glide,
+     * because by the time it *is* one — the finger has to reach a second letter
+     * key — the interesting half of the stroke has already happened. Points are
+     * floats in a fixed array rather than objects: this runs on every move
+     * event of every tap, and a keyboard that allocates per touch report is a
+     * keyboard that stutters.
+     */
+    private var glideX = FloatArray(GLIDE_CAPACITY)
+    private var glideY = FloatArray(GLIDE_CAPACITY)
+    private var glideCount = 0
+
+    /** The pointer whose stroke is being recorded, glide or not yet. */
+    private var glidePointer = MotionEvent.INVALID_POINTER_ID
+
+    /** True once the stroke has been accepted as a glide and is being drawn. */
+    private var gliding = false
+
+    private val glidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        color = TRAIL_STRONG
+    }
+    private val glideRender = Path()
+
     /** Non-null while a long-press popup is open. */
     private var alternatesFor: PlacedKey? = null
     private var alternateBounds: List<RectF> = emptyList()
@@ -251,6 +325,21 @@ class KeyboardView @JvmOverloads constructor(
     private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.KEY_LONG_PRESS_MS)
     private val repeatDelayMs = KeyboardPrefs.timing(context, KeyboardPrefs.REPEAT_DELAY_MS)
     private val repeatIntervalMs = KeyboardPrefs.timing(context, KeyboardPrefs.REPEAT_INTERVAL_MS)
+    private val doubleTapMs = KeyboardPrefs.timing(context, KeyboardPrefs.DOUBLE_TAP_MS)
+
+    /**
+     * Lets the steering key tell a fresh press from the second half of a
+     * tap-then-hold (D39). See [TapThenHold].
+     *
+     * Declared here rather than beside the rest of the swiping state because a
+     * field initialiser can only read fields declared above it, and this one
+     * needs [doubleTapMs]. Kotlin catches that at compile time for a field in
+     * the same class; it is the same shape as the mistake that made the whole
+     * app crash on launch when a `Service` field reached for a system service
+     * before the base context existed, and it is worth keeping the two
+     * together where the dependency is visible.
+     */
+    private val steerArming = TapThenHold(doubleTapMs)
 
     private val density = resources.displayMetrics.density
     private val keyGap = 3f * density
@@ -438,6 +527,7 @@ class KeyboardView @JvmOverloads constructor(
             }
         }
 
+        drawGlide(canvas)
         drawAlternates(canvas)
         drawFlash(canvas)
     }
@@ -555,6 +645,7 @@ class KeyboardView @JvmOverloads constructor(
                         stepAnchorX = x,
                         stepAnchorY = y,
                         touch = typedTouch(hit.key, x, y),
+                        steerArmed = armsSteering(hit.key, event.eventTime),
                     )
                     activePointers[pointerId] = touch
 
@@ -570,6 +661,13 @@ class KeyboardView @JvmOverloads constructor(
                         // A second finger means fast typing, not a deliberate hold.
                         dismissLongPress()
                     }
+
+                    if (glideEnabled && activePointers.size == 1 && isLetter(hit) && !touch.steerArmed) {
+                        beginRecording(pointerId, x, y)
+                    } else {
+                        // Two fingers down is typing, not tracing.
+                        abandonGlide()
+                    }
                     invalidate()
                 }
             }
@@ -582,10 +680,23 @@ class KeyboardView @JvmOverloads constructor(
                 val released = activePointers.remove(pointerId)
                 if (pointerId == repeatPointer) stopRepeat()
 
+                // A finished stroke is a whole word, and nothing else happens
+                // on this release: no key, no popup, no tap remembered.
+                if (pointerId == glidePointer && gliding) {
+                    val path = finishGlide()
+                    dismissLongPress()
+                    forgetTap()
+                    invalidate()
+                    path?.let { onGlide?.invoke(it, geometry) }
+                    return true
+                }
+                if (pointerId == glidePointer) abandonGlide()
+
                 val openPopup = alternatesFor
                 if (openPopup != null && pointerId == longPressPointer) {
                     val chosen = alternateLabels.getOrNull(selectedAlternate)
                     dismissLongPress()
+                    forgetTap()
                     invalidate()
                     chosen?.let { onAlternate?.invoke(openPopup.key, it) }
                 } else {
@@ -596,6 +707,9 @@ class KeyboardView @JvmOverloads constructor(
                     // keyboard entirely must still type what it started on.
                     if (released != null && !released.fired) {
                         onKey?.invoke(released.placed.key, released.touch)
+                        rememberTap(released.placed.key, event.eventTime)
+                    } else {
+                        forgetTap()
                     }
                 }
             }
@@ -603,6 +717,8 @@ class KeyboardView @JvmOverloads constructor(
             MotionEvent.ACTION_CANCEL -> {
                 dismissLongPress()
                 stopRepeat()
+                abandonGlide()
+                forgetTap()
                 activePointers.clear()
                 invalidate()
             }
@@ -638,6 +754,12 @@ class KeyboardView @JvmOverloads constructor(
                     continue
                 }
 
+                DragMode.GLIDE -> {
+                    recordPoint(x, y)
+                    changed = true
+                    continue
+                }
+
                 // One word per swipe, deliberately. Repeating on continued
                 // travel took whole clauses out before the finger stopped.
                 // Lift and swipe again for the next word.
@@ -645,6 +767,13 @@ class KeyboardView @JvmOverloads constructor(
 
                 DragMode.NONE -> Unit
             }
+
+            // Record before deciding. By the time a stroke has proved itself a
+            // glide it has already crossed a key, and that first leg is the one
+            // carrying the first letter — the letter the whole search is
+            // bounded by. Throwing it away and starting from the crossing point
+            // would lose exactly the part that cannot be guessed.
+            if (pointerId == glidePointer) recordPoint(x, y)
 
             // Dragging sideways on the space bar steers the cursor. Entry is by
             // distance rather than a hold timer: requiring a delay first would
@@ -662,11 +791,15 @@ class KeyboardView @JvmOverloads constructor(
             }
 
             // Dragging up and down the steering key moves the cursor a line at
-            // a time (D38). Two guards that the space bar does not need: the
-            // travel has to be mostly vertical, and it has to be further, because
-            // this is a letter key that gets tapped hundreds of times a minute
-            // and a tap that drifts must stay a tap.
-            if (touch.placed.key.steersLines) {
+            // a time (D38) — but only on the second press of a tap-then-hold,
+            // because a plain drag off a letter now means something else (D39).
+            //
+            // The two gestures live on the same key and cannot be told apart by
+            // direction: `h` to `b` is down and to the left, which is exactly
+            // what steering looks like. So they are told apart by what came
+            // before instead. Tap `h`, press it again straight away, and drag:
+            // that sequence is not something a swipe ever produces.
+            if (touch.steerArmed) {
                 val dy = y - touch.downY
                 val dx = x - touch.downX
                 if (abs(dy) > LINE_DRAG_START_DP * density && abs(dy) > abs(dx)) {
@@ -674,7 +807,39 @@ class KeyboardView @JvmOverloads constructor(
                     touch.fired = true
                     touch.stepAnchorY = touch.downY
                     dismissLongPress()
+                    // The tap that armed this typed a letter. It was the price
+                    // of reaching the gesture, not something anybody wanted in
+                    // the text, so it goes back. Only here, on the drag — a
+                    // plain double tap still types both letters.
+                    onRetractSteerTap?.invoke()
                     emitLineSteps(touch, y)
+                    continue
+                }
+            }
+
+            // A stroke that leaves the letter it started on and reaches another
+            // one is a swiped word (D39).
+            //
+            // Reaching a *different letter key* is the whole test, and distance
+            // alone would not do: a tap that drifts must stay a tap, and on a
+            // phone a lazy thumb drifts a surprising way without ever meaning
+            // to leave the key. Requiring an actual crossing also means the
+            // gesture cannot fire on the modifiers, none of which are letters,
+            // so the space bar, shift and backspace keep their own drags
+            // untouched.
+            if (pointerId == glidePointer && !gliding && isLetter(touch.placed)) {
+                val reached = keyAt(x, y)
+                if (reached != null &&
+                    reached !== touch.placed &&
+                    isLetter(reached) &&
+                    hypot(x - touch.downX, y - touch.downY) > GLIDE_START_DP * density
+                ) {
+                    gliding = true
+                    touch.dragMode = DragMode.GLIDE
+                    touch.fired = true
+                    dismissLongPress()
+                    stopRepeat()
+                    changed = true
                     continue
                 }
             }
@@ -745,6 +910,105 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
+    // -- swiping (D39) --------------------------------------------------------
+
+    /** Whether [placed] types exactly one letter, and so can be part of a word. */
+    private fun isLetter(placed: PlacedKey): Boolean {
+        val text = (placed.key.action as? KeyAction.Text)?.text ?: return false
+        return text.length == 1 && text[0].isLetter()
+    }
+
+    /**
+     * Whether this press is the second half of a tap-then-hold on the steering
+     * key, and so should steer by line rather than begin a stroke (D39).
+     */
+    private fun armsSteering(key: Key, now: Long): Boolean =
+        key.steersLines && steerArming.arms(key, now)
+
+    private fun rememberTap(key: Key, now: Long) = steerArming.tap(key, now)
+
+    private fun forgetTap() = steerArming.reset()
+
+    private fun beginRecording(pointerId: Int, x: Float, y: Float) {
+        glidePointer = pointerId
+        gliding = false
+        glideCount = 0
+        recordPoint(x, y)
+    }
+
+    private fun recordPoint(x: Float, y: Float) {
+        if (glideCount >= glideX.size) decimate()
+        glideX[glideCount] = x
+        glideY[glideCount] = y
+        glideCount++
+    }
+
+    /**
+     * Halves the stored stroke by dropping every other point, so that a very
+     * long word keeps its whole shape rather than losing its tail.
+     *
+     * Truncating instead would be worse than it sounds: the *last* letter is
+     * one of the two the search is bounded by, so a stroke cut short is not a
+     * blurry answer but a wrong one.
+     */
+    private fun decimate() {
+        var kept = 0
+        var i = 0
+        while (i < glideCount) {
+            glideX[kept] = glideX[i]
+            glideY[kept] = glideY[i]
+            kept++
+            i += 2
+        }
+        glideCount = kept
+    }
+
+    private fun abandonGlide() {
+        glidePointer = MotionEvent.INVALID_POINTER_ID
+        glideCount = 0
+        if (gliding) {
+            gliding = false
+            invalidate()
+        }
+    }
+
+    private fun finishGlide(): GesturePath? {
+        val path = GesturePath.of(glideX, glideY, glideCount)
+        abandonGlide()
+        return path
+    }
+
+    /**
+     * The stroke as it is being drawn: one ribbon in the trail's purple, fading
+     * out behind the finger.
+     *
+     * Drawn in a fixed number of chunks rather than segment by segment. The
+     * buffer can hold hundreds of points and this runs on every frame of the
+     * gesture, which is the one moment the keyboard is doing the most work.
+     */
+    private fun drawGlide(canvas: Canvas) {
+        if (!gliding || glideCount < 2) return
+        val chunks = GLIDE_FADE_CHUNKS.coerceAtMost(glideCount - 1)
+        val per = (glideCount - 1).toFloat() / chunks
+
+        glidePaint.strokeWidth = GLIDE_STROKE_DP * density
+        for (chunk in 0 until chunks) {
+            val from = (chunk * per).toInt()
+            val to = ((chunk + 1) * per).toInt().coerceAtMost(glideCount - 1)
+            if (to <= from) continue
+
+            glideRender.reset()
+            glideRender.moveTo(glideX[from], glideY[from])
+            for (i in from + 1..to) glideRender.lineTo(glideX[i], glideY[i])
+
+            // Oldest faintest, so the ribbon reads as a direction rather than
+            // as a shape someone has to interpret.
+            val share = (chunk + 1).toFloat() / chunks
+            glidePaint.alpha = (GLIDE_MIN_ALPHA + (255 - GLIDE_MIN_ALPHA) * share).toInt()
+            canvas.drawPath(glideRender, glidePaint)
+        }
+    }
+
     private fun startRepeat(pointerId: Int) {
         stopRepeat()
         repeatPointer = pointerId
@@ -800,6 +1064,29 @@ class KeyboardView @JvmOverloads constructor(
          */
         const val LINE_DRAG_START_DP = 18f
         const val LINE_STEP_DP = 22f
+
+        // -- swiping (D39) ----------------------------------------------------
+
+        /**
+         * How far a finger must travel before leaving a letter can begin a
+         * word, on top of having to reach a different letter key.
+         *
+         * The crossing does most of the work; this only rules out the case
+         * where the press landed in the sliver of a key's hit area that belongs
+         * to its neighbour and never really moved at all.
+         */
+        const val GLIDE_START_DP = 12f
+
+        /** How many points the stroke buffer holds before it is thinned. */
+        const val GLIDE_CAPACITY = 512
+
+        const val GLIDE_STROKE_DP = 5f
+
+        /** Chunks the ribbon is faded across. Enough to look continuous. */
+        const val GLIDE_FADE_CHUNKS = 16
+
+        /** How faint the oldest end of the ribbon gets. */
+        const val GLIDE_MIN_ALPHA = 40
 
         /**
          * Leftward travel on backspace before a word is deleted. Fires once per

@@ -97,6 +97,8 @@ class BilingualKeyboardService : InputMethodService() {
             onDeleteWord = ::handleDeleteWord
             onShiftSwipeUp = ::cycleWordCase
             onLineStep = ::moveCursorByLine
+            onGlide = ::handleGlide
+            onRetractSteerTap = ::retractSteerTap
             onPress = { haptics?.keyPress(this) }
         }
         suggestionStrip = SuggestionStripView(this).apply {
@@ -205,6 +207,9 @@ class BilingualKeyboardService : InputMethodService() {
 
         suggestionsAllowed = FieldPolicy.suggestionsAllowed(info.inputType)
         learningAllowed = FieldPolicy.learningAllowed(info.inputType, info.imeOptions)
+        // A stroke is decoded against the dictionaries or not at all, so
+        // wherever there are no suggestions there is no swiping either (D39).
+        keyboardView.glideEnabled = suggestionsAllowed
         // Focus can land in the middle of existing text, and what precedes the
         // cursor there is text this keyboard did not type. Only a cursor at
         // position zero means there is nothing in front of it to be wrong
@@ -387,6 +392,119 @@ class BilingualKeyboardService : InputMethodService() {
     private fun applyTrailVisibility() {
         keyboardView.trailEnabled = showTrail
         if (!showTrail) clearTrail()
+    }
+
+    // -- swiping (D39) --------------------------------------------------------
+
+    /**
+     * The words the last stroke could also have been, for as long as they are
+     * still the answer to the question on screen.
+     *
+     * The strip carries these rather than completions of what was just
+     * committed, and it is the whole safety net under the feature. Two
+     * ambiguities in swipe typing are permanent — a doubled letter is one place
+     * on the keyboard, and no accent can be traced at all — so `das` and `dass`
+     * are the same stroke, and so are `wurde` and `würde`. Frequency picks the
+     * commoner every time, which is right rather more often than not, and the
+     * other has to be one tap away for the times it is not.
+     */
+    private var glideAlternates: List<Suggestion> = emptyList()
+
+    /**
+     * The word the stroke committed, which is what makes [glideAlternates] a
+     * single invariant rather than a flag to be cleared from a dozen places.
+     *
+     * The runners-up are the answer to "what else could *that* have been", so
+     * they stand exactly as long as *that* is still the word in front of the
+     * cursor. Typing on, backspacing, pressing space, moving the cursor,
+     * changing field — every one of them changes the word in progress and
+     * retires the alternates by doing so, with nothing to remember.
+     */
+    private var glideWord: String? = null
+
+    /**
+     * A word traced in one stroke (D39).
+     *
+     * Committed **without a trailing space**, and left standing as the word in
+     * progress. That is what makes everything after it work with no special
+     * cases: tapping an alternate in the strip replaces it exactly the way
+     * tapping a suggestion always has, typing `s` after swiping `dog` gives
+     * `dogs`, and backspace eats it a letter at a time. The next stroke puts
+     * the space in front of itself.
+     */
+    private fun handleGlide(path: GesturePath, keys: KeyGeometry) {
+        val ic = currentInputConnection ?: return
+        // A field with no suggestions has no dictionary to answer from, so
+        // there is nothing a stroke could mean. Better to do nothing than to
+        // guess at a password.
+        if (!suggestionsAllowed) return
+
+        val candidates = suggestionSource.candidatesForGesture(path, keys).suggestions
+        val best = candidates.firstOrNull() ?: return
+        val text = if (shifted) best.text.replaceFirstChar { it.uppercase() } else best.text
+
+        // Never swallow what was already typed. A half-typed word in front of a
+        // stroke is far likelier to be a word the typist wants than a mistake
+        // they wanted overwritten, and under D14 a replacement that cannot be
+        // undone is not one to make quietly.
+        val separator = if (word.text.isNotEmpty()) " " else ""
+
+        ic.beginBatchEdit()
+        ic.commitText("$separator$text", 1)
+        ic.endBatchEdit()
+        if (expectedCursor >= 0) expectedCursor += separator.length + text.length
+
+        consumeShift()
+        // Nothing here was typed on the keys, so there is no trail to show for
+        // it (D19) — and a ribbon that has just been drawn over them all would
+        // leave every letter of the word lit up.
+        clearTrail()
+
+        // Whatever sat on the far side of the cursor is still there (D23); the
+        // stroke went in front of it, not over it. Rebuilding what the word now
+        // is out of two halves is guesswork, so this is one of the cases where
+        // the field gets asked instead — the same escape hatch [commitTyped]
+        // uses, and rare enough to pay an IPC round trip for.
+        val midWord = word.suffix.isNotEmpty()
+        word.reset(known = true)
+        word.insert(text)
+        reverted = null
+        pendingUndo = null
+        spaceGesture.otherInput()
+        if (midWord) recoverWordAtCursor()
+
+        // Offer the runners-up only when the stroke stands alone. Tapping one
+        // replaces the word in front of the cursor, and with the far half of
+        // another word attached that is not the word they are alternatives to.
+        glideAlternates = if (midWord) emptyList() else candidates.drop(1)
+        glideWord = text
+        haptics?.keyPress(keyboardView)
+        refreshSuggestions()
+    }
+
+    /**
+     * Takes back the letter typed by the tap that armed the line-steering
+     * gesture (D38, D39).
+     *
+     * `h` carries both a letter and a gesture, and since a plain drag off a
+     * letter now traces a word, the gesture has to be reached by tapping first
+     * and pressing again. That first tap types an `h` nobody wanted. It is
+     * removed only once the drag actually starts, so a plain double tap still
+     * types both letters and `withhold` survives.
+     */
+    private fun retractSteerTap() {
+        val ic = currentInputConnection ?: return
+        // Ask the field rather than assume: between the tap and the drag the app
+        // may have done anything, and deleting a character that is not the one
+        // we put there would be worse than leaving ours behind.
+        val before = ic.getTextBeforeCursor(1, 0)?.singleOrNull() ?: return
+        if (!before.equals(Layouts.LINE_STEERING_KEY, ignoreCase = true)) return
+
+        ic.deleteSurroundingText(1, 0)
+        if (expectedCursor > 0) expectedCursor -= 1
+        word.deleteOne()
+        popTrail()
+        refreshSuggestions()
     }
 
     /** Leftward swipe on backspace, one call per word. */
@@ -886,6 +1004,17 @@ class BilingualKeyboardService : InputMethodService() {
         if (!::suggestionStrip.isInitialized) return
         if (!suggestionsAllowed || !word.known) {
             suggestionStrip.slots = emptyList()
+            return
+        }
+
+        // The runners-up from a stroke displace the ordinary candidates while
+        // they last, because they answer a better question. After swiping
+        // `das`, completions of `das` are of no use to anybody; `dass`, which
+        // was traced along the very same path, is the one thing worth offering
+        // (D39).
+        val alternates = glideAlternates
+        if (alternates.isNotEmpty() && word.full == glideWord) {
+            suggestionStrip.slots = StripEntry.mark(alternates, correction = null)
             return
         }
 

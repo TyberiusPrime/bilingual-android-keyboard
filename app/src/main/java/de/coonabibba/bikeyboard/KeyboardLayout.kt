@@ -21,10 +21,15 @@ data class Key(
      */
     val repeats: Boolean = false,
     /**
-     * Whether dragging up and down this key moves the cursor a line at a time
-     * (D38), the way dragging across the space bar moves it a character at a
-     * time. The layout decides which key, so the view does not have to know a
-     * letter by name.
+     * Whether this key can steer the cursor a line at a time (D38), the way
+     * dragging across the space bar moves it a character at a time. The layout
+     * decides which key, so the view does not have to know a letter by name.
+     *
+     * Reached by *tapping and then pressing again* rather than by a plain drag,
+     * since D39 gave a plain drag off a letter to swipe typing. The two cannot
+     * be separated by direction — `h` to `b` is down and to the left, which is
+     * exactly what steering looks like — so they are separated by what came
+     * before.
      */
     val steersLines: Boolean = false,
 )
@@ -139,6 +144,13 @@ object Layouts {
      * `h` because it is the middle of the home row, so the gesture is reachable
      * with either thumb without looking, and because it carries no long-press
      * of its own to compete with.
+     *
+     * The tap that arms the gesture types an `h`, which is then taken back when
+     * the drag begins (D39). Only on the drag: a plain double tap still types
+     * both, so `withhold` and `Rohheit` cost nothing. Choosing a letter that
+     * genuinely never doubles would have avoided the retraction, but no letter
+     * on the home row qualifies, and being in the middle of the home row is the
+     * whole reason this one was picked.
      */
     const val LINE_STEERING_KEY = 'h'
 

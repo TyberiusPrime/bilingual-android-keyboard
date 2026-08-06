@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D38 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D39 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -157,6 +157,9 @@ letter layer is final.
 
 ### D7 — No swipe typing now; do not design it out
 
+**Superseded by D39, which added it. The reasoning below is what made that
+cheap, and is kept for that reason.**
+
 Tap typing only for the foreseeable future. The constraint this places on the
 architecture: the scoring layer must take a *sequence of touch points* and
 return ranked candidates, rather than having the view commit a letter per tap
@@ -166,6 +169,27 @@ dictionaries and the same language-inference model.
 
 This is cheap to honour now and expensive to retrofit, which is the only reason
 it is being decided before it is needed.
+
+**What it turned out to be worth, when D39 came to collect.** The prediction
+was half right, and it is worth being precise about which half, because the
+same reasoning will be applied again to the language model.
+
+Right about the *seam*. A gesture did slot in as a second producer against the
+same lexicons, the same frequency weighting, the same `Candidates` type and so
+the same confidence scale the strip and the auto-replace threshold already read.
+Nothing downstream of the candidate set changed at all.
+
+Wrong about the *shape of the boundary*. D7 assumed the interface would be a
+sequence of touch points and that a swipe would arrive through it. It cannot: a
+tapped word is characters each with a touch behind it, and a stroke is a shape
+with no characters in it whatsoever. There is no honest per-character split of
+a path that crosses six keys it does not mean. Swiping got its own entry point
+next to the existing one rather than reusing it.
+
+The lesson for D10/D12: what a foresighted boundary actually buys is that
+**everything downstream is shared**. Guessing the exact signature years early
+buys nothing, and `List<TypedTouch>` — designed to be the future-proof one —
+was the part that had to be worked around.
 
 ### D8 — Conservative learning — and its conflict with D3
 
@@ -1305,6 +1329,104 @@ field with something focusable above it, this can still dismiss the keyboard.
 Recoverable by tapping the field, and cheaper than the alternative, which is
 reading the whole text back and counting newlines on every step of a drag.
 
+### D39 — Swipe typing, and what it costs `h`
+
+**Supersedes D7's "not now".** A word traced in one stroke, decoded against the
+same two dictionaries and committed on lift.
+
+**The decoder is shape matching and nothing cleverer.** Both the finger's path
+and each candidate word's *ideal* path — the polyline through its key centres —
+are resampled to 32 points spaced evenly by distance, and the cost is the mean
+gap between corresponding points, in key widths. Resampling by distance rather
+than time is what throws away how fast the finger moved and keeps the shape.
+
+Comparing path against path rather than path against *letters* is the one
+decision in the decoder that matters. Swiping `hello` crosses `r`, `t`, `y`,
+`d`, `f`, `g` and `j` on the way, and any scheme that matches touch points
+against candidate letters has to explain away every one of them. Path against
+path does not, because the ideal path travels over those keys too.
+
+**The search is bounded by the two things a stroke says clearly.** A finger
+comes down and lifts deliberately, so the first and last letters are near
+certain. That pair is a slice of about three hundred words across both
+dictionaries — measured, out of seventy thousand. The last letter is one
+character comparison and throws away most of a first-letter bucket; the length
+of the journey is one pass over the word and throws away most of the rest; only
+what survives both is worth the full comparison. Endpoints admit their close
+neighbours too, capped at three, because unlike everywhere else in the search
+that generosity is *quadratic* — three first letters and three last ones is nine
+slices.
+
+**Measured on the shipped wordlists**, the 800 commonest words of the two
+languages:
+
+| trace | top-1 | top-3 |
+|---|---|---|
+| perfect | 97% | 100% |
+| realistic (rounded corners, thumb wander) | 97% | 100% |
+| sloppy | 96% | 100% |
+| endpoints half a key off | 94% | 100% |
+
+About 265µs per stroke, warm. This runs once per word rather than once per
+keystroke, so it has a whole word's worth of typing to hide in.
+
+**Every miss is one of two permanent ambiguities, and the right word is always
+rank two.** A doubled letter is one place on the keyboard — the finger does not
+move for the second `l` of `hello` — so `das` and `dass` are traced along
+literally the same path. Folding does the same to `wurde` and `würde`, since no
+accent can be swiped at all (D5 puts them on a long-press). Nothing separates
+these but how common each is, the commoner wins, and it is right rather more
+often than not. What makes that survivable is that **the runners-up stay in the
+strip**, one tap away, and they displace ordinary completions while they last:
+after swiping `das`, completions of `das` are of no use to anybody and `dass` is
+the only thing worth offering.
+
+**A stroke commits without a trailing space and stays the word in progress.**
+That is what makes everything after it work with no special cases: tapping an
+alternate replaces it exactly the way tapping a suggestion always has, typing
+`s` after swiping `dog` gives `dogs`, and backspace eats it a letter at a time.
+The next stroke puts the space in front of itself. And a half-typed word in
+front of a stroke is never swallowed — it gets that separating space — because
+it is far likelier to be wanted than to be a mistake, and under D14 a
+replacement that cannot be undone is not one to make quietly.
+
+The alternates are tied to the committed word rather than cleared by hand.
+Typing on, backspacing, pressing space, moving the cursor, changing field: every
+one of them changes the word in progress and retires the alternates by doing so.
+One invariant instead of a list of places to remember.
+
+**No swiping where there are no suggestions.** A password box has no dictionary
+for a stroke to be decoded against, so the gesture is not recorded there at all
+rather than recorded and refused. A gesture that visibly draws itself across the
+keys and then does nothing is worse than one that is absent — and the ribbon
+would be a picture of a password.
+
+**Entry is a crossing, not a distance.** A drag off a letter becomes a stroke
+when it reaches a *different letter key*. Distance alone would not do: a tap
+that drifts must stay a tap, and a lazy thumb drifts a surprising way without
+meaning to leave the key. Requiring a real crossing also means the gesture
+cannot fire on the modifiers, none of which are letters, so the space bar,
+shift and backspace keep the drags D20 and D24 gave them. Recording starts at
+touch-down regardless, before anything has been decided, because by the time a
+stroke has proved itself the first leg has already happened — and the first leg
+carries the first letter, which is half of what bounds the search.
+
+**What it costs `h`.** D38 put line steering on a plain vertical drag off `h`,
+and a plain drag off a letter is now a word. The two cannot be separated by
+direction: `h` to `b` is down and to the left, which is exactly what steering
+looks like. So they are separated by what came *before* — **tap `h`, then press
+again and drag**. No stroke ever begins that way, because a stroke begins with a
+finger landing on a key it has not just left.
+
+The arming tap types an `h` nobody wanted, so it is taken back when the drag
+starts. **Only on the drag**: a plain double tap still types both letters, so
+`withhold` and `Rohheit` cost nothing. The alternative considered was hanging
+the gesture on a letter that never doubles, but no letter on the home row
+qualifies and being in the middle of the home row is the whole reason `h` was
+picked. And the retraction asks the field what is actually in front of the
+cursor rather than assuming, because between the tap and the drag the app may
+have done anything.
+
 ---
 
 ## Architecture
@@ -1316,7 +1438,7 @@ Falls out of the decisions above, particularly D7, D12 and D15.
            │
            ▼
    ┌───────────────┐   spatial likelihood per key, not a hit test (D15)
-   │  TouchModel   │   learns one-thumb drift; later, gesture paths (D7)
+   │  TouchModel   │   learns one-thumb drift; gesture paths done (D39)
    └───────┬───────┘
            │  P(key | touch) distribution per tap
            ▼
@@ -1372,6 +1494,13 @@ the system-bar insets. Unhandled, the system's own hide-keyboard
 chevron, IME-switcher globe and gesture pill are composited over the bottom row
 and take its taps. The input view is wrapped in a container carrying the
 navigation-bar inset as bottom padding.
+
+**Candidates** now has two producers, not one (D39). Taps arrive as characters
+with a touch behind each and are matched by spatial edit distance; strokes
+arrive as a shape with no characters at all and are matched by comparing paths.
+They meet at the candidate set and share everything past it. The diagram's
+single arrow into Candidates is a simplification — but only of the input side,
+which is exactly what D7 predicted would be the part free to differ.
 
 **Scorer** must emit calibrated confidence, not just a ranking (D3). This is a
 distinct engineering task from getting good rankings, it is usually skipped,

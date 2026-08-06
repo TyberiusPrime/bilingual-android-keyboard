@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D39 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D40 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -1486,6 +1486,70 @@ qualifies and being in the middle of the home row is the whole reason `h` was
 picked. And the retraction asks the field what is actually in front of the
 cursor rather than assuming, because between the tap and the drag the app may
 have done anything.
+
+### D40 — The personal key
+
+**The strip could only offer to remember a word when it had a slot going
+spare**, and that is exactly backwards. The moment you most need to add a word
+is when the keyboard is *confident and wrong* — when what you typed is one slip
+from three real words, so all three slots are full of them and there is no room
+left to say "no, the thing I actually typed". A word the keyboard has never
+heard of gets offered readily; a word it thinks it knows better than you cannot
+be added at all.
+
+Under D8 the personal store is the only thing that ever teaches this keyboard
+anything, so the friction of adding a word sets the ceiling on how good it
+becomes. A path that closes precisely when it is needed is not a path.
+
+So the position next to the layer toggle — the globe's, then the trail
+toggle's (D38) — becomes a **purple plus**, in the same purple as the trail and
+the correction flash, because everything in this keyboard that means "the
+keyboard knows something about your words" is that colour and this is the key
+that decides what it knows.
+
+**The trail toggle keeps the position in password fields, and only there.**
+That was always where its argument lived — the moment somebody is standing
+behind you — and D38's per-field settings already meant the two kinds of field
+answered separately. Now they carry different keys. The two are the same width
+in the same place, so nothing moves under the thumb when focus changes, which
+is D16's rule applied to a swap it did not anticipate.
+
+**Three things on one key**, because they are three points on one idea:
+
+- **Tap** opens the quick menu: the handful of stored strings worth inserting
+  whole rather than completing towards — an email address, a postcode, a name
+  nobody spells right. These are ordinary personal-store words with a flag, not
+  a second list, so a string cannot be on the menu without being a word the
+  keyboard knows.
+- **Hold** remembers the word in front of the cursor. This is the point of the
+  key and the answer to the complaint above: it needs no free slot, no offer,
+  and no particular state — just the word being there.
+- **Double tap** opens the launcher screen, where the stored words are listed,
+  tagged and removed.
+
+The order those are tested in is the design. A second tap inside the window
+always wins, *including the tap that closes the menu the first one opened* —
+which is what makes "tap for the menu, double tap for settings" one motion
+rather than two that fight. And a tap with nothing on the menu opens the
+settings too rather than doing nothing, which is D38's lesson applied before it
+could be relearned: a control that silently does nothing is worse than one that
+is absent, and an empty menu means the settings screen is exactly where you
+need to go.
+
+**The quick menu is modal, and the long-press popup is not.** It opens on a
+*release*, so by the time it is on screen the finger has gone and it has to
+survive until a separate press picks something — where the alternates popup
+lives and dies inside a single touch. That is why it is not the same mechanism
+despite looking like one, and it is drawn as stacked rows rather than
+side-by-side cells because addresses are not characters and a row of them would
+be unreadable at any width a phone has.
+
+**The file format had to stay readable.** A quick entry is the word, a tab, and
+a marker; a bare line is an ordinary word, which is every line of every file
+written before this. The store also holds one list of entries rather than a
+list of words plus a set of tags — two fields cannot be swapped together, and a
+reader landing between the two writes would see a word tagged quick that the
+store does not have.
 
 ---
 

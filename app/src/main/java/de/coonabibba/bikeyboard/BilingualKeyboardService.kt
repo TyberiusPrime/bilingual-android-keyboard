@@ -1,5 +1,6 @@
 package de.coonabibba.bikeyboard
 
+import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
@@ -99,6 +100,10 @@ class BilingualKeyboardService : InputMethodService() {
             onLineStep = ::moveCursorByLine
             onGlide = ::handleGlide
             onRetractSteerTap = ::retractSteerTap
+            onPersonalMenu = ::quickWords
+            onQuickInsert = ::insertQuickWord
+            onPersonalHold = ::learnCurrentWord
+            onPersonalSettings = ::openSetup
             onPress = { haptics?.keyPress(this) }
         }
         suggestionStrip = SuggestionStripView(this).apply {
@@ -188,7 +193,10 @@ class BilingualKeyboardService : InputMethodService() {
         shifted = !isPassword && shouldAutoCapitalise(info)
         capsLock = false
         shiftTaps.reset()
-        keyboardView.layout = Layouts.forLayer(layer)
+        keyboardView.layout = Layouts.forLayer(layer, inPassword = isPassword)
+        // A menu left open across a change of field would be offering to type
+        // somebody's address into whatever has the focus now.
+        keyboardView.dismissQuickMenu()
         keyboardView.shifted = shifted
         keyboardView.capsLocked = false
 
@@ -297,7 +305,7 @@ class BilingualKeyboardService : InputMethodService() {
 
             KeyAction.ToggleLayer -> {
                 layer = Layouts.other(layer)
-                keyboardView.layout = Layouts.forLayer(layer)
+                keyboardView.layout = Layouts.forLayer(layer, inPassword = passwordField)
             }
 
             KeyAction.ToggleTrail -> {
@@ -305,6 +313,12 @@ class BilingualKeyboardService : InputMethodService() {
                 KeyboardPrefs.setShowTrail(this, passwordField, showTrail)
                 applyTrailVisibility()
             }
+
+            // Handled entirely in the view, which owns the menu (D40). It never
+            // reaches here, but the branch has to exist for the `when` to be
+            // exhaustive — and an exhaustive `when` is what will catch the next
+            // key action somebody adds and forgets to wire up.
+            KeyAction.Personal -> Unit
         }
     }
 
@@ -396,6 +410,84 @@ class BilingualKeyboardService : InputMethodService() {
     private fun applyTrailVisibility() {
         keyboardView.trailEnabled = showTrail
         if (!showTrail) clearTrail()
+    }
+
+    // -- the personal key (D40) -----------------------------------------------
+
+    /**
+     * The words tagged for the quick menu.
+     *
+     * Re-read if the file has changed, because the launcher screen may have
+     * been in front of this keyboard a second ago adding one — that is the
+     * usual way a word gets onto this menu, and a menu that needed the keyboard
+     * restarted to notice would be useless.
+     */
+    private fun quickWords(): List<String> {
+        personalStore.reloadIfChanged()
+        return personalStore.quick()
+    }
+
+    /**
+     * Inserts a whole tagged string — an address, a name — at the cursor.
+     *
+     * Committed as it stands, with no trailing space and no shift applied. What
+     * is on this menu is exact by construction: somebody typed it once and said
+     * "remember precisely that", and capitalising it because a one-shot shift
+     * happened to be pending would be the keyboard second-guessing the one
+     * thing it was told for certain.
+     */
+    private fun insertQuickWord(text: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(text, 1)
+        if (expectedCursor >= 0) expectedCursor += text.length
+        consumeShift()
+        clearTrail()
+        word.reset(known = true)
+        word.insert(text)
+        glideWord = null
+        glideAlternates = emptyList()
+        reverted = null
+        pendingUndo = null
+        spaceGesture.otherInput()
+        haptics?.keyPress(keyboardView)
+        refreshSuggestions()
+    }
+
+    /**
+     * Remembers the word in front of the cursor (D8, D40).
+     *
+     * The whole point of the key. Under D8 the personal store is the only thing
+     * that ever teaches this keyboard anything, so how easily a word gets into
+     * it sets the ceiling on how good the keyboard becomes — and until now the
+     * only way in was an offer in the suggestion strip, which appeared only
+     * when there was a slot going spare. A word the keyboard *nearly* knows
+     * produces three confident suggestions and no room to say "no, the thing I
+     * actually typed".
+     */
+    private fun learnCurrentWord() {
+        val text = word.full
+        if (text.isEmpty()) {
+            // Nothing to learn is not nothing to do: say so with the same
+            // double tick a correction uses, so the hold is never silent.
+            haptics?.correction()
+            return
+        }
+        if (!learningAllowed || !addWord(text)) {
+            haptics?.correction()
+            return
+        }
+        // The word is known now, so the strip's own add-word offer goes away
+        // and the completions change. Both are the confirmation.
+        keyboardView.flashCorrection()
+        haptics?.correction()
+    }
+
+    /** Opens the launcher screen, which is where the menu's words are managed. */
+    private fun openSetup() {
+        startActivity(
+            Intent(this, SetupActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        )
     }
 
     // -- swiping (D39) --------------------------------------------------------
@@ -1114,11 +1206,13 @@ class BilingualKeyboardService : InputMethodService() {
      * Remembers a word. The text is not touched — the word is already typed;
      * what was missing is the keyboard knowing it.
      */
-    private fun addWord(text: String) {
-        if (!learningAllowed) return
-        if (!personalStore.add(text)) return
+    /** Returns whether anything was learned — the personal key reports it (D40). */
+    private fun addWord(text: String): Boolean {
+        if (!learningAllowed) return false
+        if (!personalStore.add(text)) return false
         diskThread.execute { personalStore.persist() }
         refreshSuggestions()
+        return true
     }
 
     /**

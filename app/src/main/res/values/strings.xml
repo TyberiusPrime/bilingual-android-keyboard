@@ -46,7 +46,10 @@
     <string name="status_enabled">Status: enabled.</string>
     <string name="status_not_enabled">Status: not enabled yet.</string>
     <string name="learned_title">Learned words (%1$d)</string>
-    <string name="learned_empty">Nothing learned yet. When the keyboard does not know a word you are typing, the suggestion strip offers to remember it.</string>
+    <string name="learned_empty">Nothing learned yet. Hold the + key while typing a word to remember it, or take the suggestion strip\u2019s offer when it appears.</string>
     <string name="action_forget">Forget</string>
+    <string name="action_quick">Quick</string>
+    <string name="action_quick_word">Put %1$s on the quick menu</string>
+    <string name="quick_explanation">Tick Quick to put a word on the menu the + key opens — for the things worth inserting whole, like an email address or a name.</string>
     <string name="action_forget_word">Forget %1$s</string>
 </resources>

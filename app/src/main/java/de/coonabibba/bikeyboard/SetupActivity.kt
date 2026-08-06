@@ -10,6 +10,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -122,11 +123,12 @@ class SetupActivity : AppCompatActivity() {
         // Alphabetical, ignoring case and accents, so a word is where the eye
         // looks for it. The store itself keeps the order words were added in,
         // which is the order they will be least easily found in.
-        val words = store.all().sortedWith(compareBy({ Folding.fold(it) }, { it }))
-        learnedHeading.text = getString(R.string.learned_title, words.size)
+        val entries = store.entries()
+            .sortedWith(compareBy({ Folding.fold(it.word) }, { it.word }))
+        learnedHeading.text = getString(R.string.learned_title, entries.size)
         learnedList.removeAllViews()
 
-        if (words.isEmpty()) {
+        if (entries.isEmpty()) {
             learnedList.addView(
                 TextView(this).apply {
                     setText(R.string.learned_empty)
@@ -136,23 +138,44 @@ class SetupActivity : AppCompatActivity() {
             return
         }
 
-        words.forEach { word ->
+        // What the quick menu is for, said once above the list rather than on
+        // every row: the checkbox is otherwise a mystery with no label.
+        learnedList.addView(
+            TextView(this).apply {
+                setText(R.string.quick_explanation)
+                alpha = 0.7f
+                setPadding(0, 0, 0, dp(8))
+            },
+        )
+
+        entries.forEach { entry ->
             learnedList.addView(
                 LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     addView(
                         TextView(context).apply {
-                            text = word
+                            text = entry.word
                             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
                         },
                         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
                     )
                     addView(
+                        CheckBox(context).apply {
+                            setText(R.string.action_quick)
+                            isChecked = entry.quick
+                            contentDescription =
+                                getString(R.string.action_quick_word, entry.word)
+                            setOnCheckedChangeListener { _, checked ->
+                                setQuick(entry.word, checked)
+                            }
+                        },
+                    )
+                    addView(
                         Button(context).apply {
                             setText(R.string.action_forget)
-                            contentDescription = getString(R.string.action_forget_word, word)
-                            setOnClickListener { forget(word) }
+                            contentDescription = getString(R.string.action_forget_word, entry.word)
+                            setOnClickListener { forget(entry.word) }
                         },
                     )
                 },
@@ -164,6 +187,19 @@ class SetupActivity : AppCompatActivity() {
         if (!store.remove(word)) return
         store.persist()
         showLearnedWords()
+    }
+
+    /**
+     * Puts a word on the keyboard's quick menu, or takes it off (D40).
+     *
+     * The list is deliberately not rebuilt afterwards: this runs from a
+     * checkbox that has already drawn itself in the new state, and redrawing
+     * every row underneath the finger that just tapped one is how a list loses
+     * your place.
+     */
+    private fun setQuick(word: String, quick: Boolean) {
+        if (!store.setQuick(word, quick)) return
+        store.persist()
     }
 
     private fun button(textId: Int, onClick: () -> Unit) = Button(this).apply {

@@ -100,6 +100,26 @@ class KeyboardView @JvmOverloads constructor(
     var onGlide: ((GesturePath, KeyGeometry) -> Unit)? = null
 
     /**
+     * Asked for the words to put on the quick menu when the personal key is
+     * tapped (D40).
+     *
+     * A question rather than a property because the list can change between one
+     * tap and the next — the launcher screen writes the same file the keyboard
+     * reads — and a view holding a stale copy of it would be a menu that
+     * silently stops matching the settings that produced it.
+     */
+    var onPersonalMenu: (() -> List<String>)? = null
+
+    /** A word chosen from the quick menu. */
+    var onQuickInsert: ((String) -> Unit)? = null
+
+    /** The personal key held down: remember the word in front of the cursor. */
+    var onPersonalHold: (() -> Unit)? = null
+
+    /** The personal key tapped twice, or tapped with nothing yet on the menu. */
+    var onPersonalSettings: (() -> Unit)? = null
+
+    /**
      * Called when the steering gesture claims a letter the previous tap already
      * typed (D39): tap `h`, press again and drag, and that first `h` has to go.
      *
@@ -115,6 +135,7 @@ class KeyboardView @JvmOverloads constructor(
             dismissLongPress()
             stopRepeat()
             abandonGlide()
+            dismissQuickMenu()
             activePointers.clear()
             placedKeys = placeKeys(width.toFloat(), height.toFloat())
             geometry = buildGeometry(placedKeys)
@@ -311,6 +332,29 @@ class KeyboardView @JvmOverloads constructor(
     }
     private val glideRender = Path()
 
+    // -- the quick menu (D40) -------------------------------------------------
+
+    /**
+     * The quick menu's rows, empty while it is closed.
+     *
+     * Unlike the long-press popup this one is *modal*: it opens on a release,
+     * so by the time it is on screen the finger has already gone, and it has to
+     * survive until a separate press picks something. That is the whole reason
+     * it is not the same mechanism — the alternates popup lives inside one
+     * touch, from press to release, and cannot outlast it.
+     */
+    private var quickItems: List<String> = emptyList()
+    private var quickBounds: List<RectF> = emptyList()
+    private var quickPressed = -1
+
+    /**
+     * Whether the menu was already open when the current press began, so that
+     * the press which dismisses it is not also the press that reopens it.
+     */
+    private var quickWasOpen = false
+
+    val quickMenuOpen: Boolean get() = quickItems.isNotEmpty()
+
     /** Non-null while a long-press popup is open. */
     private var alternatesFor: PlacedKey? = null
     private var alternateBounds: List<RectF> = emptyList()
@@ -354,6 +398,14 @@ class KeyboardView @JvmOverloads constructor(
      */
     private val steerArming = TapThenHold(doubleTapMs)
 
+    /**
+     * Tap pairs on the personal key (D40). Lives here rather than in the
+     * service because the view already owns whether the quick menu is open, and
+     * the two answers have to be decided together: the second tap of a pair
+     * both dismisses the menu and opens the settings.
+     */
+    private val personalTaps = DoubleTap(doubleTapMs)
+
     private val density = resources.displayMetrics.density
     private val keyGap = 3f * density
     private val keyRadius = 6f * density
@@ -386,6 +438,16 @@ class KeyboardView @JvmOverloads constructor(
         color = HINT_FG
         textAlign = Paint.Align.RIGHT
         textSize = 10f * density
+    }
+
+    // The quick menu's own paints (D40): left-aligned and smaller than a key's,
+    // because these rows carry addresses rather than letters.
+    private val quickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = POPUP_BG }
+    private val quickPressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = POPUP_SELECTED_BG }
+    private val quickTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.LEFT
+        textSize = 16f * density
     }
 
     init {
@@ -430,6 +492,7 @@ class KeyboardView @JvmOverloads constructor(
         dismissLongPress()
         stopRepeat()
         flash.cancel()
+        dismissQuickMenu()
         activePointers.clear()
     }
 
@@ -525,6 +588,15 @@ class KeyboardView @JvmOverloads constructor(
             if (label.isNotEmpty()) {
                 val cx = placed.bounds.centerX()
                 val cy = placed.bounds.centerY() - (labelPaint.descent() + labelPaint.ascent()) / 2f
+                // The personal key is purple, the same purple as the trail and
+                // the correction flash. Everything in this keyboard that means
+                // "the keyboard knows something about your words" is that
+                // colour, and this is the key that decides what it knows (D40).
+                labelPaint.color = if (placed.key.action == KeyAction.Personal) {
+                    TRAIL_STRONG
+                } else {
+                    Color.WHITE
+                }
                 canvas.drawText(label, cx, cy, labelPaint)
             }
 
@@ -542,6 +614,7 @@ class KeyboardView @JvmOverloads constructor(
 
         drawGlide(canvas)
         drawAlternates(canvas)
+        drawQuickMenu(canvas)
         drawFlash(canvas)
     }
 
@@ -579,7 +652,9 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun scheduleLongPress(placed: PlacedKey, pointerId: Int) {
         dismissLongPress()
-        if (placed.key.longPress.isEmpty()) return
+        // The personal key has no alternates but does have a hold (D40), so it
+        // wants the timer even though there is no popup at the end of it.
+        if (placed.key.longPress.isEmpty() && placed.key.action != KeyAction.Personal) return
         longPressPointer = pointerId
         handler.postDelayed(longPressRunnable, longPressMs)
     }
@@ -597,7 +672,21 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun openAlternates() {
-        val target = activePointers[longPressPointer]?.placed ?: return
+        val touch = activePointers[longPressPointer] ?: return
+        val target = touch.placed
+
+        // Holding the personal key remembers the word rather than opening
+        // anything (D40). It fires here, on the timer, so the word is learned
+        // the moment the hold is long enough — releasing is not part of it, and
+        // the release must then produce no tap.
+        if (target.key.action == KeyAction.Personal) {
+            touch.fired = true
+            dismissLongPress()
+            personalTaps.reset()
+            onPersonalHold?.invoke()
+            return
+        }
+
         val labels = target.key.longPress.map(::shiftAlternate)
         if (labels.isEmpty()) return
 
@@ -642,12 +731,19 @@ class KeyboardView @JvmOverloads constructor(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // The quick menu is modal while it is up, so it gets first refusal on
+        // everything (D40).
+        if (handleQuickMenu(event)) return true
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 // The last stroke stays on screen only until something else
                 // happens, whatever that something is — including a press on a
                 // key that starts no stroke of its own.
                 clearSettledGlide()
+                // Only a press that had to close the menu carries this; the
+                // next one starts clean.
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) quickWasOpen = false
                 val index = event.actionIndex
                 val pointerId = event.getPointerId(index)
                 val x = event.getX(index)
@@ -723,11 +819,16 @@ class KeyboardView @JvmOverloads constructor(
                     // be under the release point — a tap that drifts off the
                     // keyboard entirely must still type what it started on.
                     if (released != null && !released.fired) {
-                        onKey?.invoke(released.placed.key, released.touch)
+                        if (released.placed.key.action == KeyAction.Personal) {
+                            tapPersonal(released.placed, event.eventTime)
+                        } else {
+                            onKey?.invoke(released.placed.key, released.touch)
+                        }
                         rememberTap(released.placed.key, event.eventTime)
                     } else {
                         forgetTap()
                     }
+                    quickWasOpen = false
                 }
             }
 
@@ -924,6 +1025,162 @@ class KeyboardView @JvmOverloads constructor(
             val direction = if (y > touch.stepAnchorY) 1 else -1
             touch.stepAnchorY += direction * step
             onLineStep?.invoke(direction)
+        }
+    }
+
+    // -- the quick menu (D40) -------------------------------------------------
+
+    /**
+     * What a tap on the personal key does.
+     *
+     * Three outcomes from one key, and the order they are tested in is the
+     * design. A second tap inside the double-tap window always wins and opens
+     * the settings — including the very tap that closes the menu the first one
+     * opened, which is what makes "tap for the menu, double tap for settings"
+     * work as one motion rather than as two conflicting ones.
+     *
+     * A tap with nothing on the menu goes to the settings too, rather than
+     * doing nothing. D38 was explicit about this: a control that silently does
+     * nothing is worse than one that is absent, and the settings screen is
+     * exactly where somebody with an empty menu needs to go.
+     */
+    private fun tapPersonal(target: PlacedKey, now: Long) {
+        val reopening = quickWasOpen
+        if (personalTaps.tap(now)) {
+            dismissQuickMenu()
+            onPersonalSettings?.invoke()
+            return
+        }
+        if (reopening) return
+
+        val items = onPersonalMenu?.invoke().orEmpty()
+        if (items.isEmpty()) {
+            onPersonalSettings?.invoke()
+            return
+        }
+        openQuickMenu(target, items)
+    }
+
+    /**
+     * Lays the menu out upwards from the key, as many rows as there is room
+     * for.
+     *
+     * Rows rather than the long-press popup's cells because the things on it
+     * are addresses and names, not characters — a row of them side by side
+     * would be unreadable at any width the screen has.
+     */
+    private fun openQuickMenu(target: PlacedKey, items: List<String>) {
+        val rowHeight = QUICK_ROW_DP * density
+        // Upwards from the key, into the strip's headroom, and no further.
+        val available = target.bounds.top + popupHeadroom
+        val fits = (available / rowHeight).toInt().coerceAtLeast(1)
+        val shown = items.take(minOf(fits, QUICK_MAX_ROWS))
+
+        val padding = QUICK_PADDING_DP * density
+        val widest = shown.maxOf { quickTextPaint.measureText(it) } + padding * 2
+        val menuWidth = widest.coerceAtMost(width - keyGap * 2)
+        // Centred on the key where it can be, shoved inboard where it cannot.
+        val left = (target.bounds.centerX() - menuWidth / 2f)
+            .coerceIn(keyGap, width - keyGap - menuWidth)
+
+        val bottom = target.bounds.top - keyGap
+        quickBounds = shown.indices.map { index ->
+            val rowBottom = bottom - index * rowHeight
+            RectF(left, rowBottom - rowHeight + keyGap, left + menuWidth, rowBottom)
+        }
+        quickItems = shown
+        quickPressed = -1
+        invalidate()
+    }
+
+    fun dismissQuickMenu() {
+        if (quickItems.isEmpty()) return
+        quickItems = emptyList()
+        quickBounds = emptyList()
+        quickPressed = -1
+        invalidate()
+    }
+
+    private fun quickRowAt(x: Float, y: Float): Int =
+        quickBounds.indexOfFirst { it.contains(x, y) }
+
+    /**
+     * The menu's own touch handling, which runs in front of everything else
+     * while it is open.
+     *
+     * Returns whether the event was the menu's. A press on the personal key is
+     * deliberately *not* claimed: it dismisses the menu and then carries on as
+     * an ordinary press, so it can go on to be the second half of a double tap.
+     */
+    private fun handleQuickMenu(event: MotionEvent): Boolean {
+        if (quickItems.isEmpty()) return false
+        // The pointer this event is about, which for a second finger landing is
+        // not the first one.
+        val index = event.actionIndex
+        val x = event.getX(index)
+        val y = event.getY(index)
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val row = quickRowAt(x, y)
+                if (row >= 0) {
+                    quickPressed = row
+                    invalidate()
+                    return true
+                }
+                quickWasOpen = true
+                dismissQuickMenu()
+                // A press on the key that opened it falls through; a press
+                // anywhere else is spent on closing the menu and types nothing.
+                return keyAt(x, y)?.key?.action != KeyAction.Personal
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (quickPressed < 0) return false
+                val row = quickRowAt(x, y)
+                if (row != quickPressed) {
+                    quickPressed = row
+                    invalidate()
+                }
+                return true
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (quickPressed < 0) return false
+                val chosen = quickItems.getOrNull(quickPressed)
+                dismissQuickMenu()
+                chosen?.let { onQuickInsert?.invoke(it) }
+                return true
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                quickWasOpen = false
+                dismissQuickMenu()
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun drawQuickMenu(canvas: Canvas) {
+        if (quickItems.isEmpty()) return
+        quickBounds.forEachIndexed { index, bounds ->
+            canvas.drawRoundRect(
+                bounds,
+                keyRadius,
+                keyRadius,
+                if (index == quickPressed) quickPressedPaint else quickPaint,
+            )
+            val padding = QUICK_PADDING_DP * density
+            val baseline =
+                bounds.centerY() - (quickTextPaint.descent() + quickTextPaint.ascent()) / 2f
+            // Clipped rather than ellipsised: an address that does not fit is
+            // still recognisable from its front, and its front is the part that
+            // distinguishes it from the other one on the list.
+            canvas.save()
+            canvas.clipRect(bounds)
+            canvas.drawText(quickItems[index], bounds.left + padding, baseline, quickTextPaint)
+            canvas.restore()
         }
     }
 
@@ -1181,6 +1438,19 @@ class KeyboardView @JvmOverloads constructor(
         /** The rings on the two ends — the letters that bound the search. */
         const val GLIDE_END_RADIUS_DP = 9f
         const val GLIDE_END_STROKE_DP = 3f
+
+        // -- the quick menu (D40) ---------------------------------------------
+
+        /** Shorter than a key: these rows are read, not aimed at blind. */
+        const val QUICK_ROW_DP = 44f
+        const val QUICK_PADDING_DP = 12f
+
+        /**
+         * However much room there is, the menu stops here. It is a shortlist of
+         * things worth a key of their own; past half a dozen it is a directory,
+         * and scrolling one of those is slower than typing.
+         */
+        const val QUICK_MAX_ROWS = 6
 
         /**
          * Leftward travel on backspace before a word is deleted. Fires once per

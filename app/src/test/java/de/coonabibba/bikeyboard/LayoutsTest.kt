@@ -256,17 +256,67 @@ class LayoutsTest {
         assertEquals(emptyList<String>(), steering.longPress)
     }
 
-    /** D38: exactly one trail toggle, in the same place on every layer. */
-    @Test
-    fun `the trail toggle is present once per layer and never moves`() {
-        val positions = Layer.entries.map { layer ->
-            val rows = Layouts.forLayer(layer).rows
-            val toggles = rows.flatten().filter { it.action == KeyAction.ToggleTrail }
-            assertEquals("layer $layer", 1, toggles.size)
-            val rowIndex = rows.indexOfFirst { row -> row.any { it.action == KeyAction.ToggleTrail } }
-            rowIndex to rows[rowIndex].indexOfFirst { it.action == KeyAction.ToggleTrail }
+    // -- the key beside the layer toggle (D38, D40) ---------------------------
+
+    private fun positionOf(inPassword: Boolean, action: KeyAction): Pair<Int, Int> {
+        val rows = Layer.entries.map { Layouts.forLayer(it, inPassword).rows }
+        val positions = rows.map { layer ->
+            val rowIndex = layer.indexOfFirst { row -> row.any { it.action == action } }
+            assertTrue("$action is missing", rowIndex >= 0)
+            assertEquals(
+                "$action appears more than once",
+                1,
+                layer.flatten().count { it.action == action },
+            )
+            rowIndex to layer[rowIndex].indexOfFirst { it.action == action }
         }
-        assertEquals("the toggle moves between layers", 1, positions.distinct().size)
+        assertEquals("$action moves between layers", 1, positions.distinct().size)
+        return positions.first()
+    }
+
+    /**
+     * D40: the position next to the layer toggle carries the personal key in an
+     * ordinary field and the trail toggle in a password one. Exactly one of
+     * them, never both, and always in the same place — the same rule D16 gives
+     * the layer toggle, for the same reason.
+     */
+    @Test
+    fun `the personal key and the trail toggle share one position and never both appear`() {
+        val personal = positionOf(inPassword = false, KeyAction.Personal)
+        val trail = positionOf(inPassword = true, KeyAction.ToggleTrail)
+        assertEquals("the two keys sit in different places", personal, trail)
+
+        Layer.entries.forEach { layer ->
+            assertTrue(
+                "the trail toggle is on an ordinary $layer layout",
+                Layouts.forLayer(layer, inPassword = false).rows.flatten()
+                    .none { it.action == KeyAction.ToggleTrail },
+            )
+            assertTrue(
+                "the personal key is on a password $layer layout",
+                Layouts.forLayer(layer, inPassword = true).rows.flatten()
+                    .none { it.action == KeyAction.Personal },
+            )
+        }
+    }
+
+    /**
+     * Swapping one key for another must not change anything else about the
+     * board. A layout that shifted under the thumb when focus moved to a
+     * password box would break D16's promise by the back door.
+     */
+    @Test
+    fun `a password layout differs from an ordinary one in exactly one key`() {
+        Layer.entries.forEach { layer ->
+            val ordinary = Layouts.forLayer(layer, inPassword = false).rows.flatten()
+            val password = Layouts.forLayer(layer, inPassword = true).rows.flatten()
+            assertEquals("layer $layer has a different shape", ordinary.size, password.size)
+            val differences = ordinary.indices.count { ordinary[it] != password[it] }
+            assertEquals("layer $layer differs in $differences keys", 1, differences)
+            // And the one that differs is the same width, so nothing moves.
+            val index = ordinary.indices.first { ordinary[it] != password[it] }
+            assertEquals(ordinary[index].widthWeight, password[index].widthWeight, 0f)
+        }
     }
 
     /** Both of its faces have to be something, or the key goes blank when toggled. */
@@ -275,6 +325,20 @@ class LayoutsTest {
         assertTrue(Layouts.TRAIL_ON_LABEL.isNotEmpty())
         assertTrue(Layouts.TRAIL_OFF_LABEL.isNotEmpty())
         assertTrue(Layouts.TRAIL_ON_LABEL != Layouts.TRAIL_OFF_LABEL)
+    }
+
+    /**
+     * The personal key has no long-press alternates, because holding it means
+     * something of its own (D40) and the popup would race the hold.
+     */
+    @Test
+    fun `the personal key carries no alternates`() {
+        Layer.entries.forEach { layer ->
+            val personal = Layouts.forLayer(layer, inPassword = false).rows.flatten()
+                .first { it.action == KeyAction.Personal }
+            assertEquals(emptyList<String>(), personal.longPress)
+            assertTrue(personal.label.isNotEmpty())
+        }
     }
 
     private companion object {

@@ -256,7 +256,11 @@ class BilingualKeyboardService : InputMethodService() {
             KeyAction.Backspace -> {
                 // The one keystroke where backspace is not a deletion (D14).
                 val undo = pendingUndo
-                if (undo == null || !undoCorrection(ic, undo)) deleteOne(ic)
+                when {
+                    undo != null && undoCorrection(ic, undo) -> Unit
+                    deleteGlidedWord(ic) -> Unit
+                    else -> deleteOne(ic)
+                }
             }
 
             KeyAction.Enter -> {
@@ -559,6 +563,40 @@ class BilingualKeyboardService : InputMethodService() {
 
         shifted = true
         keyboardView.shifted = true
+    }
+
+    /**
+     * Backspace straight after a swipe removes the whole word (D39).
+     *
+     * A stroke is one act, so undoing it should be one act too. Taking a
+     * letter at a time off a word nobody typed a letter of is busywork: the
+     * word was wrong as a whole, and the next thing to happen is always either
+     * swiping it again or typing it out.
+     *
+     * Only while the swiped word is still exactly what stands in front of the
+     * cursor — the same invariant that keeps the alternates in the strip. Once
+     * a letter has been added or the cursor has moved, backspace is an ordinary
+     * backspace again.
+     */
+    private fun deleteGlidedWord(ic: InputConnection): Boolean {
+        val swiped = glideWord ?: return false
+        if (word.full != swiped || word.suffix.isNotEmpty()) return false
+        if (!ic.getSelectedText(0).isNullOrEmpty()) return false
+        // Ask the field rather than assume, as everywhere else that deletes
+        // more than it can see (D23).
+        if (ic.getTextBeforeCursor(swiped.length, 0)?.toString() != swiped) return false
+
+        ic.deleteSurroundingText(swiped.length, 0)
+        if (expectedCursor >= 0) expectedCursor = (expectedCursor - swiped.length).coerceAtLeast(0)
+        word.reset(known = true)
+        glideWord = null
+        glideAlternates = emptyList()
+        clearTrail()
+        spaceGesture.otherInput()
+        pendingUndo = null
+        reverted = null
+        refreshSuggestions()
+        return true
     }
 
     private fun deleteOne(ic: InputConnection) {

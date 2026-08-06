@@ -114,6 +114,7 @@ class KeyboardView @JvmOverloads constructor(
             field = value
             dismissLongPress()
             stopRepeat()
+            abandonGlide()
             activePointers.clear()
             placedKeys = placeKeys(width.toFloat(), height.toFloat())
             geometry = buildGeometry(placedKeys)
@@ -289,6 +290,18 @@ class KeyboardView @JvmOverloads constructor(
 
     /** True once the stroke has been accepted as a glide and is being drawn. */
     private var gliding = false
+
+    /**
+     * True once the finger has lifted but the stroke is still on screen.
+     *
+     * A swipe that produces the wrong word is otherwise impossible to argue
+     * with: by the time the word appears, the evidence for how it was decided
+     * has already gone. Leaving the stroke up until the next press — with the
+     * two ends ringed, because the two ends are what bound the search — turns
+     * "it guessed wrong again" into something that can be looked at. If the
+     * ring is sitting on the wrong key, that is the whole explanation.
+     */
+    private var glideSettled = false
 
     private val glidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -631,6 +644,10 @@ class KeyboardView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                // The last stroke stays on screen only until something else
+                // happens, whatever that something is — including a press on a
+                // key that starts no stroke of its own.
+                clearSettledGlide()
                 val index = event.actionIndex
                 val pointerId = event.getPointerId(index)
                 val x = event.getX(index)
@@ -755,7 +772,7 @@ class KeyboardView @JvmOverloads constructor(
                 }
 
                 DragMode.GLIDE -> {
-                    recordPoint(x, y)
+                    recordBatch(event, index, x, y)
                     changed = true
                     continue
                 }
@@ -773,7 +790,7 @@ class KeyboardView @JvmOverloads constructor(
             // carrying the first letter — the letter the whole search is
             // bounded by. Throwing it away and starting from the crossing point
             // would lose exactly the part that cannot be guessed.
-            if (pointerId == glidePointer) recordPoint(x, y)
+            if (pointerId == glidePointer) recordBatch(event, index, x, y)
 
             // Dragging sideways on the space bar steers the cursor. Entry is by
             // distance rather than a hold timer: requiring a delay first would
@@ -936,6 +953,28 @@ class KeyboardView @JvmOverloads constructor(
         recordPoint(x, y)
     }
 
+    /**
+     * Records every sample this move event carries, not just the latest.
+     *
+     * The digitiser reports far faster than the display refreshes, so Android
+     * **batches**: one `ACTION_MOVE` arrives per frame carrying every sample
+     * taken since the last one, with all but the newest tucked away in the
+     * historical arrays. Reading only the current position throws those away
+     * and samples the stroke at frame rate instead of touch rate.
+     *
+     * That is not a cosmetic loss. A word swiped quickly can be over in a few
+     * frames, and what a handful of points does to a path is cut every corner
+     * off it — and the corners are the letters. Slow, careful strokes decode
+     * fine either way, which is exactly what makes the bug confusing from the
+     * outside: it looks like the keyboard is worse at the words you know best.
+     */
+    private fun recordBatch(event: MotionEvent, index: Int, x: Float, y: Float) {
+        for (h in 0 until event.historySize) {
+            recordPoint(event.getHistoricalX(index, h), event.getHistoricalY(index, h))
+        }
+        recordPoint(x, y)
+    }
+
     private fun recordPoint(x: Float, y: Float) {
         if (glideCount >= glideX.size) decimate()
         glideX[glideCount] = x
@@ -966,16 +1005,32 @@ class KeyboardView @JvmOverloads constructor(
     private fun abandonGlide() {
         glidePointer = MotionEvent.INVALID_POINTER_ID
         glideCount = 0
-        if (gliding) {
+        if (gliding || glideSettled) {
             gliding = false
+            glideSettled = false
             invalidate()
         }
     }
 
+    /**
+     * Ends the stroke but leaves it on screen, so the finger can be lifted and
+     * the result looked at side by side with what produced it.
+     */
     private fun finishGlide(): GesturePath? {
         val path = GesturePath.of(glideX, glideY, glideCount)
-        abandonGlide()
+        glidePointer = MotionEvent.INVALID_POINTER_ID
+        gliding = false
+        glideSettled = path != null
+        if (!glideSettled) glideCount = 0
         return path
+    }
+
+    /** Clears a settled stroke once something else happens. */
+    private fun clearSettledGlide() {
+        if (!glideSettled) return
+        glideSettled = false
+        glideCount = 0
+        invalidate()
     }
 
     /**
@@ -987,10 +1042,16 @@ class KeyboardView @JvmOverloads constructor(
      * gesture, which is the one moment the keyboard is doing the most work.
      */
     private fun drawGlide(canvas: Canvas) {
-        if (!gliding || glideCount < 2) return
+        if (!gliding && !glideSettled) return
+        if (glideCount < 2) return
         val chunks = GLIDE_FADE_CHUNKS.coerceAtMost(glideCount - 1)
         val per = (glideCount - 1).toFloat() / chunks
 
+        // A settled stroke is evidence rather than feedback, so it steps back:
+        // dimmer overall, and no longer competing with the word it produced.
+        val ceiling = if (glideSettled) GLIDE_SETTLED_ALPHA else 255
+
+        glidePaint.style = Paint.Style.STROKE
         glidePaint.strokeWidth = GLIDE_STROKE_DP * density
         for (chunk in 0 until chunks) {
             val from = (chunk * per).toInt()
@@ -1004,9 +1065,32 @@ class KeyboardView @JvmOverloads constructor(
             // Oldest faintest, so the ribbon reads as a direction rather than
             // as a shape someone has to interpret.
             val share = (chunk + 1).toFloat() / chunks
-            glidePaint.alpha = (GLIDE_MIN_ALPHA + (255 - GLIDE_MIN_ALPHA) * share).toInt()
+            glidePaint.alpha = (GLIDE_MIN_ALPHA + (ceiling - GLIDE_MIN_ALPHA) * share).toInt()
             canvas.drawPath(glideRender, glidePaint)
         }
+
+        drawGlideEnds(canvas, ceiling)
+    }
+
+    /**
+     * Rings the two ends of the stroke.
+     *
+     * These two points are not decoration: the first and last letters are what
+     * bound the whole dictionary search (D39), so if a swipe found the wrong
+     * word the first thing to check is whether these rings are sitting on the
+     * keys that were meant. The start is drawn hollow and the end filled, so
+     * which way the stroke ran is readable from the still picture.
+     */
+    private fun drawGlideEnds(canvas: Canvas, ceiling: Int) {
+        val radius = GLIDE_END_RADIUS_DP * density
+        glidePaint.alpha = ceiling
+
+        glidePaint.style = Paint.Style.STROKE
+        glidePaint.strokeWidth = GLIDE_END_STROKE_DP * density
+        canvas.drawCircle(glideX[0], glideY[0], radius, glidePaint)
+
+        glidePaint.style = Paint.Style.FILL
+        canvas.drawCircle(glideX[glideCount - 1], glideY[glideCount - 1], radius, glidePaint)
     }
 
     private fun startRepeat(pointerId: Int) {
@@ -1087,6 +1171,16 @@ class KeyboardView @JvmOverloads constructor(
 
         /** How faint the oldest end of the ribbon gets. */
         const val GLIDE_MIN_ALPHA = 40
+
+        /**
+         * How strong a stroke stays after the finger has gone. Dimmer than the
+         * live one: it is there to be consulted, not to be watched.
+         */
+        const val GLIDE_SETTLED_ALPHA = 150
+
+        /** The rings on the two ends — the letters that bound the search. */
+        const val GLIDE_END_RADIUS_DP = 9f
+        const val GLIDE_END_STROKE_DP = 3f
 
         /**
          * Leftward travel on backspace before a word is deleted. Fires once per

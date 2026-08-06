@@ -149,6 +149,39 @@ class GestureSearchTest {
     }
 
     /**
+     * What losing the batched touch samples costs.
+     *
+     * Android reports touches faster than it draws frames, so a move event
+     * carries every sample since the last one with all but the newest tucked
+     * into its historical arrays. Reading only the current position samples the
+     * stroke at frame rate — and a word swiped quickly is over in a handful of
+     * frames, at which point the corners get cut straight off, and the corners
+     * are the letters.
+     *
+     * The bound here is deliberately set where the *fixed* code sits, so that
+     * dropping the historical samples again fails this test rather than quietly
+     * making swiping worse for fast typists only. Slow, careful strokes decode
+     * fine either way, which is exactly what makes the bug baffling from
+     * outside: it looks like the keyboard is worst at the words you know best.
+     */
+    @Test
+    fun `a coarsely sampled stroke loses its corners`() {
+        val words = commonWords(400)
+        // 6px is touch rate; 140px is roughly one report per frame through a
+        // quick six-letter word.
+        listOf(6f, 60f, 140f, 220f).forEach { spacing ->
+            report("spacing ${spacing.toInt()}px", words) {
+                SwipeFixtures.swipe(it, spacing = spacing)
+            }
+        }
+        val coarse = report("spacing 140px", words) { SwipeFixtures.swipe(it, spacing = 140f) }
+        assertTrue(
+            "frame-rate sampling costs more than expected: ${(coarse * 100).roundToInt()}%",
+            coarse > 0.75,
+        )
+    }
+
+    /**
      * A swipe happens once per word, not once per keystroke, so it has a whole
      * word's worth of typing to hide in — but it also lands at the moment the
      * finger lifts, which is the moment the result is stared at.

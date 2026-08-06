@@ -1411,6 +1411,66 @@ touch-down regardless, before anything has been decided, because by the time a
 stroke has proved itself the first leg has already happened — and the first leg
 carries the first letter, which is half of what bounds the search.
 
+**Backspace after a swipe removes the whole word.** A stroke is one act, so
+undoing it is one act. Taking a letter at a time off a word nobody typed a
+letter of is busywork — the word was wrong as a whole, and what happens next is
+always either swiping it again or typing it out. Only while the swiped word is
+still exactly what stands in front of the cursor, which is the same invariant
+that keeps the alternates in the strip; after that, backspace is a backspace.
+
+**The stroke stays on screen until the next press, with both ends ringed.**
+A swipe that produces the wrong word is otherwise impossible to argue with: by
+the time the word appears the evidence for how it was chosen has gone. The two
+rings are not decoration — the first and last letters *bound the entire search*,
+so if a ring is sitting on the wrong key that is the whole explanation. The
+start is hollow and the end filled, so the direction is readable from the still
+picture.
+
+### D39a — What the first week of swiping actually found
+
+Three things, and they are worth separating because only two of them were bugs.
+
+**Batched touch samples were being thrown away.** Android reports touches faster
+than it draws frames, so one `ACTION_MOVE` carries every sample since the last
+one, with all but the newest in the historical arrays. Reading only the current
+position samples the stroke at frame rate. Measured, on otherwise identical
+strokes: 97% top-1 at touch rate, 92% at one report per frame, 85% at one per
+frame through a fast flick. The corners are the first thing to go, and the
+corners are the letters. This is a genuinely nasty bug to notice from the
+outside, because slow careful strokes decode fine either way — it makes the
+keyboard look worst at the words you type fastest, which are the ones you know
+best.
+
+**Three of the four prefilters were too tight**, and a prefilter is the worst
+place to be wrong. An outranked word still sits in the strip one tap away; a
+word cut by a gate is gone before anything scores it, so it is not offered, not
+a runner-up, and indistinguishable from the keyboard not knowing the word at
+all. Measuring the *correct* word's cost against each gate showed hurried
+strokes reaching 1.16 at the 99th percentile against a ceiling of 1.0, and hard
+corner-cutting putting the length ratio past its bound. All four were loosened,
+with `GestureGateTest` now asserting that no gate ever rejects the right word
+and that hurried strokes keep a fifth of the cost ceiling in reserve. Cost:
+decode went from about 340µs to about 570µs, which is nothing once per word.
+
+**And one thing that was not found.** After both fixes the synthetic accuracy is
+96–97% top-1 and 100% top-3, evenly across the two languages, with no gate
+rejecting anything — and that does not match the reported experience of frequent
+wrong words. Ruled out along the way: the keyboard's proportions (the fixture
+now uses the real 52dp rows and 3dp gaps, which changed nothing), and the theory
+that German suffers more from the doubled-letter and umlaut collisions (it has
+17% doubled letters and 8% accents against English's 14% and 0%, and still
+scores 96% against 97%).
+
+What is left is the finger model. The synthetic thumb rounds corners by a
+fillet, wanders on two slow sine waves and is reported at a fixed spacing; a
+real one does none of those things exactly, and the accuracy table is only ever
+as good as that model. This has already been wrong twice — white noise per
+sample is a sawtooth rather than a thumb, and pulling vertices toward the chord
+of their neighbours deletes corners rather than cutting them — and both times it
+made the decoder look far worse than it was, so it is quite capable of being
+wrong in the flattering direction too. **The next move is evidence rather than
+another hypothesis**, which is what the ringed, persistent stroke is for.
+
 **What it costs `h`.** D38 put line steering on a plain vertical drag off `h`,
 and a plain drag off a letter is now a word. The two cannot be separated by
 direction: `h` to `b` is down and to the left, which is exactly what steering

@@ -18,9 +18,22 @@ import kotlin.random.Random
  */
 object SwipeFixtures {
 
+    /**
+     * The phone this is built for: 1080 wide at density 3, and the keyboard's
+     * own `rowHeight = 52dp` and `keyGap = 3dp` from `KeyboardView`.
+     *
+     * The proportions are the point. Letter keys come out about 98px wide and
+     * 147px tall, so the grid is markedly taller than it is wide, and every
+     * cost in the decoder is quoted in *key widths* — which means a vertical
+     * error counts for half again what the same error costs horizontally. Made
+     * up numbers here would have quietly described a keyboard with squarer keys
+     * and flattered every measurement taken on it.
+     */
+    private const val DENSITY = 3f
     const val WIDTH = 1080f
-    const val HEIGHT = 760f
-    const val GAP = 8f
+    const val GAP = 3f * DENSITY
+    const val ROW_HEIGHT = 52f * DENSITY
+    const val HEIGHT = ROW_HEIGHT * 4 + GAP * 2
 
     val geometry: KeyGeometry by lazy { build(Layouts.letters) }
 
@@ -93,6 +106,12 @@ object SwipeFixtures {
         rounding: Float = 0.4f,
         jitter: Float = 0.12f,
         endpointSlop: Float = 0f,
+        /**
+         * Pixels between reported touch points. The default is roughly what a
+         * digitiser gives; larger values model losing the batched samples and
+         * seeing the stroke once per frame instead.
+         */
+        spacing: Float = SAMPLE_SPACING,
         random: Random = Random(word.hashCode()),
     ): GesturePath {
         val xs = mutableListOf<Float>()
@@ -184,8 +203,45 @@ object SwipeFixtures {
         outX += cutX.last()
         outY += cutY.last()
 
-        return GesturePath.of(outX.toFloatArray(), outY.toFloatArray())
+        val (reportedX, reportedY) = report(outX, outY, spacing)
+        return GesturePath.of(reportedX.toFloatArray(), reportedY.toFloatArray())
             ?: error("$word produced no path")
+    }
+
+    /**
+     * Thins a finger's true path down to what the keyboard is actually told
+     * about it.
+     *
+     * The path a thumb draws is continuous; what arrives is a sample of it. The
+     * thinning has to happen *after* the path is built, never by building a
+     * coarser one — the corners are polyline vertices, so a coarse construction
+     * would keep every one of them and model nothing at all.
+     *
+     * The last point always survives: it is where the finger lifted, and that
+     * is one of the two letters the whole search is bounded by.
+     */
+    private fun report(
+        xs: List<Float>,
+        ys: List<Float>,
+        spacing: Float,
+    ): Pair<List<Float>, List<Float>> {
+        if (spacing <= SAMPLE_SPACING) return xs to ys
+        val keptX = mutableListOf(xs.first())
+        val keptY = mutableListOf(ys.first())
+        var carried = 0f
+        for (i in 1 until xs.size) {
+            carried += hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
+            if (carried >= spacing) {
+                keptX += xs[i]
+                keptY += ys[i]
+                carried = 0f
+            }
+        }
+        if (keptX.last() != xs.last() || keptY.last() != ys.last()) {
+            keptX += xs.last()
+            keptY += ys.last()
+        }
+        return keptX to keptY
     }
 
     /**

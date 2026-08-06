@@ -200,11 +200,11 @@ class DictionarySuggestions(
 
         val ideal = decoder.idealLength(word)
         if (ideal == GestureDecoder.UNSWIPEABLE) return null
-        if (ideal < path.length * MIN_LENGTH_RATIO) return null
-        if (ideal > path.length * MAX_LENGTH_RATIO) return null
+        if (ideal < path.length * GestureDecoder.MIN_LENGTH_RATIO) return null
+        if (ideal > path.length * GestureDecoder.MAX_LENGTH_RATIO) return null
 
         val cost = decoder.cost(path, word)
-        return if (cost > MAX_GESTURE_COST) null else cost
+        return if (cost > GestureDecoder.MAX_COST) null else cost
     }
 
     /**
@@ -225,10 +225,10 @@ class DictionarySuggestions(
         val letters = LinkedHashSet<Char>()
         letters += Folding.foldChar(nearest)
         keys.alternatives(x, y, nearest).entries
-            .filter { it.value <= GESTURE_ENDPOINT_REACH }
+            .filter { it.value <= GestureDecoder.ENDPOINT_REACH }
             .sortedBy { it.value }
             .forEach { (char, _) ->
-                if (letters.size < MAX_ENDPOINT_LETTERS) letters += Folding.foldChar(char)
+                if (letters.size < GestureDecoder.MAX_ENDPOINT_LETTERS) letters += Folding.foldChar(char)
             }
         return letters
     }
@@ -499,44 +499,5 @@ class DictionarySuggestions(
         /** A ceiling on the scan, however ambiguous the first touch was. */
         const val MAX_SEARCH_PREFIXES = 4
 
-        // -- swiping (D39) ----------------------------------------------------
-
-        /**
-         * How far off a key the finger may come down or lift and still have
-         * that key considered, in key widths.
-         *
-         * Tighter than [FIRST_LETTER_REACH] for tapping, and for a reason that
-         * is about cost rather than accuracy: the endpoints multiply. Three
-         * plausible first letters and three plausible last ones is nine slices
-         * of dictionary, not three, so generosity here is quadratic where
-         * everywhere else in the file it is linear.
-         */
-        const val GESTURE_ENDPOINT_REACH = 0.35f
-
-        /** A hard ceiling on that multiplication, per endpoint. */
-        const val MAX_ENDPOINT_LETTERS = 3
-
-        /**
-         * How far the length of the journey may differ from the candidate's,
-         * before and after.
-         *
-         * Generous on purpose. People cut corners when they swipe, so the real
-         * path is usually a little *shorter* than the ideal one, and they also
-         * overshoot the last letter, which makes it longer. What this is for is
-         * throwing out `an` when the finger travelled the width of the keyboard
-         * — a difference of a factor of five, not of a quarter.
-         */
-        const val MIN_LENGTH_RATIO = 0.45f
-        const val MAX_LENGTH_RATIO = 2.2f
-
-        /**
-         * The worst average deviation, in key widths, still worth ranking.
-         *
-         * One key width means the path was, on average, a whole key away from
-         * where that word would have taken it — at which point the word is not
-         * a near miss and carrying it only dilutes the confidence of the
-         * candidates that are.
-         */
-        const val MAX_GESTURE_COST = 1f
     }
 }

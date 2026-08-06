@@ -21,6 +21,7 @@
     <string name="setting_haptics_off">Off</string>
     <string name="setting_haptics_light">Light</string>
     <string name="setting_haptics_strong">Strong</string>
+    <string name="setting_haptics_unavailable">This phone reports no vibration motor, so these settings have nothing to drive.</string>
     <string name="settings_text_size_preview">Vorschlag · suggestion</string>
     <string name="action_enable">1. Enable in system settings</string>
     <string name="action_select">2. Select as active keyboard</string>

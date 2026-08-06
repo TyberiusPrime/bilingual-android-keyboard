@@ -86,13 +86,26 @@ class FoldingTest {
     }
 
     /**
-     * The accepted cost of dropping the normaliser: an accent from outside
-     * these two languages stays put, so the word matches nothing — which is
-     * the right answer, since it is not a word in either of them.
+     * Everything the long-press popups can type folds (D32), including the
+     * accents no German or English word contains — so a name added to the
+     * personal store with its accents is still found when typed without them.
      */
     @Test
-    fun `an accent from another language is left alone`() {
-        assertEquals("żółw", Folding.fold("Żółw").replace('o', 'ó'))
+    fun `an accent the keyboard can type always folds away`() {
+        assertEquals("zolw", Folding.fold("Żółw"))
+        assertEquals("skoda", Folding.fold("Škoda"))
+        assertEquals("lodz", Folding.fold("Łódź"))
+        assertEquals("garcon", Folding.fold("garçon"))
+        assertEquals("smorrebrod", Folding.fold("smørrebrød"))
+    }
+
+    /**
+     * The accepted cost of dropping the normaliser: an accent from outside the
+     * table stays put, so the word matches nothing — which is the right answer,
+     * since it is not a word in either of these languages.
+     */
+    @Test
+    fun `an accent from another alphabet is left alone`() {
         assertEquals("ελλάδα", Folding.fold("Ελλάδα"))
     }
 }

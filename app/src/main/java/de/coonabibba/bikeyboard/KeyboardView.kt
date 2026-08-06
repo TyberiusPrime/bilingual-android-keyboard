@@ -357,20 +357,32 @@ class KeyboardView @JvmOverloads constructor(
 
         val spaceBar = placedKeys.firstOrNull { it.key.action == KeyAction.Space }
         val from = spaceBar?.bounds?.top ?: height.toFloat()
-        // The leading edge climbs; what it leaves behind fades out, so the
-        // whole thing reads as one movement rather than as a blink.
+        // The wave front climbs from the space bar, and the whole thing holds
+        // at full strength for the first part of its travel before fading. The
+        // first version faded from the moment it started, which at 420ms meant
+        // it was already half gone by the time an eye moved to it.
         val reach = from * flashProgress
-        val fade = 1f - flashProgress
-        val alpha = (FLASH_ALPHA * fade * fade).toInt().coerceIn(0, 255)
+        val fade = if (flashProgress < FLASH_HOLD) {
+            1f
+        } else {
+            1f - (flashProgress - FLASH_HOLD) / (1f - FLASH_HOLD)
+        }
+        val alpha = (FLASH_ALPHA * fade).toInt().coerceIn(0, 255)
         if (alpha == 0 || reach <= 0f) return
 
+        // Brightest at the front, trailing away behind it — a wave rather than
+        // a rectangle that appears and disappears.
         flashPaint.shader = LinearGradient(
             0f,
             from,
             0f,
             from - reach,
-            ColorUtils.setAlphaComponent(TRAIL_STRONG, alpha),
-            Color.TRANSPARENT,
+            intArrayOf(
+                Color.TRANSPARENT,
+                ColorUtils.setAlphaComponent(TRAIL_STRONG, alpha / 2),
+                ColorUtils.setAlphaComponent(TRAIL_STRONG, alpha),
+            ),
+            floatArrayOf(0f, 0.55f, 1f),
             Shader.TileMode.CLAMP,
         )
         canvas.drawRect(0f, from - reach, width.toFloat(), from, flashPaint)
@@ -763,7 +775,10 @@ class KeyboardView @JvmOverloads constructor(
         const val MIN_POPUP_CELL_DP = 40f
 
         /** How opaque the correction flash is at its brightest. */
-        const val FLASH_ALPHA = 150f
+        const val FLASH_ALPHA = 230f
+
+        /** How much of the travel happens at full strength before it fades. */
+        const val FLASH_HOLD = 0.45f
 
         /** Trail entries beyond this depth are drawn as ordinary keys. */
         const val TRAIL_STEPS = 5

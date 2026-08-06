@@ -96,6 +96,21 @@ class SuggestionStripView @JvmOverloads constructor(
     private val stripHeight = KeyboardPrefs.stripHeightPx(context)
     private val longPressMs = KeyboardPrefs.timing(context, KeyboardPrefs.SUGGESTION_LONG_PRESS_MS)
 
+    /**
+     * Where a candidate stops being one option among several and starts looking
+     * like the answer — **the same number the auto-correction threshold uses**
+     * (D3, D28), so that one setting governs both what the keyboard says it is
+     * sure about and what it acts on.
+     *
+     * The two confidences are not the same measurement, and it is worth being
+     * clear about that: the strip's is a unigram share among the completions of
+     * a half-typed word, while a correction's also weighs where the thumb
+     * landed. Sharing the threshold means the purple reads as "this is the sort
+     * of thing I would replace for you", which is the useful thing for it to
+     * say while the number is being tuned.
+     */
+    private val confidentAt = KeyboardPrefs.autoCorrectConfidence(context)
+
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PRESSED_BG }
     private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DIVIDER }
     private val tintPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -175,7 +190,7 @@ class SuggestionStripView @JvmOverloads constructor(
                 // A candidate holding most of the matching mass. Purple is the
                 // keyboard's "this came from the machine" colour, the same one
                 // the keypress trail uses.
-                entry is StripEntry.Word && entry.suggestion.confidence >= HIGH_CONFIDENCE ->
+                entry is StripEntry.Word && entry.suggestion.confidence >= confidentAt ->
                     CONFIDENT_FG
 
                 else -> Color.WHITE
@@ -242,15 +257,6 @@ class SuggestionStripView @JvmOverloads constructor(
 
         /** Ceiling on the text, as a fraction of the band, so it cannot clip. */
         const val MAX_TEXT_FRACTION = 0.62f
-
-        /**
-         * Where a candidate stops being one option among several and starts
-         * looking like the answer. Purely how it is drawn — **not** D3's
-         * auto-replace threshold, which does not exist yet and will be a
-         * calibrated number rather than this unigram share. A guess, to be
-         * moved once there is a week of typing to move it against.
-         */
-        const val HIGH_CONFIDENCE = 0.5f
 
         /**
          * How far from the keyboard surface towards a language's hue. Slight,

@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D30 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D32 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -43,6 +43,15 @@ below.
 - [ ] A correction query costs ~3ms on a laptop and has not been timed on the
       phone (D23). Per keystroke, on a word with no completions, that is the
       first thing in this keyboard with a latency budget worth watching.
+- [ ] Are the haptics felt now? The first version produced nothing on the phone
+      even on strong; the rewrite (D29) is reasoned about rather than observed,
+      and the only way to know is to hold the thing.
+- [ ] Is the order within an accent popup right (D32)? `é è ê ë` is alphabetical
+      by accent name and nothing better, and the ones past the third are a slide
+      most of the way across a key row.
+- [ ] Should the strip's purple and the auto-correction threshold ever separate?
+      They share one number today (D21, D28), which is right while it is being
+      tuned and may stop being right once it is settled.
 
 ## Decisions
 
@@ -307,7 +316,10 @@ rule would put them. Flagged as an open question because it is a guess about a
 habit, and habits are measured rather than reasoned about.
 
 The first alternate of every key is drawn small in its corner, so the digits and
-umlauts are discoverable without holding each key to find out.
+umlauts are discoverable without holding each key to find out. D32 later hung
+the other European accents off the same keys, *behind* these — so "every digit
+is one hold away" stays literally true rather than becoming "one hold and a
+slide away". There is a test for it.
 
 ### D18 — Not `directBootAware`
 
@@ -505,12 +517,17 @@ store, which makes `IME_FLAG_NO_PERSONALIZED_LEARNING` a single check rather
 than a policy spread across the codebase.
 
 **A candidate holding most of the matching mass is drawn in purple** — the same
-purple the keypress trail uses for "this came from the keyboard". The threshold
-is half the mass, it is a guess, and it is *appearance only*: D3's auto-replace
-threshold does not exist yet and will be a calibrated number rather than a
-unigram share. What it does today is make the eventual threshold legible before
-anything acts on one, which is the cheapest possible way to find out whether it
-sits in the right place.
+purple the keypress trail uses for "this came from the keyboard".
+
+The threshold started as a hardcoded half of the mass, on the grounds that D3's
+auto-replace threshold did not exist yet. It does now (D28), and **the purple
+reads the same setting**. The two are not the same measurement and it is worth
+being clear about that: the strip's is a unigram share among the completions of
+a half-typed word, while a correction's also weighs where the thumb landed. But
+one user-facing number governing both means the purple says "this is the sort of
+thing I would replace for you" — which is the useful thing for it to say while
+that number is being tuned, and it is what makes moving the slider legible
+before a single word gets replaced.
 
 **The add-word offer appears only when nothing else does.** Half-typed words are
 unrecognised nearly all of the time, so an offer keyed on "unknown word" alone
@@ -702,6 +719,12 @@ because the typist is looking at the text rather than at the keyboard: one is
 caught out of the corner of an eye, the other needs no eye at all. The flash
 starts at the space bar because that is the key that caused it.
 
+Both were too faint on the phone to register. The flash is at 230/255 alpha
+rather than 150, holds full strength for the first 45% of its rise before
+fading, and takes 650ms rather than 420 (D30); the vibration is rewritten in
+D29's amendment. Something meant to be caught peripherally has to be well past
+subtle, because peripheral vision is what it is being asked to survive.
+
 **Backspace puts it back** — D14, finally built. The keystroke immediately
 after a replacement restores exactly what was typed, space and all, and the
 strip turns into an offer to remember the word, which under D8 is the only way
@@ -738,6 +761,24 @@ is **two**: the keyboard did something unasked, and that is worth noticing while
 the thumb is still moving — it is the only signal that D14's undo window is
 open and about to close.
 
+**Amended after the first version produced nothing at all on the phone, even on
+strong.** Two causes, both worth writing down because both are easy to repeat:
+
+- *"As short as the hardware will honour"* was read as twelve milliseconds. A
+  linear resonant actuator needs longer than that to spin up, so the request was
+  honoured and felt like nothing. Where the platform offers a **predefined**
+  effect — `EFFECT_TICK`, `EFFECT_HEAVY_CLICK`, `EFFECT_DOUBLE_CLICK` — that is
+  used instead, because those are tuned per device by whoever knows the motor;
+  the hand-rolled pulses are only the fallback, and they are 20ms and 40ms now.
+- **A vibration with no stated purpose can be dropped.** Android routes haptics
+  by usage, and an untagged request competes with ringer and notification
+  settings. Every call now carries `VibrationAttributes.USAGE_TOUCH`, and the
+  light setting asks the *view* for `KEYBOARD_TAP` first, which is the path
+  every other keyboard on the phone takes.
+
+If the phone reports no vibrator at all, the settings screen says so rather than
+leaving three buttons that quietly do nothing.
+
 ### D30 — The timings are settings
 
 Every duration in the keyboard is now a slider: the long-press delay on a key
@@ -750,6 +791,64 @@ tuning-by-guess later, the honest version of that is that a hold which feels
 deliberate to one thumb is a stutter to another, and none of it is decidable
 from a laptop. The views read them once when they are built, and a settings
 revision counter tells the service to build them again.
+
+The flash is in that list, and its default moved from 420ms to 650ms after the
+first device round: a gradient that crosses the keyboard in under half a second
+is over before an eye that is on the *text* — which is where it should be —
+comes back to the keys. It also holds full strength for the first 45% of its
+travel now and fades over the rest, instead of fading throughout.
+
+### D31 — Punctuation takes back the space a suggestion inserted
+
+Accepting a suggestion finishes the word and puts a space after it (D21), which
+is a guess about what comes next. Two keys are entitled to disagree with that
+guess, and they are the two that follow a finished word:
+
+- **Space**, which turns it into a full stop — that is D6's double-space
+  gesture, already built.
+- **Punctuation**, which takes it away entirely. Tapping `,` after accepting
+  `Haus` should give `Haus,` and not `Haus ,`.
+
+One flag serves both, on `SpaceGesture`: the last interaction was a suggestion
+acceptance that inserted a space, and any other input clears it. Two flags with
+the same lifecycle would only be two things to keep in step.
+
+Which marks hug is a list, not a rule: `, . ! ? ; : ' ’ ) ] } …`. Closing
+brackets and quotes hug and opening ones do not, and the apostrophe hugs because
+the case it exists for is `don` + `'` + `t` (D27) rather than a quotation. The
+field is asked what is actually in front of the cursor before anything is
+deleted, because between our commit and this keystroke the app may have done
+anything at all.
+
+The apostrophe has a second consequence. It is a *word* character (D27), so
+retracting the space in front of one does not end a word, it joins the mark to
+the accepted suggestion — `let` + `'` is now the single word `let'`, and the
+tracked word was emptied when the suggestion was accepted. So a retraction is
+treated as one of D23's cursor-jump cases and the word is read back from the
+field. One IPC round trip, on a keystroke that happens a few times a paragraph.
+
+### D32 — The other European accents, behind the German ones
+
+Long-press alternates are a row, and until now every key offered at most one.
+The rest of the row was free, so the accents of the neighbouring languages go
+there: `é è ê ë` on `e`, `á à â å ã` after `ä` on `a`, `ç č ć` on `c`, `ž ź ż`
+on `z`, `ł` after `9` on `l`, `ñ` after `!` on `n`, and so on.
+
+**The first entry is untouched, and that is the whole design.** It is what is
+drawn small in the corner of the key, and the popup opens with it selected, so
+holding and releasing without sliding still gives it. The German umlaut keeps
+`a o u s` (D17), the digit keeps every key that had one (D17 again — otherwise
+"every digit is one hold away" quietly becomes "one hold and a slide away"), and
+the punctuation keeps `v b n m` (D6). Everything new is reachable only by
+sliding, which is to say only on purpose.
+
+Six is the ceiling, enforced by test: the popup is one row of cells clamped to
+the screen width, and beyond six the far end is unreachable on a phone.
+
+The folding table (D22) grew to match, including for characters no German or
+English word contains — `ø ł ž`. It costs a line each, it means a name typed
+with its accents still finds the personal-store entry typed without them, and it
+cannot disturb the wordlist sort order because none of them occur there.
 
 ---
 

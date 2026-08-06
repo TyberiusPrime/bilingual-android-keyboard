@@ -86,13 +86,79 @@ class LayoutsTest {
         }
     }
 
-    /** D17: umlauts win over digits on the keys they share. */
+    /**
+     * D17: umlauts win over digits on the keys they share. D32: they win over
+     * the other European accents on the same keys too, by being *first* — the
+     * corner hint and what a plain hold commits.
+     */
     @Test
-    fun `umlaut keys carry umlauts and not digits`() {
+    fun `umlaut keys lead with the umlaut and carry no digit`() {
         val byLabel = Layouts.letters.rows.flatten().associateBy { it.label }
         mapOf("a" to "ä", "o" to "ö", "u" to "ü", "s" to "ß").forEach { (key, expected) ->
             val alternates = byLabel.getValue(key).longPress
-            assertEquals("long-press on $key", listOf(expected), alternates)
+            assertEquals("long-press on $key leads with", expected, alternates.first())
+            assertTrue(
+                "long-press on $key carries a digit",
+                alternates.none { it.length == 1 && it[0].isDigit() },
+            )
+        }
+    }
+
+    /**
+     * D32: an accent added to a key must not displace the digit that was
+     * already there, or D17's promise that every digit is one hold away becomes
+     * "one hold and a slide away".
+     */
+    @Test
+    fun `a key with a digit still leads with it`() {
+        Layouts.letters.rows.flatten().forEach { key ->
+            val digit = key.longPress.firstOrNull { it.length == 1 && it[0].isDigit() }
+                ?: return@forEach
+            assertEquals("long-press on ${key.label} leads with", digit, key.longPress.first())
+        }
+    }
+
+    /**
+     * The popup is one row of cells clamped to the screen. Six is what fits
+     * beside the narrowest key on a phone; more would be silently unreachable.
+     */
+    @Test
+    fun `no key has more alternates than the popup can show`() {
+        Layer.entries.forEach { layer ->
+            Layouts.forLayer(layer).rows.flatten().forEach { key ->
+                assertTrue(
+                    "${key.label} on $layer has ${key.longPress.size} alternates",
+                    key.longPress.size <= MAX_ALTERNATES,
+                )
+            }
+        }
+    }
+
+    /** Two keys offering the same alternate means one of them is a dead end. */
+    @Test
+    fun `no alternate appears on two different letter keys`() {
+        val seen = mutableMapOf<String, String>()
+        Layouts.letters.rows.flatten().forEach { key ->
+            key.longPress.forEach { alternate ->
+                val other = seen.put(alternate, key.label)
+                assertEquals("$alternate is on both $other and ${key.label}", null, other)
+            }
+        }
+    }
+
+    /** Everything the popups can type folds to a letter of the base alphabet. */
+    @Test
+    fun `every letter alternate folds to something typable`() {
+        Layouts.letters.rows.flatten().forEach { key ->
+            key.longPress
+                .filter { it.length == 1 && it[0].isLetter() }
+                .forEach {
+                    val folded = Folding.fold(it)
+                    assertTrue(
+                        "$it on ${key.label} folds to $folded",
+                        folded.all { char -> char in 'a'..'z' },
+                    )
+                }
         }
     }
 
@@ -105,7 +171,9 @@ class LayoutsTest {
     fun `punctuation is on long-press but never a tap target on the letter layer`() {
         val byLabel = Layouts.letters.rows.flatten().associateBy { it.label }
         mapOf("v" to "'", "b" to ",", "n" to "!", "m" to "?").forEach { (key, expected) ->
-            assertEquals("long-press on $key", listOf(expected), byLabel.getValue(key).longPress)
+            // First, so a plain hold gives the punctuation: `n` also carries ñ
+            // (D32), and the mark is the common case by a wide margin.
+            assertEquals("long-press on $key", expected, byLabel.getValue(key).longPress.first())
         }
 
         val tapped = Layouts.letters.rows.flatten()
@@ -154,5 +222,9 @@ class LayoutsTest {
         Layer.entries.forEach { layer ->
             assertEquals(layer, Layouts.other(Layouts.other(layer)))
         }
+    }
+
+    private companion object {
+        const val MAX_ALTERNATES = 6
     }
 }

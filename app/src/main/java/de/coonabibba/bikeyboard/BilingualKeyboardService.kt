@@ -188,9 +188,7 @@ class BilingualKeyboardService : InputMethodService() {
         when (val action = key.action) {
             is KeyAction.Text -> {
                 val text = if (shifted) action.text.uppercase() else action.text
-                ic.commitText(text, 1)
-                noteInsertion(key, alternate = false, text = text, touch = touch)
-                consumeShift()
+                commitTyped(ic, key, text, alternate = false, touch = touch)
             }
 
             KeyAction.Space -> {
@@ -266,12 +264,64 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private fun handleAlternate(key: Key, text: String) {
         val ic = currentInputConnection ?: return
-        ic.commitText(text, 1)
         // A long-press alternate came from a popup rather than from a key, so
         // there is no near-miss to record for it.
-        noteInsertion(key, alternate = true, text = text, touch = null)
-        consumeShift()
+        commitTyped(ic, key, text, alternate = true, touch = null)
     }
+
+    /**
+     * Puts typed text into the field, taking back an auto-inserted space first
+     * if the text is punctuation that should hug the word before it (D31).
+     *
+     * The two callers are a tap and a long-press alternate, and both need the
+     * retraction: `,` is a long-press on `b` and `'` one on `v`, so the case the
+     * whole thing exists for arrives through the second one.
+     */
+    private fun commitTyped(
+        ic: InputConnection,
+        key: Key,
+        text: String,
+        alternate: Boolean,
+        touch: TypedTouch?,
+    ) {
+        val retract = retractsAutoSpace(ic, text)
+        // One batch, so the field sees a replacement rather than a deletion
+        // followed by an insertion — and so the cursor arrives once, where
+        // expectedCursor says it should.
+        if (retract) {
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(1, 0)
+            if (expectedCursor > 0) expectedCursor -= 1
+        }
+        ic.commitText(text, 1)
+        if (retract) ic.endBatchEdit()
+        noteInsertion(key, alternate, text, touch)
+        consumeShift()
+
+        if (retract) {
+            // The apostrophe is a word character (D27), so retracting the space
+            // in front of one does not end a word — it joins the punctuation to
+            // the accepted suggestion, and `let` + `'` is now the single word
+            // `let'`. The tracked word was emptied when the suggestion was
+            // accepted and cannot say that, so this is one of the cursor-jump
+            // cases: ask the field (D23). Rare enough to pay an IPC round trip.
+            recoverWordAtCursor()
+            refreshSuggestions()
+        }
+    }
+
+    /**
+     * Whether the space in front of the cursor was put there by accepting a
+     * suggestion and should give way to [text].
+     *
+     * The field is asked what is actually there rather than trusted to still
+     * hold what we committed, because between the two the app may have done
+     * anything at all.
+     */
+    private fun retractsAutoSpace(ic: InputConnection, text: String): Boolean =
+        spaceGesture.afterAcceptedSuggestion &&
+            TextEdits.hugsPreviousWord(text) &&
+            ic.getTextBeforeCursor(1, 0)?.toString() == " "
 
     /**
      * Spends a one-shot shift. A latched one is not spent — that is the whole

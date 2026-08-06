@@ -25,7 +25,20 @@ class SpaceGesture(private val doubleTapMs: Long = DOUBLE_TAP_MS) {
 
     private var lastSpaceAt = 0L
     private var spacePending = false
-    private var afterAcceptedSuggestion = false
+
+    /**
+     * Whether the last thing that happened was a suggestion being accepted with
+     * a space after it.
+     *
+     * Read from outside as well as used here, because the space that acceptance
+     * inserted is a guess about what comes next, and two different keys are
+     * entitled to disagree with it: space, which turns it into a full stop, and
+     * punctuation, which takes it away entirely (D6, D31). The lifecycle is the
+     * same for both — any other input clears it — so there is one flag rather
+     * than two that have to be kept in step.
+     */
+    var afterAcceptedSuggestion = false
+        private set
 
     /**
      * Records a tap on the space bar. True when it should end the sentence

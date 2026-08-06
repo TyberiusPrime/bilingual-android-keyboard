@@ -52,7 +52,7 @@ object KeyboardPrefs {
 
     /** How long the correction flash takes to cross the keyboard (D28). */
     const val FLASH_MS = "flash_ms"
-    const val DEFAULT_FLASH_MS = 420
+    const val DEFAULT_FLASH_MS = 650
 
     /** Every timing, with the range the settings screen offers for it. */
     val TIMINGS: List<Timing> = listOf(

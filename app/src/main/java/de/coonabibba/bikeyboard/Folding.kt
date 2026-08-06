@@ -20,9 +20,15 @@ package de.coonabibba.bikeyboard
  * table then works one character at a time inside the edit-distance loop where
  * building strings was costing more than the entire rest of the search.
  *
- * The trade is that an accent from outside that list — Greek, Cyrillic, Polish
- * — is no longer folded away. Text like that can still arrive by being read
- * back out of a field (D23), and the result is that it fails to match a
+ * The table is wider than the data, because the long-press popups can now type
+ * accents no German or English word contains (D32) — `ø`, `ł`, `ž`. Folding
+ * those costs a line each and means a name typed with its accents still finds
+ * the personal store entry typed without them. It does not touch the sort
+ * order, since none of them occur in either wordlist.
+ *
+ * The trade is that an accent from outside the table — Greek, Cyrillic,
+ * Vietnamese — is not folded away. Text like that can still arrive by being
+ * read back out of a field (D23), and the result is that it fails to match a
  * dictionary word, which is correct: it is not a word in either of these
  * languages.
  */
@@ -57,10 +63,14 @@ object Folding {
         'ä', 'à', 'á', 'â', 'ã', 'å' -> 'a'
         'ë', 'è', 'é', 'ê' -> 'e'
         'ï', 'ì', 'í', 'î' -> 'i'
-        'ö', 'ò', 'ó', 'ô', 'õ' -> 'o'
+        'ö', 'ò', 'ó', 'ô', 'õ', 'ø' -> 'o'
         'ü', 'ù', 'ú', 'û' -> 'u'
-        'ç' -> 'c'
+        'ý', 'ÿ' -> 'y'
+        'ç', 'č', 'ć' -> 'c'
         'ñ' -> 'n'
+        'ł' -> 'l'
+        'š', 'ś' -> 's'
+        'ž', 'ź', 'ż' -> 'z'
         'ß' -> 's'
         else -> char.lowercaseChar()
     }

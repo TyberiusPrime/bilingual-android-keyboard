@@ -197,6 +197,20 @@ class SettingsActivity : AppCompatActivity() {
 
         into.addView(row)
         showSelected(KeyboardPrefs.haptics(this))
+
+        // "I get no haptics at all even on strong" has two possible answers and
+        // only the phone knows which: the keyboard is asking wrongly, or there
+        // is nothing to ask. Say which, rather than leaving three buttons that
+        // silently do nothing.
+        if (!Haptics(this, KeyboardPrefs.HapticLevel.LIGHT).available) {
+            into.addView(
+                TextView(this).apply {
+                    setText(R.string.setting_haptics_unavailable)
+                    alpha = 0.7f
+                    setPadding(0, dp(8), 0, 0)
+                },
+            )
+        }
     }
 
     private fun section(title: Int) = TextView(this).apply {

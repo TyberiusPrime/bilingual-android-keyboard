@@ -39,7 +39,7 @@ class SuggestionsTest {
     /** Until step 4 there is nothing to suggest, and nothing is what it says. */
     @Test
     fun `the placeholder source offers nothing`() {
-        assertTrue(NoSuggestions.suggest("hal").isEmpty())
-        assertTrue(NoSuggestions.suggest("").isEmpty())
+        assertTrue(NoSuggestions.suggest("hal", emptyList()).isEmpty())
+        assertTrue(NoSuggestions.suggest("", emptyList()).isEmpty())
     }
 }

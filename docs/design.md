@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D36 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D37 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -26,9 +26,8 @@ below.
 - [ ] Does the umlaut correction from D5 apply inside English words too
       (`uber` → `über`)? Probably not, but it is a real ambiguity.
 - [ ] Emoji: search, recents, skin tones — entirely unaddressed so far.
-- [ ] **Are `7` on `j` and `9` on `l` acceptable?** See D17; this is the one
-      arbitrary placement in the layout and the likeliest thing to want changed
-      after a week of real use.
+- [x] **Are `7` on `j` and `9` on `l` acceptable?** Yes — reported fine after
+      real use on the phone (D17).
 - [ ] Is three the right number of slots in the strip (D21)? Guessed from other
       keyboards. Now that the strip has content, it is answerable.
 - [ ] German homographs are offered lowercase — `zeit`, `weg`, `recht` — unless
@@ -48,18 +47,19 @@ below.
       threshold where `don't` clears it easily. Worth a better estimator?
 - [ ] Is the falloff's default of 7 right (D34)? It is now a slider, which is an
       admission that nobody here can answer this from a laptop.
-- [ ] A correction query costs ~3ms on a laptop and has not been timed on the
-      phone (D23). Per keystroke, on a word with no completions, that is the
-      first thing in this keyboard with a latency budget worth watching.
+- [x] **Per-keystroke latency.** Confirmed usable on the phone, and since D37
+      it is one search rather than two: 0.2–1.5ms warm on a laptop against the
+      shipped lists, worst case a long German word. Still not profiled on the
+      device itself, but no longer the open question it was.
 - [x] **Which haptic route works on this phone?** Only Insistent (D29) — so the
       motor is fine and this phone has touch feedback muted system-wide. Two
       rounds of tuning constants were spent on a switch in another app.
 - [ ] Is the order within an accent popup right (D32)? `é è ê ë` is alphabetical
       by accent name and nothing better, and the ones past the third are a slide
       most of the way across a key row.
-- [ ] Now that a correction query runs on every keystroke rather than every
-      space (D33), the per-keystroke cost is `suggest()` plus `correct()`.
-      Untimed on the phone, like everything else in this list.
+- [x] **`suggest()` and `correct()` had drifted apart** (D33 patched over it).
+      Unified in D37: one search, two views, and the strip can no longer fail to
+      show a word the space bar is about to insert.
 
 ## Decisions
 
@@ -1182,6 +1182,54 @@ drifts off the far side of cell zero stays on cell zero.
 
 The arithmetic is in `AlternatePopup`, out of the view and tested, because this
 was wrong for two releases in a way that reads perfectly plausibly.
+
+### D37 — The strip and the space bar are one search
+
+`candidatesFor(word, touches)` returns both what the strip should show and what
+space would substitute, from a single scan.
+
+They had drifted into two searches with different reach. The strip walked one
+first-letter bucket with a whole-number edit distance that knew nothing about
+the touches; the correction walked several (D35) with the spatial distance and a
+cheap apostrophe (D34). The visible result was a strip that could not offer
+`don't` for `dont` or `continue` for `xontinue` — words the space bar was about
+to insert, missing from the three slots that exist to show them. D33 had already
+patched over the worst of it by prepending the correction to the strip, which
+worked and was a sign that the split was wrong.
+
+Since D33 made the correction run on every keystroke, it was also twice the
+work. One call halves it.
+
+Three constants collapsed on the way. The strip refused to correct words under
+four letters and the corrector under three, for no reason anyone recorded —
+they were written months apart. And the strip's correction penalty was `50` for
+one edit and `2500` for two, which is `50^distance`, which is
+`exp(−ln(50) × distance)` — the same exponential in the scorer, at a different
+rate. It is now the one rate, the falloff slider.
+
+**Two-character prefixes** are what made the wider reach affordable. A
+transposed first pair means the word begins with those two letters swapped, so
+`hte` needs the words beginning `th`, not every word beginning `t`. A
+substituted first letter means the word begins with the neighbour and then the
+second letter typed, so `xontinue` needs `co`. Both assume the *other* of the
+first two letters came out right, which is the difference between chasing one
+slip and chasing two.
+
+That distinction is worth a great deal in German, where `e` is the second letter
+of half the language: as a whole bucket the transposition slice cost 53ms, as a
+two-character prefix it is a rounding error. The whole query — strip and
+correction together, warm — now measures 0.2–1.5ms against the shipped lists,
+where the two separate searches were 4–8ms.
+
+`EditDistance` was deleted with its tests. It had one caller, and the caller now
+uses the spatial version.
+
+**What the source may not decide** stays with the service: the confidence
+threshold, and D28's rule that a word the keyboard did not watch being typed is
+never replaced. `WordInProgress.fullTouches` hands the search untouched
+placeholders when the touches are unavailable, which is right for *offering* a
+candidate and never right for replacing one — so the service checks the real
+touches before acting.
 
 ---
 

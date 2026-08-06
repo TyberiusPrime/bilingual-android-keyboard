@@ -54,6 +54,24 @@ class WordInProgress {
     val touches: List<TypedTouch>
         get() = if (typedTouches.size == builder.length && suffix.isEmpty()) typedTouches else emptyList()
 
+    /**
+     * Touches for [full], one per character, synthesised where the keyboard has
+     * no record of them (D37).
+     *
+     * [touches] is all-or-nothing on purpose: half a set would make the
+     * auto-correction confident about exactly the words it knows least about.
+     * The strip's search needs the same shape regardless, so a word that cannot
+     * account for itself gets untouched ones — every substitution at full
+     * price, which is the honest reading of "nobody saw where the thumb went".
+     */
+    val fullTouches: List<TypedTouch>
+        get() {
+            val recorded = touches
+            val word = full
+            if (recorded.size == word.length) return recorded
+            return word.map(TypedTouch::untouched)
+        }
+
     var known: Boolean = true
         private set
 

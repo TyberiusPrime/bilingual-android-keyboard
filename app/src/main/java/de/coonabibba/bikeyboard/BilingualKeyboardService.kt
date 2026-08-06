@@ -561,15 +561,19 @@ class BilingualKeyboardService : InputMethodService() {
      * answer shown in the strip and the answer acted on by space cannot come
      * apart. Null means space will leave the word alone.
      */
-    private fun computeCorrection(): Correction? {
-        if (!autoCorrectEnabled || !suggestionsAllowed || !word.known) return null
-        val typed = word.text.toString()
-        if (typed.isEmpty() || word.suffix.isNotEmpty()) return null
-        val touches = word.touches
-        if (touches.isEmpty()) return null
-
-        val correction = suggestionSource.correct(typed, touches) ?: return null
-        return correction.takeIf { it.confidence >= autoCorrectConfidence }
+    /** Whether the source's answer is one this keyboard is allowed to act on (D3, D28). */
+    private fun mayApply(correction: Correction?): Boolean {
+        if (correction == null || !autoCorrectEnabled) return false
+        // Replacing a word means deleting exactly what we believe is there, and
+        // the far half of a word the cursor was dropped into is not that.
+        if (word.suffix.isNotEmpty()) return false
+        // D28's other hard gate, and the reason it cannot be folded into the
+        // source: [WordInProgress.fullTouches] hands the search untouched
+        // placeholders when the keyboard did not see the word typed, which is
+        // right for *offering* a candidate and never right for replacing one.
+        // Without real touches there is no way to tell a slip from a decision.
+        if (word.touches.isEmpty()) return false
+        return correction.confidence >= autoCorrectConfidence
     }
 
     /**
@@ -782,16 +786,25 @@ class BilingualKeyboardService : InputMethodService() {
     }
 
     private fun refreshSuggestions() {
-        // Before the view guard, because the space bar reads this whether or not
-        // there is a strip to draw it on.
-        pendingCorrection = computeCorrection()
+        val source = suggestionSource
+        // One question, asked once (D37). The strip and the space bar both want
+        // to know what else this word could be, and asking separately was two
+        // scans per keystroke and two chances to disagree.
+        val query = if (suggestionsAllowed && word.known) {
+            source.candidatesFor(word.full, word.fullTouches)
+        } else {
+            Candidates.NONE
+        }
+        // Before the view guard, because the space bar reads this whether or
+        // not there is a strip to draw it on.
+        pendingCorrection = query.correction?.takeIf(::mayApply)
+
         if (!::suggestionStrip.isInitialized) return
         if (!suggestionsAllowed || !word.known) {
             suggestionStrip.slots = emptyList()
             return
         }
 
-        val source = suggestionSource
         val justReverted = reverted
         if (justReverted != null && learningAllowed && !source.knows(justReverted)) {
             // D14: the moment after a correction is taken back is exactly when
@@ -802,7 +815,7 @@ class BilingualKeyboardService : InputMethodService() {
             return
         }
 
-        val candidates = StripEntry.mark(source.suggest(word.full), pendingCorrection)
+        val candidates = StripEntry.mark(query.suggestions, pendingCorrection)
         val offer = addWordOffer(source, candidates)
 
         // The add-word offer keeps the rightmost slot to itself, in the same

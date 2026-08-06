@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -100,6 +101,28 @@ class KeyboardPrefsTest {
         assertEquals(keys.size, keys.distinct().size)
         // Sharing the old name would make the migration read its own output.
         assertTrue(KeyboardPrefs.HAPTICS !in keys)
+    }
+
+    // -- the trail toggle (D19, D38) ------------------------------------------
+
+    /**
+     * The two kinds of field remember the answer separately, so pressing the
+     * toggle in a password box cannot silently change what ordinary fields do.
+     */
+    @Test
+    fun `password fields keep their own answer`() {
+        assertTrue(KeyboardPrefs.trailKey(inPassword = true) != KeyboardPrefs.trailKey(inPassword = false))
+    }
+
+    /**
+     * The defaults differ, and only the defaults. Neither key is a veto — the
+     * toggle writes to whichever applies, which is the whole of D38's
+     * correction: a control that does nothing is worse than one that is absent.
+     */
+    @Test
+    fun `the trail starts on everywhere but in a password field`() {
+        assertTrue(KeyboardPrefs.trailDefault(inPassword = false))
+        assertFalse(KeyboardPrefs.trailDefault(inPassword = true))
     }
 
     @Test

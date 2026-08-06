@@ -343,9 +343,11 @@ The last ten insertions are kept as a stack; the five most recent are drawn as
 a colour gradient on the keys themselves — full purple for the most recent,
 fading to the resting key colour by the fifth.
 
-**Switchable, and off in password fields whatever the switch says** — see D38,
-which also explains why it took a while to notice that a picture of the last
-five keys is a picture of part of the password.
+**Switchable from a key, and off *by default* in password fields** — see D38,
+which explains both why it took a while to notice that a picture of the last five
+keys is a picture of part of the password, and why the field defaulting to off is
+as far as that goes. The trail is an accessibility feature, and the person typing
+gets to decide.
 
 Rules:
 
@@ -1257,12 +1259,29 @@ focus and used only to decide whether to capitalise. Five characters of a
 password, held on the keyboard until the next keystroke pushes them along, in
 the one place where the whole design says nothing may be remembered.
 
-So there are two flags, not one: what the toggle wants, and what the field
-allows. A password field overrules the toggle and the toggle does not get to
-remember that it was overruled. And when the trail is off the service **does not
-record it at all**, rather than recording it and declining to draw — because
-what is in that list is a description of what was typed, and the point of
-switching it off in a hurry is that the description should not exist.
+When the trail is off the service **does not record it at all**, rather than
+recording it and declining to draw — what is in that list is a description of
+what was typed, and the point of switching it off in a hurry is that the
+description should not exist.
+
+**The first attempt made the field a veto, and that was wrong.** A password
+field forced the trail off whatever the toggle said, which meant pressing the
+key there did nothing at all: it flipped a flag that was then ANDed away. A
+control that silently does nothing is worse than one that is absent, and this
+one was inert in precisely the field where somebody might most want to press it.
+
+The trail is an **accessibility feature** before it is a decoration. It says what
+was just typed, which is worth most to someone who cannot easily check by reading
+the field — and a password box, where the text comes back as dots, is the hardest
+field of all to verify by looking. Refusing to show it there overrules the person
+who needs it in order to protect them from a threat they can see and the keyboard
+cannot: whether anybody is actually standing behind them.
+
+So the field selects *which* answer is remembered rather than overriding it.
+Ordinary fields and password fields keep separate settings; the defaults differ —
+on and off — and neither is a veto. The toggle writes to whichever applies to
+the field in front of it, so it always does something, and turning it on for
+passwords does not quietly change what ordinary fields do.
 
 **`h` steers the cursor by line.** The same gesture as the space bar's, turned
 ninety degrees: drag up or down and the caret follows, one line per 22dp. `h`

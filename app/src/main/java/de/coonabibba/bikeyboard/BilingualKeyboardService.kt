@@ -60,16 +60,16 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private var haptics: Haptics? = null
     /**
-     * Whether the keypress trail is wanted, and whether this field allows it
-     * (D19, D38).
+     * Whether the keypress trail is being drawn, and which of the two settings
+     * that answer came from (D19, D38).
      *
-     * Two flags rather than one because they are answered by different people:
-     * the first is the toggle key, the second is the field. A password field
-     * overrules the toggle, and the toggle does not get to remember that it was
-     * overruled.
+     * A password field selects the other setting rather than overruling the
+     * toggle. The first version did overrule it, which made the key inert in
+     * exactly the field where somebody might most want to press it — and a
+     * control that silently does nothing is worse than one that is absent.
      */
     private var showTrail = KeyboardPrefs.DEFAULT_SHOW_TRAIL
-    private var trailAllowed = true
+    private var passwordField = false
 
     /** Whether this field has lines to move between at all — see [moveCursorByLine]. */
     private var lineSteeringAllowed = false
@@ -80,7 +80,6 @@ class BilingualKeyboardService : InputMethodService() {
     override fun onCreateInputView(): View {
         viewsBuiltForRevision = KeyboardPrefs.revision(this)
         haptics = Haptics.fromPrefs(this)
-        showTrail = KeyboardPrefs.showTrail(this)
         autoCorrectEnabled = KeyboardPrefs.autoCorrect(this)
         autoCorrectConfidence = KeyboardPrefs.autoCorrectConfidence(this)
         // The dictionaries are read once per service, so the falloff is pushed
@@ -192,10 +191,11 @@ class BilingualKeyboardService : InputMethodService() {
         keyboardView.capsLocked = false
 
         // The trail is a picture of the last five keys pressed, which in a
-        // password field is a picture of part of the password, held on screen
-        // until the next keystroke pushes it along. It stays off there whatever
-        // the toggle says.
-        trailAllowed = !isPassword
+        // password field is a picture of part of the password. That is why the
+        // two kinds of field remember the answer separately and why one of them
+        // defaults to off — not a reason to take the choice away.
+        passwordField = isPassword
+        showTrail = KeyboardPrefs.showTrail(this, isPassword)
         lineSteeringAllowed = FieldPolicy.isMultiLine(info.inputType)
         applyTrailVisibility()
 
@@ -293,7 +293,7 @@ class BilingualKeyboardService : InputMethodService() {
 
             KeyAction.ToggleTrail -> {
                 showTrail = !showTrail
-                KeyboardPrefs.putBoolean(this, KeyboardPrefs.SHOW_TRAIL, showTrail)
+                KeyboardPrefs.setShowTrail(this, passwordField, showTrail)
                 applyTrailVisibility()
             }
         }
@@ -385,9 +385,8 @@ class BilingualKeyboardService : InputMethodService() {
      * record should not exist.
      */
     private fun applyTrailVisibility() {
-        val visible = showTrail && trailAllowed
-        keyboardView.trailEnabled = visible
-        if (!visible) clearTrail()
+        keyboardView.trailEnabled = showTrail
+        if (!showTrail) clearTrail()
     }
 
     /** Leftward swipe on backspace, one call per word. */

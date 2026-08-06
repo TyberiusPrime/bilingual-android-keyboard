@@ -95,4 +95,46 @@ class FieldPolicyTest {
         assertTrue(FieldPolicy.isNumeric(InputType.TYPE_CLASS_DATETIME))
         assertFalse(FieldPolicy.isNumeric(text()))
     }
+
+    // -- multi-line, for the line-steering gesture (D38) ----------------------
+
+    @Test
+    fun `a multi-line text field has lines to move between`() {
+        assertTrue(
+            FieldPolicy.isMultiLine(
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
+            ),
+        )
+        assertTrue(
+            FieldPolicy.isMultiLine(
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE,
+            ),
+        )
+    }
+
+    /**
+     * The important direction. A DPAD event a single-line field cannot consume
+     * takes the focus away with it, so the gesture must never fire here.
+     */
+    @Test
+    fun `a single-line field has none`() {
+        assertFalse(FieldPolicy.isMultiLine(InputType.TYPE_CLASS_TEXT))
+        assertFalse(
+            FieldPolicy.isMultiLine(
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+            ),
+        )
+    }
+
+    @Test
+    fun `a field that is not text has none either`() {
+        assertFalse(FieldPolicy.isMultiLine(InputType.TYPE_CLASS_NUMBER))
+        assertFalse(FieldPolicy.isMultiLine(InputType.TYPE_CLASS_PHONE))
+        // The flag's bit means something else entirely outside a text field.
+        assertFalse(
+            FieldPolicy.isMultiLine(
+                InputType.TYPE_CLASS_NUMBER or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
+            ),
+        )
+    }
 }

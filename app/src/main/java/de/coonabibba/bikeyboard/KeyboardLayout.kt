@@ -20,6 +20,13 @@ data class Key(
      * than on release, so they respond immediately.
      */
     val repeats: Boolean = false,
+    /**
+     * Whether dragging up and down this key moves the cursor a line at a time
+     * (D38), the way dragging across the space bar moves it a character at a
+     * time. The layout decides which key, so the view does not have to know a
+     * letter by name.
+     */
+    val steersLines: Boolean = false,
 )
 
 sealed interface KeyAction {
@@ -41,8 +48,15 @@ sealed interface KeyAction {
      */
     data object ToggleLayer : KeyAction
 
-    /** Hand over to the next IME on the device (globe key). */
-    data object NextInputMethod : KeyAction
+    /**
+     * Show or hide the recent-keypress trail (D19, D38).
+     *
+     * On a key rather than buried in the settings screen because it is the one
+     * setting whose whole purpose is to be turned off in a hurry: the trail
+     * says what was just typed, and the moment that matters is the moment
+     * somebody is standing behind you.
+     */
+    data object ToggleTrail : KeyAction
 }
 
 enum class Layer { LETTERS, SYMBOLS }
@@ -62,6 +76,8 @@ data class KeyboardLayout(val rows: List<List<Key>>)
  *    one a plain hold gives and the one drawn in the corner of the key (D32).
  *  - One letter layer, regardless of language (D5). Language awareness is a
  *    matter of prediction, not of layout.
+ *  - Exactly one key steers the cursor by lines (D38), and it is a letter on
+ *    the home row rather than anything beside the space bar.
  */
 object Layouts {
 
@@ -113,8 +129,22 @@ object Layouts {
             label = char.toString(),
             action = KeyAction.Text(char.toString()),
             longPress = letterAlternates[char].orEmpty(),
+            steersLines = char == LINE_STEERING_KEY,
         )
     }
+
+    /**
+     * The key that steers the cursor by lines (D38).
+     *
+     * `h` because it is the middle of the home row, so the gesture is reachable
+     * with either thumb without looking, and because it carries no long-press
+     * of its own to compete with.
+     */
+    const val LINE_STEERING_KEY = 'h'
+
+    /** What the trail toggle shows when the trail is on, and when it is off. */
+    const val TRAIL_ON_LABEL = "◉"
+    const val TRAIL_OFF_LABEL = "○"
 
     private fun symbolRow(vararg specs: Pair<String, List<String>>): List<Key> =
         specs.map { (label, alternates) ->
@@ -124,7 +154,10 @@ object Layouts {
     /** The bottom row is byte-identical across layers apart from the toggle label. */
     private fun bottomRow(toggleLabel: String): List<Key> = listOf(
         Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f),
-        Key("🌐", KeyAction.NextInputMethod, widthWeight = 1f),
+        // Where the globe used to be. The system draws its own IME switcher —
+        // in the navigation bar on this phone — so a second one cost a key
+        // position for nothing.
+        Key(TRAIL_ON_LABEL, KeyAction.ToggleTrail, widthWeight = 1f),
         Key("", KeyAction.Space, widthWeight = 5f),
         Key("↵", KeyAction.Enter, widthWeight = 1.5f),
     )

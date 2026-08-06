@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D37 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D38 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -343,6 +343,10 @@ The last ten insertions are kept as a stack; the five most recent are drawn as
 a colour gradient on the keys themselves — full purple for the most recent,
 fading to the resting key colour by the fifth.
 
+**Switchable, and off in password fields whatever the switch says** — see D38,
+which also explains why it took a while to notice that a picture of the last
+five keys is a picture of part of the password.
+
 Rules:
 
 - **Backspace pops the stack** rather than pushing to it, so deleting walks the
@@ -369,7 +373,9 @@ down payment on step 3, not a substitute for it.
 ### D20 — Space and backspace carry gestures
 
 Both keys do more than one thing, which is affordable because both are large
-and neither has a long-press alternate to collide with.
+and neither has a long-press alternate to collide with. D38 later put a third
+gesture on `h`, which is neither — and pays for it with a longer threshold and a
+direction test.
 
 **Space**
 - Tap inserts a space.
@@ -1230,6 +1236,55 @@ never replaced. `WordInProgress.fullTouches` hands the search untouched
 placeholders when the touches are unavailable, which is right for *offering* a
 candidate and never right for replacing one — so the service checks the real
 touches before acting.
+
+### D38 — The globe key becomes a trail switch, and `h` steers by line
+
+Two changes to what the keys do, and one of them closes a leak.
+
+**The globe is gone.** The system draws its own IME switcher — in the navigation
+bar on this phone — so a second one cost a key position to duplicate something
+already on screen. `switchToNextInputMethod` goes with it.
+
+**Its position now toggles the keypress trail** (D19), showing `◉` or `○` for
+what it will do rather than what it is. It is the one setting that belongs on a
+key rather than in the settings screen, because the moment it matters is the
+moment somebody is standing behind you, and that is not a moment for three taps
+and a scroll.
+
+Which is the leak. The trail draws the last five keys pressed in purple, and
+until now it did that **in password fields too** — `isPassword` was computed at
+focus and used only to decide whether to capitalise. Five characters of a
+password, held on the keyboard until the next keystroke pushes them along, in
+the one place where the whole design says nothing may be remembered.
+
+So there are two flags, not one: what the toggle wants, and what the field
+allows. A password field overrules the toggle and the toggle does not get to
+remember that it was overruled. And when the trail is off the service **does not
+record it at all**, rather than recording it and declining to draw — because
+what is in that list is a description of what was typed, and the point of
+switching it off in a hurry is that the description should not exist.
+
+**`h` steers the cursor by line.** The same gesture as the space bar's, turned
+ninety degrees: drag up or down and the caret follows, one line per 22dp. `h`
+because it is the middle of the home row, reachable with either thumb without
+looking, and because it carries no long-press to race with the drag.
+
+Two guards the space bar does not need. The travel has to be **mostly vertical
+and further** — 18dp against the space bar's 10 — because the space bar cannot
+be typed by accident and a letter can, and a tap that drifts must stay a tap.
+
+And the field has to say it holds more than one line. That is the same
+focus-escape hazard the space-bar drag already guards against, with a worse
+failure mode: a DPAD event the field cannot consume is not swallowed, it falls
+through to focus navigation, focus leaves, and the keyboard disappears
+mid-sentence. Asking "is there a character to the left" answers it for
+horizontal movement; nothing so cheap answers "is there a line above", because a
+wrapped line contains no character that says so.
+
+So the honest statement of the limit: on the first line of a genuine multi-line
+field with something focusable above it, this can still dismiss the keyboard.
+Recoverable by tapping the field, and cheaper than the alternative, which is
+reading the whole text back and counting newlines on every step of a drag.
 
 ---
 

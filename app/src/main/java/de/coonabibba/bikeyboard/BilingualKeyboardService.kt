@@ -59,12 +59,28 @@ class BilingualKeyboardService : InputMethodService() {
      * crashed once.
      */
     private var haptics: Haptics? = null
+    /**
+     * Whether the keypress trail is wanted, and whether this field allows it
+     * (D19, D38).
+     *
+     * Two flags rather than one because they are answered by different people:
+     * the first is the toggle key, the second is the field. A password field
+     * overrules the toggle, and the toggle does not get to remember that it was
+     * overruled.
+     */
+    private var showTrail = KeyboardPrefs.DEFAULT_SHOW_TRAIL
+    private var trailAllowed = true
+
+    /** Whether this field has lines to move between at all — see [moveCursorByLine]. */
+    private var lineSteeringAllowed = false
+
     private var autoCorrectEnabled = KeyboardPrefs.DEFAULT_AUTO_CORRECT
     private var autoCorrectConfidence = KeyboardPrefs.DEFAULT_AUTO_CORRECT_CONFIDENCE / 100f
 
     override fun onCreateInputView(): View {
         viewsBuiltForRevision = KeyboardPrefs.revision(this)
         haptics = Haptics.fromPrefs(this)
+        showTrail = KeyboardPrefs.showTrail(this)
         autoCorrectEnabled = KeyboardPrefs.autoCorrect(this)
         autoCorrectConfidence = KeyboardPrefs.autoCorrectConfidence(this)
         // The dictionaries are read once per service, so the falloff is pushed
@@ -81,6 +97,7 @@ class BilingualKeyboardService : InputMethodService() {
             onCursorStep = ::moveCursor
             onDeleteWord = ::handleDeleteWord
             onShiftSwipeUp = ::cycleWordCase
+            onLineStep = ::moveCursorByLine
             onPress = { haptics?.keyPress(this) }
         }
         suggestionStrip = SuggestionStripView(this).apply {
@@ -174,6 +191,14 @@ class BilingualKeyboardService : InputMethodService() {
         keyboardView.shifted = shifted
         keyboardView.capsLocked = false
 
+        // The trail is a picture of the last five keys pressed, which in a
+        // password field is a picture of part of the password, held on screen
+        // until the next keystroke pushes it along. It stays off there whatever
+        // the toggle says.
+        trailAllowed = !isPassword
+        lineSteeringAllowed = FieldPolicy.isMultiLine(info.inputType)
+        applyTrailVisibility()
+
         // A new field is a new context: nothing typed here yet.
         expectedCursor = info.initialSelEnd
         clearTrail()
@@ -266,7 +291,11 @@ class BilingualKeyboardService : InputMethodService() {
                 keyboardView.layout = Layouts.forLayer(layer)
             }
 
-            KeyAction.NextInputMethod -> switchToNextInputMethod(false)
+            KeyAction.ToggleTrail -> {
+                showTrail = !showTrail
+                KeyboardPrefs.putBoolean(this, KeyboardPrefs.SHOW_TRAIL, showTrail)
+                applyTrailVisibility()
+            }
         }
     }
 
@@ -347,6 +376,20 @@ class BilingualKeyboardService : InputMethodService() {
         keyboardView.shifted = false
     }
 
+    /**
+     * Pushes the trail's on-ness into the view, and throws away anything
+     * already recorded when it goes off.
+     *
+     * Clearing rather than merely hiding: what is in the trail is a record of
+     * what was typed, and the point of turning it off in a hurry is that the
+     * record should not exist.
+     */
+    private fun applyTrailVisibility() {
+        val visible = showTrail && trailAllowed
+        keyboardView.trailEnabled = visible
+        if (!visible) clearTrail()
+    }
+
     /** Leftward swipe on backspace, one call per word. */
     private fun handleDeleteWord() {
         val ic = currentInputConnection ?: return
@@ -387,8 +430,10 @@ class BilingualKeyboardService : InputMethodService() {
 
         if (expectedCursor >= 0) expectedCursor += SENTENCE_END.length - spaces
         popTrail()
-        trail.addFirst(TrailEntry(key, alternate = false))
-        publishTrail()
+        if (keyboardView.trailEnabled) {
+            trail.addFirst(TrailEntry(key, alternate = false))
+            publishTrail()
+        }
 
         // The spaces that were there are gone and a full stop and space stand
         // in their place; either way the word ended.
@@ -656,8 +701,43 @@ class BilingualKeyboardService : InputMethodService() {
         if (!canMove) return
 
         val code = if (direction > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        step(ic, code)
+    }
+
+    /**
+     * Vertical drag on the steering key. One line per step, either way (D38).
+     *
+     * The same gesture as the space bar's, turned ninety degrees, and with the
+     * same hazard doubled. A DPAD event the field cannot consume falls through
+     * to focus navigation and the keyboard vanishes — and where "can it move
+     * left" is answerable by asking for one character, "can it move up" is not:
+     * a wrapped line has no character in it that says so.
+     *
+     * Two guards, and they do not cover everything. The field must say it holds
+     * more than one line, and there must be text on the side being moved
+     * towards. What is left is the first line of a genuine multi-line field with
+     * something focusable above it, where the keyboard may still be dismissed —
+     * recoverable by tapping the field, and not worth the alternative, which is
+     * reading the whole text back and counting newlines on every step.
+     */
+    private fun moveCursorByLine(direction: Int) {
+        if (!lineSteeringAllowed) return
+        val ic = currentInputConnection ?: return
+
+        val canMove = if (direction > 0) {
+            !ic.getTextAfterCursor(1, 0).isNullOrEmpty()
+        } else {
+            !ic.getTextBeforeCursor(1, 0).isNullOrEmpty()
+        }
+        if (!canMove) return
+
+        val code = if (direction > 0) KeyEvent.KEYCODE_DPAD_DOWN else KeyEvent.KEYCODE_DPAD_UP
+        step(ic, code)
+    }
+
+    private fun step(ic: InputConnection, keyCode: Int) {
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
         spaceGesture.otherInput()
         // The resulting onUpdateSelection will not match expectedCursor, which
         // clears the trail — correct per D19, since the run of typing is over.
@@ -685,8 +765,13 @@ class BilingualKeyboardService : InputMethodService() {
     private val trail = ArrayDeque<TrailEntry>()
 
     private fun noteInsertion(key: Key, alternate: Boolean, text: String, touch: TypedTouch?) {
-        trail.addFirst(TrailEntry(key, alternate))
-        while (trail.size > TRAIL_CAPACITY) trail.removeLast()
+        // Not recorded at all when it is not being shown, so that turning it
+        // off in a password field is a matter of the keys never being written
+        // down rather than of a list that happens not to be drawn.
+        if (keyboardView.trailEnabled) {
+            trail.addFirst(TrailEntry(key, alternate))
+            while (trail.size > TRAIL_CAPACITY) trail.removeLast()
+        }
         if (expectedCursor >= 0) expectedCursor += text.length
         publishTrail()
         word.insert(text, touch)

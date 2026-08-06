@@ -168,6 +168,16 @@ object KeyboardPrefs {
     fun confidenceFalloff(context: Context): Float =
         value(context, CORRECTION.first { it.key == CONFIDENCE_FALLOFF }) / 10f
 
+    /**
+     * Whether the recent-keypress trail is drawn (D19, D38).
+     *
+     * Toggled from the keyboard itself rather than only from here, and forced
+     * off in a password field whatever it says — see
+     * [BilingualKeyboardService.onStartInputView].
+     */
+    const val SHOW_TRAIL = "show_trail"
+    const val DEFAULT_SHOW_TRAIL = true
+
     // -- haptics -------------------------------------------------------------
 
     /** The single level this used to have, kept only so old settings survive. */
@@ -283,6 +293,9 @@ object KeyboardPrefs {
     fun timing(context: Context, range: Range): Long = value(context, range).toLong()
 
     fun timing(context: Context, key: String): Long = value(context, key).toLong()
+
+    fun showTrail(context: Context): Boolean =
+        of(context).getBoolean(SHOW_TRAIL, DEFAULT_SHOW_TRAIL)
 
     fun autoCorrect(context: Context): Boolean =
         of(context).getBoolean(AUTO_CORRECT, DEFAULT_AUTO_CORRECT)

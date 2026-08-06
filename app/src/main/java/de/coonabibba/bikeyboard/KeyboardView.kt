@@ -67,6 +67,13 @@ class KeyboardView @JvmOverloads constructor(
     /** Called per character step while dragging on the space bar: +1 right, -1 left. */
     var onCursorStep: ((Int) -> Unit)? = null
 
+    /**
+     * Called with -1 or 1 per line of vertical travel on the steering key (D38).
+     * Separate from [onCursorStep] because moving by lines is a different
+     * question for the field to answer, and a different way to fail.
+     */
+    var onLineStep: ((Int) -> Unit)? = null
+
     /** Called per word while swiping left on backspace. */
     var onDeleteWord: (() -> Unit)? = null
 
@@ -105,6 +112,20 @@ class KeyboardView @JvmOverloads constructor(
      * every letter being capitalised is worth one glance.
      */
     var capsLocked: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /**
+     * Whether the keypress trail is drawn at all (D19, D38).
+     *
+     * Only the label depends on it here — the service simply stops feeding
+     * [trail] when this is off, and stops *recording* it, which is the part
+     * that matters in a password field. Keeping the drawing unconditional means
+     * there is one way for the trail to be empty rather than two.
+     */
+    var trailEnabled: Boolean = true
         set(value) {
             field = value
             invalidate()
@@ -152,7 +173,7 @@ class KeyboardView @JvmOverloads constructor(
     private data class PlacedKey(val key: Key, val bounds: RectF, val hitBounds: RectF)
 
     /** What a drag off a key has turned into, if anything. */
-    private enum class DragMode { NONE, CURSOR, DELETE_WORD, RECASE }
+    private enum class DragMode { NONE, CURSOR, LINES, DELETE_WORD, RECASE }
 
     /**
      * State of one finger currently on the keyboard.
@@ -166,6 +187,7 @@ class KeyboardView @JvmOverloads constructor(
         val downX: Float,
         val downY: Float,
         var stepAnchorX: Float,
+        var stepAnchorY: Float,
         var fired: Boolean = false,
         var dragMode: DragMode = DragMode.NONE,
         /** Where this press landed, and what else it nearly hit (D28). */
@@ -436,6 +458,9 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun displayLabel(key: Key): String = when {
         key.action == KeyAction.Shift && capsLocked -> CAPS_LOCK_LABEL
+        // The one key that says what it will do rather than what it is.
+        key.action == KeyAction.ToggleTrail ->
+            if (trailEnabled) Layouts.TRAIL_ON_LABEL else Layouts.TRAIL_OFF_LABEL
         shifted && key.action is KeyAction.Text -> key.label.uppercase()
         else -> key.label
     }
@@ -528,6 +553,7 @@ class KeyboardView @JvmOverloads constructor(
                         downX = x,
                         downY = y,
                         stepAnchorX = x,
+                        stepAnchorY = y,
                         touch = typedTouch(hit.key, x, y),
                     )
                     activePointers[pointerId] = touch
@@ -607,6 +633,11 @@ class KeyboardView @JvmOverloads constructor(
                     continue
                 }
 
+                DragMode.LINES -> {
+                    emitLineSteps(touch, y)
+                    continue
+                }
+
                 // One word per swipe, deliberately. Repeating on continued
                 // travel took whole clauses out before the finger stopped.
                 // Lift and swipe again for the next word.
@@ -628,6 +659,24 @@ class KeyboardView @JvmOverloads constructor(
                 dismissLongPress()
                 emitCursorSteps(touch, x)
                 continue
+            }
+
+            // Dragging up and down the steering key moves the cursor a line at
+            // a time (D38). Two guards that the space bar does not need: the
+            // travel has to be mostly vertical, and it has to be further, because
+            // this is a letter key that gets tapped hundreds of times a minute
+            // and a tap that drifts must stay a tap.
+            if (touch.placed.key.steersLines) {
+                val dy = y - touch.downY
+                val dx = x - touch.downX
+                if (abs(dy) > LINE_DRAG_START_DP * density && abs(dy) > abs(dx)) {
+                    touch.dragMode = DragMode.LINES
+                    touch.fired = true
+                    touch.stepAnchorY = touch.downY
+                    dismissLongPress()
+                    emitLineSteps(touch, y)
+                    continue
+                }
             }
 
             // Swiping up on shift cycles the case of the word the cursor is
@@ -681,6 +730,21 @@ class KeyboardView @JvmOverloads constructor(
     }
 
 
+    /**
+     * Emits one step per [LINE_STEP_DP] of vertical travel since the last one.
+     *
+     * A coarser step than the horizontal one: a line is a bigger jump than a
+     * character, and overshooting by a line costs more to undo.
+     */
+    private fun emitLineSteps(touch: Touch, y: Float) {
+        val step = LINE_STEP_DP * density
+        while (abs(y - touch.stepAnchorY) >= step) {
+            val direction = if (y > touch.stepAnchorY) 1 else -1
+            touch.stepAnchorY += direction * step
+            onLineStep?.invoke(direction)
+        }
+    }
+
     private fun startRepeat(pointerId: Int) {
         stopRepeat()
         repeatPointer = pointerId
@@ -726,6 +790,16 @@ class KeyboardView @JvmOverloads constructor(
         /** Sideways travel on the space bar before it becomes cursor steering. */
         const val CURSOR_DRAG_START_DP = 10f
         const val CURSOR_STEP_DP = 12f
+
+        /**
+         * Vertical travel on the steering key before it becomes line steering.
+         *
+         * Nearly twice the space bar's threshold, because the space bar cannot
+         * be typed by accident and a letter can. A thumb that rolls while
+         * tapping `h` has to stay a tap.
+         */
+        const val LINE_DRAG_START_DP = 18f
+        const val LINE_STEP_DP = 22f
 
         /**
          * Leftward travel on backspace before a word is deleted. Fires once per

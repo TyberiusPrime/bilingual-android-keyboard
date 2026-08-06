@@ -88,13 +88,17 @@ class PersonalStore(private val file: File) {
     fun entries(): List<Entry> = entries
 
     /**
-     * The words on the quick menu, in the order they were added.
+     * The words on the quick menu, alphabetically.
      *
-     * Not sorted: this is a short list the user built deliberately, and a menu
-     * whose items move as it grows is one that has to be read every time
-     * instead of reached for.
+     * Folded first and then by the word itself, which is the order the launcher
+     * screen already lists everything in — so a word is in the same place on
+     * both, and `Ärztin` sorts under A where it is looked for rather than after
+     * Z where its code point puts it.
      */
-    fun quick(): List<String> = entries.filter { it.quick }.map { it.word }
+    fun quick(): List<String> = entries
+        .filter { it.quick }
+        .map { it.word }
+        .sortedWith(compareBy({ Folding.fold(it) }, { it }))
 
     fun isQuick(word: String): Boolean = entries.any { it.word == word && it.quick }
 

@@ -1544,6 +1544,24 @@ despite looking like one, and it is drawn as stacked rows rather than
 side-by-side cells because addresses are not characters and a row of them would
 be unreadable at any width a phone has.
 
+**It scrolls, and it is sorted.** Only about four rows fit above the key, and
+the first version simply dropped everything past that — a menu that silently
+loses entries as it grows is worse than no menu, because it is the entries you
+added most recently that vanish. So the rows live in a viewport with an offset
+rather than each having a fixed rectangle: with scrolling there is no fixed
+rectangle for a row to have, and computing the position from the offset in both
+directions is what keeps drawing and hit testing from disagreeing.
+
+Past the touch slop a drag becomes a scroll and the pressed row is *unselected*,
+or letting go at the end of a drag would insert whatever the finger came to rest
+on. And the scrollbar is drawn whenever there is anywhere to scroll to, because
+a full menu and a menu with six more below the fold look identical otherwise —
+nothing else on this keyboard scrolls, so there is no habit to fall back on.
+
+Sorted by the same folded comparison the launcher screen lists everything with,
+so a word is in the same place on both, and `Ärztin` sorts under A where it is
+looked for rather than after Z where its code point puts it.
+
 **The file format had to stay readable.** A quick entry is the word, a tab, and
 a marker; a bare line is an ordinary word, which is every line of every file
 written before this. The store also holds one list of entries rather than a

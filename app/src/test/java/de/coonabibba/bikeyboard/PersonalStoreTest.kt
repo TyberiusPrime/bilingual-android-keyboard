@@ -193,18 +193,42 @@ class PersonalStoreTest {
         assertFalse(store.isQuick("Fairphone"))
     }
 
-    /**
-     * The menu keeps the order words were added in. A shortlist whose items
-     * move as it grows has to be read every time instead of reached for.
-     */
+    /** The menu is alphabetical, whatever order the words went in. */
     @Test
-    fun `the menu is in the order words were added`() {
+    fun `the menu is sorted`() {
         val (store, _) = store()
         listOf("zebra", "apple", "mango").forEach {
             store.add(it)
             store.setQuick(it, true)
         }
-        assertEquals(listOf("zebra", "apple", "mango"), store.quick())
+        assertEquals(listOf("apple", "mango", "zebra"), store.quick())
+    }
+
+    /**
+     * Sorted the way the launcher screen sorts, so a word is in the same place
+     * on both — and so an accented word is where the eye looks for it rather
+     * than after `z`, which is where its code point would put it.
+     */
+    @Test
+    fun `the menu sorts accents and case the way the list does`() {
+        val (store, _) = store()
+        listOf("Zoo", "Ärztin", "apfel", "Öl").forEach {
+            store.add(it)
+            store.setQuick(it, true)
+        }
+        assertEquals(listOf("apfel", "Ärztin", "Öl", "Zoo"), store.quick())
+    }
+
+    /** Nothing is dropped for want of room on screen — the menu scrolls. */
+    @Test
+    fun `every tagged word is on the menu however many there are`() {
+        val (store, _) = store()
+        val many = (1..30).map { "word%02d".format(it) }
+        many.forEach {
+            store.add(it)
+            store.setQuick(it, true)
+        }
+        assertEquals(many, store.quick())
     }
 
     /** A word containing the marker text is still just a word. */

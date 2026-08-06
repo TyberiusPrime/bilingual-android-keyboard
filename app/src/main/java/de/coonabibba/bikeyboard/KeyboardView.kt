@@ -344,8 +344,26 @@ class KeyboardView @JvmOverloads constructor(
      * touch, from press to release, and cannot outlast it.
      */
     private var quickItems: List<String> = emptyList()
-    private var quickBounds: List<RectF> = emptyList()
     private var quickPressed = -1
+
+    /**
+     * The window the rows are drawn in, and how far the list has been dragged
+     * up inside it.
+     *
+     * A viewport plus an offset rather than a rectangle per row, because with
+     * scrolling there is no longer a fixed rectangle for a row to have — row
+     * *n* is wherever the scroll puts it, and computing that from the offset in
+     * both directions is what keeps drawing and hit testing from disagreeing.
+     */
+    private val quickViewport = RectF()
+    private var quickRowHeight = 0f
+    private var quickScroll = 0f
+    private var quickMaxScroll = 0f
+
+    /** Where the finger went down, to tell a tap on a row from a drag of the list. */
+    private var quickDownY = 0f
+    private var quickLastY = 0f
+    private var quickScrolling = false
 
     /**
      * Whether the menu was already open when the current press began, so that
@@ -449,6 +467,7 @@ class KeyboardView @JvmOverloads constructor(
         textAlign = Paint.Align.LEFT
         textSize = 16f * density
     }
+    private val quickScrollbarPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
 
     init {
         // Nothing paints behind an IME window. Without an opaque surface of our
@@ -1070,39 +1089,58 @@ class KeyboardView @JvmOverloads constructor(
      * would be unreadable at any width the screen has.
      */
     private fun openQuickMenu(target: PlacedKey, items: List<String>) {
-        val rowHeight = QUICK_ROW_DP * density
+        quickRowHeight = QUICK_ROW_DP * density
         // Upwards from the key, into the strip's headroom, and no further.
         val available = target.bounds.top + popupHeadroom
-        val fits = (available / rowHeight).toInt().coerceAtLeast(1)
-        val shown = items.take(minOf(fits, QUICK_MAX_ROWS))
+        val fits = (available / quickRowHeight).toInt().coerceIn(1, QUICK_MAX_ROWS)
+        val visible = minOf(fits, items.size)
 
         val padding = QUICK_PADDING_DP * density
-        val widest = shown.maxOf { quickTextPaint.measureText(it) } + padding * 2
+        val scrollbar = if (items.size > visible) QUICK_SCROLLBAR_DP * density else 0f
+        val widest = items.maxOf { quickTextPaint.measureText(it) } + padding * 2 + scrollbar
         val menuWidth = widest.coerceAtMost(width - keyGap * 2)
         // Centred on the key where it can be, shoved inboard where it cannot.
         val left = (target.bounds.centerX() - menuWidth / 2f)
             .coerceIn(keyGap, width - keyGap - menuWidth)
 
         val bottom = target.bounds.top - keyGap
-        quickBounds = shown.indices.map { index ->
-            val rowBottom = bottom - index * rowHeight
-            RectF(left, rowBottom - rowHeight + keyGap, left + menuWidth, rowBottom)
-        }
-        quickItems = shown
+        quickViewport.set(left, bottom - visible * quickRowHeight, left + menuWidth, bottom)
+        quickItems = items
+        // Everything below the window is reachable by dragging; nothing is
+        // dropped for want of room, which is the whole point of scrolling it.
+        quickMaxScroll = (items.size * quickRowHeight - quickViewport.height()).coerceAtLeast(0f)
+        quickScroll = 0f
         quickPressed = -1
+        quickScrolling = false
         invalidate()
     }
 
     fun dismissQuickMenu() {
         if (quickItems.isEmpty()) return
         quickItems = emptyList()
-        quickBounds = emptyList()
         quickPressed = -1
+        quickScrolling = false
+        quickScroll = 0f
+        quickMaxScroll = 0f
         invalidate()
     }
 
-    private fun quickRowAt(x: Float, y: Float): Int =
-        quickBounds.indexOfFirst { it.contains(x, y) }
+    /** Where row [index] sits right now, given the scroll. */
+    private fun quickRowTop(index: Int): Float =
+        quickViewport.top - quickScroll + index * quickRowHeight
+
+    private fun quickRowAt(x: Float, y: Float): Int {
+        if (!quickViewport.contains(x, y)) return -1
+        val index = ((y - quickViewport.top + quickScroll) / quickRowHeight).toInt()
+        return if (index in quickItems.indices) index else -1
+    }
+
+    private fun scrollQuickMenu(by: Float) {
+        val wanted = (quickScroll + by).coerceIn(0f, quickMaxScroll)
+        if (wanted == quickScroll) return
+        quickScroll = wanted
+        invalidate()
+    }
 
     /**
      * The menu's own touch handling, which runs in front of everything else
@@ -1122,9 +1160,11 @@ class KeyboardView @JvmOverloads constructor(
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val row = quickRowAt(x, y)
-                if (row >= 0) {
-                    quickPressed = row
+                if (quickViewport.contains(x, y)) {
+                    quickPressed = quickRowAt(x, y)
+                    quickDownY = y
+                    quickLastY = y
+                    quickScrolling = false
                     invalidate()
                     return true
                 }
@@ -1136,7 +1176,25 @@ class KeyboardView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (quickPressed < 0) return false
+                if (quickPressed < 0 && !quickScrolling) return false
+
+                // Past the slop the gesture is a scroll, not a choice, and the
+                // row under the finger stops being selected — otherwise letting
+                // go at the end of a drag would insert whatever the finger
+                // happened to land on.
+                if (!quickScrolling && abs(y - quickDownY) > SLOP_DP * density) {
+                    quickScrolling = true
+                    quickPressed = -1
+                }
+                if (quickScrolling) {
+                    scrollQuickMenu(quickLastY - y)
+                    quickLastY = y
+                    invalidate()
+                    return true
+                }
+
+                // Still a press: follow the finger between rows, but only while
+                // it stays inside the menu.
                 val row = quickRowAt(x, y)
                 if (row != quickPressed) {
                     quickPressed = row
@@ -1146,6 +1204,11 @@ class KeyboardView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (quickScrolling) {
+                    // A drag ends where it ends. The menu stays up, scrolled.
+                    quickScrolling = false
+                    return true
+                }
                 if (quickPressed < 0) return false
                 val chosen = quickItems.getOrNull(quickPressed)
                 dismissQuickMenu()
@@ -1164,24 +1227,74 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun drawQuickMenu(canvas: Canvas) {
         if (quickItems.isEmpty()) return
-        quickBounds.forEachIndexed { index, bounds ->
-            canvas.drawRoundRect(
-                bounds,
-                keyRadius,
-                keyRadius,
-                if (index == quickPressed) quickPressedPaint else quickPaint,
-            )
-            val padding = QUICK_PADDING_DP * density
-            val baseline =
-                bounds.centerY() - (quickTextPaint.descent() + quickTextPaint.ascent()) / 2f
+        val padding = QUICK_PADDING_DP * density
+
+        // One rounded panel behind the lot, so the menu reads as a single
+        // surface the list moves inside rather than as a stack of loose keys
+        // that happen to slide together.
+        canvas.drawRoundRect(quickViewport, keyRadius, keyRadius, quickPaint)
+
+        canvas.save()
+        canvas.clipRect(quickViewport)
+
+        // Only the rows actually in the window, which is what keeps a long list
+        // from costing anything to draw.
+        val first = (quickScroll / quickRowHeight).toInt().coerceAtLeast(0)
+        val last = ((quickScroll + quickViewport.height()) / quickRowHeight).toInt()
+            .coerceAtMost(quickItems.lastIndex)
+
+        for (index in first..last) {
+            val top = quickRowTop(index)
+            if (index == quickPressed) {
+                canvas.drawRect(
+                    quickViewport.left,
+                    top,
+                    quickViewport.right,
+                    top + quickRowHeight,
+                    quickPressedPaint,
+                )
+            }
+            val baseline = top + quickRowHeight / 2f -
+                (quickTextPaint.descent() + quickTextPaint.ascent()) / 2f
             // Clipped rather than ellipsised: an address that does not fit is
             // still recognisable from its front, and its front is the part that
             // distinguishes it from the other one on the list.
-            canvas.save()
-            canvas.clipRect(bounds)
-            canvas.drawText(quickItems[index], bounds.left + padding, baseline, quickTextPaint)
-            canvas.restore()
+            canvas.drawText(quickItems[index], quickViewport.left + padding, baseline, quickTextPaint)
         }
+
+        canvas.restore()
+        drawQuickScrollbar(canvas)
+    }
+
+    /**
+     * The bar down the right edge, drawn only when there is somewhere to
+     * scroll to.
+     *
+     * Without it a menu that happens to be exactly full looks identical to one
+     * with six more entries below the fold, and nothing else on this keyboard
+     * scrolls — so there is no habit to fall back on.
+     */
+    private fun drawQuickScrollbar(canvas: Canvas) {
+        if (quickMaxScroll <= 0f) return
+        val total = quickItems.size * quickRowHeight
+        val visible = quickViewport.height()
+        val trackWidth = QUICK_SCROLLBAR_DP * density
+        val inset = trackWidth / 3f
+
+        val thumbHeight = (visible / total * visible).coerceAtLeast(trackWidth * 2f)
+        val travel = visible - thumbHeight
+        val top = quickViewport.top + travel * (quickScroll / quickMaxScroll)
+
+        quickScrollbarPaint.alpha = QUICK_SCROLLBAR_ALPHA
+        canvas.drawRoundRect(
+            quickViewport.right - trackWidth + inset,
+            top,
+            quickViewport.right - inset,
+            top + thumbHeight,
+            trackWidth,
+            trackWidth,
+            quickScrollbarPaint,
+        )
     }
 
     // -- swiping (D39) --------------------------------------------------------
@@ -1446,11 +1559,14 @@ class KeyboardView @JvmOverloads constructor(
         const val QUICK_PADDING_DP = 12f
 
         /**
-         * However much room there is, the menu stops here. It is a shortlist of
-         * things worth a key of their own; past half a dozen it is a directory,
-         * and scrolling one of those is slower than typing.
+         * How many rows are on screen at once. Not a limit on the menu — it
+         * scrolls — only on how much of the keyboard it is allowed to cover
+         * while it is up.
          */
         const val QUICK_MAX_ROWS = 6
+
+        const val QUICK_SCROLLBAR_DP = 6f
+        const val QUICK_SCROLLBAR_ALPHA = 90
 
         /**
          * Leftward travel on backspace before a word is deleted. Fires once per

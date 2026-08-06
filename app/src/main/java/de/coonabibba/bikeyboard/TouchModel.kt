@@ -38,9 +38,27 @@ class TypedTouch(val char: Char, val alternatives: Map<Char, Float>) {
  * here. What is here is the geometry, which is enough to tell an adjacent-key
  * slip from a typo, and that is what the auto-correction threshold rests on.
  */
-class KeyGeometry(private val keys: List<Entry>, private val keyWidth: Float) {
+class KeyGeometry(private val keys: List<Entry>, val keyWidth: Float) {
 
     class Entry(val char: Char, val centreX: Float, val centreY: Float)
+
+    /**
+     * Where each letter sits, for building the path a word *would* have been
+     * swiped along (D39). Folded, because the wordlists carry `über` and the
+     * keyboard only has a `u`.
+     */
+    private val byChar: Map<Char, Entry> =
+        keys.associateBy { Folding.foldChar(it.char) }
+
+    /** Whether there is any geometry to work with at all. */
+    val isEmpty: Boolean get() = keys.isEmpty() || keyWidth <= 0f
+
+    /** The key [char] is typed on, accents folded away, or null if there is none. */
+    fun centreOf(char: Char): Entry? = byChar[Folding.foldChar(char)]
+
+    /** The letter key nearest ([x], [y]), or null if there are no letter keys. */
+    fun nearestLetter(x: Float, y: Float): Char? =
+        keys.minByOrNull { hypot(x - it.centreX, y - it.centreY) }?.char
 
     /**
      * The keys plausibly meant by a touch at ([x], [y]) that landed on [pressed].

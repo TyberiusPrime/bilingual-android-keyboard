@@ -125,14 +125,132 @@ class DictionarySuggestions(
         )
     }
 
-    /** Ranks the candidates and trims them to what the strip can show. */
-    private fun rank(typed: String, candidates: List<Candidate>): List<Suggestion> {
+    /**
+     * Every word that could have been traced by [path] (D39).
+     *
+     * The search is bounded by the two things a swipe says clearly. A finger
+     * comes down deliberately and lifts deliberately, so the **first and last
+     * letters** are near certain — and a first letter plus a last letter is a
+     * slice of about three hundred words across both dictionaries, measured,
+     * out of seventy thousand. Everything in between is a shape, and the shape
+     * is only asked about once the slice is that small.
+     *
+     * Both endpoints admit their close neighbours as well, since a thumb that
+     * starts a stroke is not always precise about where; that widens the slice
+     * by roughly the square of the number admitted, which is why the count is
+     * capped rather than merely thresholded.
+     */
+    override fun candidatesForGesture(path: GesturePath, keys: KeyGeometry): Candidates {
+        if (keys.isEmpty) return Candidates.NONE
+        val firsts = endpointLetters(path.startX, path.startY, keys)
+        val lasts = endpointLetters(path.endX, path.endY, keys)
+        if (firsts.isEmpty() || lasts.isEmpty()) return Candidates.NONE
+
+        val decoder = GestureDecoder(keys)
+        val candidates = mutableListOf<Candidate>()
+
+        firsts.forEach { first ->
+            val bucket = first.toString()
+
+            personal.completions(bucket).forEach { word ->
+                scoreGesture(decoder, path, word, lasts)?.let { cost ->
+                    candidates += Candidate(word, gestureScore(PERSONAL_WEIGHT, cost), null)
+                }
+            }
+
+            lexicons.forEach { lexicon ->
+                for (index in lexicon.completions(bucket)) {
+                    val word = lexicon.wordAt(index)
+                    val cost = scoreGesture(decoder, path, word, lasts) ?: continue
+                    candidates += Candidate(
+                        word,
+                        gestureScore(lexicon.weightAt(index), cost),
+                        lexicon.language,
+                    )
+                }
+            }
+        }
+
+        // No correction: a swipe has no original spelling to be corrected away
+        // from, so there is nothing for D28's "never replace a word that is
+        // already right" to protect. What to commit is the first suggestion,
+        // and how sure that is, is its confidence — which is why the prior
+        // matters here as much as it does for a typo. Without it a single
+        // hopeless candidate would be the only thing on the table and would
+        // therefore be certain.
+        return Candidates(rank("", candidates, prior = UNKNOWN_WORD_PRIOR), correction = null)
+    }
+
+    /**
+     * What tracing [word] would have cost, or null if it is not worth asking.
+     *
+     * Ordered by price. The last letter is one character comparison and throws
+     * away about ninety-five percent of the bucket; the journey length is one
+     * pass over the word and throws away most of the rest; only what survives
+     * both gets the full path comparison.
+     */
+    private fun scoreGesture(
+        decoder: GestureDecoder,
+        path: GesturePath,
+        word: String,
+        lasts: Set<Char>,
+    ): Float? {
+        val last = word.lastOrNull() ?: return null
+        if (Folding.foldChar(last) !in lasts) return null
+
+        val ideal = decoder.idealLength(word)
+        if (ideal == GestureDecoder.UNSWIPEABLE) return null
+        if (ideal < path.length * MIN_LENGTH_RATIO) return null
+        if (ideal > path.length * MAX_LENGTH_RATIO) return null
+
+        val cost = decoder.cost(path, word)
+        return if (cost > MAX_GESTURE_COST) null else cost
+    }
+
+    /**
+     * The same shape as a typo's score — how common the word is, discounted
+     * exponentially by how implausible the finger's route was — so that a swipe
+     * and a tapped correction produce comparable confidences and one threshold
+     * governs both (D33).
+     */
+    private fun gestureScore(weight: Float, cost: Float): Float =
+        weight * exp(-confidenceDecay * cost)
+
+    /**
+     * The letters a stroke may have started or finished on: the nearest, plus
+     * any close enough to be a genuine near miss.
+     */
+    private fun endpointLetters(x: Float, y: Float, keys: KeyGeometry): Set<Char> {
+        val nearest = keys.nearestLetter(x, y) ?: return emptySet()
+        val letters = LinkedHashSet<Char>()
+        letters += Folding.foldChar(nearest)
+        keys.alternatives(x, y, nearest).entries
+            .filter { it.value <= GESTURE_ENDPOINT_REACH }
+            .sortedBy { it.value }
+            .forEach { (char, _) ->
+                if (letters.size < MAX_ENDPOINT_LETTERS) letters += Folding.foldChar(char)
+            }
+        return letters
+    }
+
+    /**
+     * Ranks the candidates and trims them to what the strip can show.
+     *
+     * [prior] is the standing chance that none of them is right, added to the
+     * divisor only. A candidate set that is uniformly bad should not produce a
+     * confident answer merely because it is the only set there is.
+     */
+    private fun rank(
+        typed: String,
+        candidates: List<Candidate>,
+        prior: Float = 0f,
+    ): List<Suggestion> {
         if (candidates.isEmpty()) return emptyList()
 
         // Confidence is the candidate's share of everything that matches: a
         // unigram P(word | what was typed so far). Crude, and honestly crude —
         // D3 wants a calibrated number and this is the most a lookup can say.
-        var mass = 0f
+        var mass = prior
         candidates.forEach { mass += it.weight }
         if (mass <= 0f) return emptyList()
 
@@ -380,5 +498,45 @@ class DictionarySuggestions(
 
         /** A ceiling on the scan, however ambiguous the first touch was. */
         const val MAX_SEARCH_PREFIXES = 4
+
+        // -- swiping (D39) ----------------------------------------------------
+
+        /**
+         * How far off a key the finger may come down or lift and still have
+         * that key considered, in key widths.
+         *
+         * Tighter than [FIRST_LETTER_REACH] for tapping, and for a reason that
+         * is about cost rather than accuracy: the endpoints multiply. Three
+         * plausible first letters and three plausible last ones is nine slices
+         * of dictionary, not three, so generosity here is quadratic where
+         * everywhere else in the file it is linear.
+         */
+        const val GESTURE_ENDPOINT_REACH = 0.35f
+
+        /** A hard ceiling on that multiplication, per endpoint. */
+        const val MAX_ENDPOINT_LETTERS = 3
+
+        /**
+         * How far the length of the journey may differ from the candidate's,
+         * before and after.
+         *
+         * Generous on purpose. People cut corners when they swipe, so the real
+         * path is usually a little *shorter* than the ideal one, and they also
+         * overshoot the last letter, which makes it longer. What this is for is
+         * throwing out `an` when the finger travelled the width of the keyboard
+         * — a difference of a factor of five, not of a quarter.
+         */
+        const val MIN_LENGTH_RATIO = 0.45f
+        const val MAX_LENGTH_RATIO = 2.2f
+
+        /**
+         * The worst average deviation, in key widths, still worth ranking.
+         *
+         * One key width means the path was, on average, a whole key away from
+         * where that word would have taken it — at which point the word is not
+         * a near miss and carrying it only dilutes the confidence of the
+         * candidates that are.
+         */
+        const val MAX_GESTURE_COST = 1f
     }
 }

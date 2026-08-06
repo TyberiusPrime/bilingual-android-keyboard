@@ -15,10 +15,11 @@ byte-identical output.
 | German vocabulary and casing | [igerman98](https://www.j3e.de/ispell/igerman98/), via Debian `wngerman` | `20161207-16` | GPL-2+ |
 | English vocabulary and casing | [SCOWL](http://wordlist.aspell.net/), via Debian `wamerican` | `2020.12.07-4` | SCOWL licence (permissive, BSD-style) |
 | Word frequencies, both languages | [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords), `content/2018/{de,en}/{de,en}_50k.txt` | 2018 lists, from OpenSubtitles 2018 | CC BY-SA 4.0 (content); MIT (the generator code, not used here) |
+| English apostrophe-suffix frequencies | the same, `content/2018/en/en_full.txt` | 2018 list, from OpenSubtitles 2018 | CC BY-SA 4.0 |
 
 ## Licence compatibility
 
-This project is GPLv3 (D13), and all three sources can be distributed under it:
+This project is GPLv3 (D13), and every source can be distributed under it:
 
 - **igerman98** is GPL-2+, and "or later" allows GPLv3.
 - **SCOWL** is permissive and imposes only attribution-style conditions, which
@@ -45,9 +46,21 @@ order against the app's own folding, so the two cannot drift apart silently.
 
 ## Known gaps
 
-- **Contractions are missing.** OpenSubtitles tokenisation splits `don't` into
-  `don` and `t`, so it never appears as one word in the frequency list and is
-  therefore never in the intersection.
+- **English contractions are reconstructed, not observed.** OpenSubtitles
+  tokenisation splits `don't` into `don` and a separate `'t`, so no contraction
+  appears as one word anywhere in the frequency list. The 74 English entries
+  containing an apostrophe have their counts allocated from the suffix totals in
+  `en_full.txt`, in proportion to how often each stem occurs, and that amount is
+  subtracted from the stem — see `contractions()` in the build script. Exact
+  where the stem is not a word on its own (`didn`, `isn`); an estimate where it
+  is (`can`).
+- **Possessives are not shipped.** The English dictionary holds 29,467 of them
+  and cannot be told apart from the contractions; shipping all of them would
+  nearly double the file for forms the apostrophe key already produces. The `'s`
+  entries that are here are restricted to pronouns and interrogatives.
+- **German has no contractions at all.** Its spelling dictionary contains no
+  apostrophe words, so there is nothing to allocate frequencies to; `geht's` is
+  handled on the suggestion side instead (D27).
 - **German homographs are lowercase.** `zeit`, `leben`, `weg`, `recht` — words
   the flat spelling list records in their lowercase reading — are stored that
   way, so the noun is only offered capitalised when the typist presses shift.

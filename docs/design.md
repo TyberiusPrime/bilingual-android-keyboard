@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D33 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D34 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -40,6 +40,11 @@ below.
       threshold does, it does relative to that one number, and it was guessed.
 - [ ] Auto-correction cannot reach a word whose first letter was mistyped, and
       cannot spell `Straße` from `strasse` (D28).
+- [ ] The `'s` contractions are systematically under-weighted (D34): their share
+      is allocated across all 29,467 possessive stems, so `that's` lands near the
+      threshold where `don't` clears it easily. Worth a better estimator?
+- [ ] Is the falloff's default of 7 right (D34)? It is now a slider, which is an
+      admission that nobody here can answer this from a laptop.
 - [ ] A correction query costs ~3ms on a laptop and has not been timed on the
       phone (D23). Per keystroke, on a word with no completions, that is the
       first thing in this keyboard with a latency budget worth watching.
@@ -765,9 +770,11 @@ The corpus matters as much as the thumb, which is less obvious: at an identical
 of the evidence, so the same slip on a rarer word survives. Arguably right, and
 worth knowing before reading the threshold as a promise.
 
-The lever for all of this is the confidence slider. `DictionarySuggestionsTest`
-pins the shape rather than the numbers: monotonic, and spanning the threshold —
-a curve that did neither would make the setting meaningless.
+There are two levers, the threshold and the falloff — see D34, where the
+falloff became a slider precisely because the threshold alone moves the boundary
+without changing how abruptly it arrives. `DictionarySuggestionsTest` pins the
+shape rather than the numbers: monotonic, spanning the threshold, and moving in
+the direction each slider claims.
 
 Known limits: the search is bucketed by first letter (D23), so `hte` cannot
 reach `the`. And `ß` folds to `s` one character at a time here, so `strasse`
@@ -1014,6 +1021,78 @@ The folding table (D22) grew to match, including for characters no German or
 English word contains — `ø ł ž`. It costs a line each, it means a name typed
 with its accents still finds the personal-store entry typed without them, and it
 cannot disturb the wordlist sort order because none of them occur there.
+
+### D34 — Contractions, and the falloff as a second slider
+
+Two halves of the same complaint: the same typo is corrected only sometimes, and
+`dont` is never corrected at all.
+
+**`dont` was never going to work, because `don't` was not in the dictionary.**
+None of them were. OpenSubtitles tokenises on the apostrophe, so the corpus has
+`don` and a separate `'t` and no contraction ever reaches the frequency list as
+one word — which is why the shipped English list had exactly zero apostrophes in
+35,481 entries, and why `don` sat there with 4.16 million occurrences, six tenths
+of a percent of the corpus, for a verb nobody uses. That count was `don't` filed
+under the wrong key.
+
+Both halves survive, so the mass can be put back. For each apostrophe suffix, its
+total is divided among the stems that can take it, in proportion to how often
+each stem occurs:
+
+```
+count(X'Y) = total(Y) × count(X) / Σ count over stems of Y
+```
+
+Exact where the stem is not a word on its own — `didn`, `isn`, `wouldn` occur
+only as contraction stems and take their whole count with them. An estimate
+where the stem is also a word: nothing can separate the modal `can` from the
+front of `can't`. The results are plausible enough to trust for ranking — `I'm`
+0.60% of the corpus, `don't` 0.45%, `can't` 0.41% — and the allocation is
+**subtracted from the stem**, which is what drops `don` to 914k. That is also
+where the estimate's error goes: an over-allocated `can't` leaves `can` light.
+
+**Possessives are not shipped.** The dictionary holds 29,467 of them against a
+few dozen contractions and cannot tell `it's` from `aardvark's`. Shipping them
+all would nearly double the English list for forms the typist can already
+produce by typing the apostrophe. The `'s` contractions that *are* shipped are
+restricted to pronouns and interrogatives — closed word classes where `'s`
+contracts *is* or *has* — which is a linguistic fact rather than a judgement,
+and the frequencies still come from the corpus. 74 entries in total. German gets
+none: its spelling dictionary has no apostrophe words at all, so `geht's` stays
+a matter for D27's suggestion-side rule.
+
+**A missing apostrophe is now a cheap edit**, 0.15 against a full-price 1.0 for
+any other insertion. The argument is D5's, applied to the other character this
+keyboard makes expensive: `'` is a long-press on `v`, so leaving it out is a
+decision about effort rather than a mistake about spelling, and D6 said from the
+start that correction was expected to place apostrophes unprompted. Dearer than
+the accent's 0.1 on purpose — a skipped umlaut still types a letter, so there is
+a touch to reason about, while a skipped apostrophe leaves no evidence at all.
+
+Measured against the shipped lists at the default threshold: `dont` → `don't`
+99.8%, `didnt` 99.5%, `youre` 99.0%, `doesnt` 99.0%, `couldnt` 98.0%, `ive` →
+`I've` 99.4%. The `'s` set lands lower — `thats` 92%, `theres` 91%, `isnt` 90% —
+because their frequencies are the systematically underestimated ones. `wont`,
+`cant` and `ill` are not touched at all: they are real words, and D28's hard gate
+says a word spelled exactly right is never replaced.
+
+**The falloff is the second slider**, because the threshold alone could not
+answer "this doesn't feel right yet". The threshold sets how sure the keyboard
+must be; the falloff sets how quickly it stops being sure as the thumb moves
+away from the key the word needed. Same word, same typo, varying only the
+falloff:
+
+| Falloff | 0.2 key widths | 0.4 | 0.6 | 0.8 |
+| --- | --- | --- | --- | --- |
+| 3 | 97% | 96% | 93% | 92% |
+| 7 (default) | 97% | 88% | 64% | 31% |
+| 14 | 88% | 31% | 3% | 0% |
+
+Low is forgiving and nearly flat; high corrects only a graze. The scorer takes
+it as a `var` rather than a constructor argument — reloading thirty-five thousand
+words because a slider moved would be absurd — pushed in when the input view is
+rebuilt and again when the dictionaries finish loading, since either can be the
+later of the two.
 
 ---
 

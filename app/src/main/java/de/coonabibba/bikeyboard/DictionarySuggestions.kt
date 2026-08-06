@@ -25,6 +25,15 @@ import kotlin.math.exp
 class DictionarySuggestions(
     private val lexicons: List<Lexicon>,
     private val personal: PersonalStore,
+    /**
+     * How sharply confidence falls away with the cost of the slips (D34).
+     *
+     * A setting, so `var` — the dictionaries are read once per service and it
+     * would be absurd to reload thirty-five thousand words because a slider
+     * moved. Volatile because the settings screen writes it and the typing
+     * thread reads it.
+     */
+    @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
 ) : SuggestionSource {
 
     private class Candidate(val word: String, val weight: Float, val language: Language?)
@@ -203,7 +212,7 @@ class DictionarySuggestions(
                 if (abs(word.length - typed.length) > MAX_SLIP_COST) continue
                 val cost = SpatialEditDistance.between(touches, word, MAX_SLIP_COST)
                 if (cost > MAX_SLIP_COST) continue
-                val score = lexicon.weightAt(index) * exp(-CONFIDENCE_DECAY * cost)
+                val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
                 mass += score
                 if (score > bestScore) {
                     bestScore = score
@@ -280,11 +289,13 @@ class DictionarySuggestions(
         const val MAX_SLIP_COST = 1.6f
 
         /**
-         * How fast confidence falls away with the cost of the slips. Tuned so
-         * that a neighbouring-key slip on a common word clears a 90% threshold
-         * and a full-price substitution does not.
+         * How fast confidence falls away with the cost of the slips, when
+         * nobody has said otherwise. Tuned so that a neighbouring-key slip on a
+         * common word clears a 90% threshold and a full-price substitution does
+         * not — but see [confidenceDecay]: it is a slider now, because where
+         * exactly that boundary should sit is a matter of how one thumb moves.
          */
-        const val CONFIDENCE_DECAY = 7f
+        const val DEFAULT_CONFIDENCE_DECAY = 7f
 
         /**
          * The standing chance that a word nobody knows was meant exactly as

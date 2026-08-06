@@ -33,6 +33,9 @@ class DictionarySuggestionsTest {
     private val english = lexicon(
         Language.ENGLISH,
         "have" to 700_000, "hard" to 120_000, "house" to 90_000, "hallway" to 3_000,
+        // Reconstructed by the build script from the halves OpenSubtitles left
+        // behind (D34); the count is the real one from the shipped list.
+        "don't" to 3_244_316,
     )
 
     private fun source(personal: PersonalStore = PersonalStore(folder.newFile())) =
@@ -273,6 +276,55 @@ class DictionarySuggestionsTest {
         }
         assertTrue("a graze should be confident: $curve", curve.first() > 0.9f)
         assertTrue("a whole key away should not be: $curve", curve.last() < 0.9f)
+    }
+
+    /**
+     * D34: a missing apostrophe is a skipped long-press, not a misspelling.
+     *
+     * `dont` is not a word in either language, the apostrophe costs a hold on
+     * `v`, and D6 said from the start that correction was expected to place it
+     * unprompted. Confident even with no touch evidence at all, because there
+     * is none to have — nothing was typed where the apostrophe goes.
+     */
+    @Test
+    fun `a missing apostrophe is corrected without touch evidence`() {
+        val correction = source().correct("dont", clean("dont"))
+        assertEquals("don't", correction?.text)
+        assertTrue("confidence was ${correction?.confidence}", correction!!.confidence > 0.9f)
+    }
+
+    /** The cheap apostrophe must not become a cheap anything-else. */
+    @Test
+    fun `a missing letter is still a full-price edit`() {
+        // `hause` -> `Haus` would be free if insertions were cheap in general.
+        val correction = source().correct("hous", clean("hous"))
+        assertTrue(
+            "confidence was ${correction?.confidence}",
+            correction == null || correction.confidence < 0.9f,
+        )
+    }
+
+    /**
+     * The falloff is a setting (D34), and a setting that does nothing is worse
+     * than no setting: it has to move the answer in the direction it claims.
+     */
+    @Test
+    fun `a gentler falloff forgives a press the default rejects`() {
+        val touches = "hanen".mapIndexed { index, char ->
+            if (index == 2) TypedTouch(char, mapOf('b' to 0.9f)) else TypedTouch(char, emptyMap())
+        }
+        fun confidence(source: DictionarySuggestions): Float =
+            source.correct("hanen", touches)?.confidence ?: 0f
+
+        fun sourceWith(decay: Float) =
+            DictionarySuggestions(listOf(german, english), PersonalStore(folder.newFile()), decay)
+
+        val gentle = confidence(sourceWith(2f))
+        // Constructed without the argument, so this is the shipped default.
+        val default = confidence(DictionarySuggestions(listOf(german, english), PersonalStore(folder.newFile())))
+        val fussy = confidence(sourceWith(20f))
+        assertTrue("$gentle should exceed $default", gentle > default)
+        assertTrue("$fussy should fall below $default", fussy < default)
     }
 
     /** D2: a word valid in either language is valid, however rare. */

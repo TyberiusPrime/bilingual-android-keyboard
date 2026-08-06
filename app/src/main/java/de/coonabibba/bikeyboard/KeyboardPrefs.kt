@@ -138,6 +138,36 @@ object KeyboardPrefs {
     const val MIN_CONFIDENCE = 50
     const val MAX_CONFIDENCE = 99
 
+    /**
+     * How sharply confidence falls away as the thumb sits further from the key
+     * the word needed (D34), in tenths.
+     *
+     * The companion to the threshold, and the one that decides *shape* rather
+     * than height. Low is forgiving — a correction still fires when the touch
+     * was half a key out; high is fussy, and only a graze counts. Two knobs
+     * because they are genuinely two questions, and measuring showed that the
+     * threshold alone moves the boundary without changing how abruptly it
+     * arrives.
+     */
+    const val CONFIDENCE_FALLOFF = "confidence_falloff"
+    const val DEFAULT_CONFIDENCE_FALLOFF = 70
+
+    /** The threshold and the falloff, the two sliders that shape a correction. */
+    val CORRECTION: List<Range> = listOf(
+        Range(
+            AUTO_CORRECT_CONFIDENCE,
+            DEFAULT_AUTO_CORRECT_CONFIDENCE,
+            MIN_CONFIDENCE,
+            MAX_CONFIDENCE,
+            R.string.setting_confidence,
+        ),
+        Range(CONFIDENCE_FALLOFF, DEFAULT_CONFIDENCE_FALLOFF, 10, 200, R.string.setting_falloff),
+    )
+
+    /** The falloff as the scorer wants it: a rate, not tenths of one. */
+    fun confidenceFalloff(context: Context): Float =
+        value(context, CORRECTION.first { it.key == CONFIDENCE_FALLOFF }) / 10f
+
     // -- haptics -------------------------------------------------------------
 
     /** The single level this used to have, kept only so old settings survive. */
@@ -247,7 +277,7 @@ object KeyboardPrefs {
         of(context).getInt(range.key, range.default).coerceIn(range.min, range.max)
 
     fun value(context: Context, key: String): Int =
-        value(context, (TIMINGS + FLASH).first { it.key == key })
+        value(context, (TIMINGS + FLASH + CORRECTION).first { it.key == key })
 
     /** A timing in milliseconds, clamped the same way. */
     fun timing(context: Context, range: Range): Long = value(context, range).toLong()

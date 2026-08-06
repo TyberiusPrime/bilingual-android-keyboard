@@ -3,6 +3,7 @@ package de.coonabibba.bikeyboard
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CompoundButton
@@ -117,43 +118,68 @@ class SettingsActivity : AppCompatActivity() {
     private fun addCorrection(into: LinearLayout) {
         into.addView(section(R.string.settings_section_correction))
 
-        val confidenceLabel = TextView(this).apply { setPadding(0, dp(12), 0, dp(4)) }
-        val confidenceSlider = slider(
-            KeyboardPrefs.MIN_CONFIDENCE,
-            KeyboardPrefs.MAX_CONFIDENCE,
-            (KeyboardPrefs.autoCorrectConfidence(this) * 100).toInt(),
-        ) {
-            confidenceLabel.text = getString(R.string.setting_confidence, it)
-            KeyboardPrefs.putInt(this, KeyboardPrefs.AUTO_CORRECT_CONFIDENCE, it)
-        }
-        confidenceLabel.text =
-            getString(R.string.setting_confidence, (KeyboardPrefs.autoCorrectConfidence(this) * 100).toInt())
-
         val explanation = TextView(this).apply {
             setText(R.string.setting_auto_correct_off)
             alpha = 0.7f
         }
+        val dependents = mutableListOf<View>()
 
         fun showEnabled(enabled: Boolean) {
-            confidenceLabel.isEnabled = enabled
-            confidenceSlider.isEnabled = enabled
-            confidenceLabel.alpha = if (enabled) 1f else 0.5f
+            dependents.forEach {
+                it.isEnabled = enabled
+                it.alpha = if (enabled) 1f else 0.5f
+            }
             explanation.visibility = if (enabled) TextView.GONE else TextView.VISIBLE
         }
 
-        val toggle = SwitchCompat(this).apply {
-            setText(R.string.setting_auto_correct)
-            isChecked = KeyboardPrefs.autoCorrect(this@SettingsActivity)
-            setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
-                KeyboardPrefs.putBoolean(this@SettingsActivity, KeyboardPrefs.AUTO_CORRECT, checked)
-                showEnabled(checked)
+        into.addView(
+            SwitchCompat(this).apply {
+                setText(R.string.setting_auto_correct)
+                isChecked = KeyboardPrefs.autoCorrect(this@SettingsActivity)
+                setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
+                    KeyboardPrefs.putBoolean(this@SettingsActivity, KeyboardPrefs.AUTO_CORRECT, checked)
+                    showEnabled(checked)
+                }
+            },
+        )
+        into.addView(explanation)
+
+        // Two sliders, because they are two questions. The threshold decides
+        // how sure the keyboard has to be; the falloff decides how quickly it
+        // stops being sure as the thumb moves away from the key the word
+        // needed. Measuring showed that the threshold alone moves the boundary
+        // without changing how abruptly it arrives (D34).
+        KeyboardPrefs.CORRECTION.forEach { range ->
+            val label = TextView(this).apply { setPadding(0, dp(12), 0, dp(4)) }
+            val show = { value: Int ->
+                label.text = when (range.key) {
+                    // A percentage, against a rate carried in tenths.
+                    KeyboardPrefs.AUTO_CORRECT_CONFIDENCE ->
+                        getString(R.string.setting_confidence, value)
+
+                    else ->
+                        getString(R.string.setting_decimal, getString(range.label), value / 10, value % 10)
+                }
             }
+            val bar = slider(range.min, range.max, KeyboardPrefs.value(this, range)) {
+                show(it)
+                KeyboardPrefs.putInt(this, range.key, it)
+            }
+            show(KeyboardPrefs.value(this, range))
+            into.addView(label)
+            into.addView(bar)
+            dependents += label
+            dependents += bar
         }
 
-        into.addView(toggle)
-        into.addView(explanation)
-        into.addView(confidenceLabel)
-        into.addView(confidenceSlider)
+        into.addView(
+            TextView(this).apply {
+                setText(R.string.setting_falloff_hint)
+                alpha = 0.7f
+                setPadding(0, dp(8), 0, 0)
+            }.also { dependents += it },
+        )
+
         showEnabled(KeyboardPrefs.autoCorrect(this))
     }
 

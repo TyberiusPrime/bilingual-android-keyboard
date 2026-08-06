@@ -29,10 +29,15 @@ typist presses shift. Telling those apart needs a part-of-speech signal that
 the GPL-compatible sources do not carry, and guessing it wrong would
 capitalise adjectives.
 
-Contractions do not survive either: OpenSubtitles tokenisation splits `don't`
-into `don` and `t`, so it never reaches the frequency list as one word. D6
-expects correction to place apostrophes eventually, which is a later problem
-than this one.
+English contractions are **reconstructed**, because the corpus throws them away:
+OpenSubtitles tokenises on the apostrophe, so `don't` arrives as `don` plus a
+separate `'t` and never reaches the list as one word. Both halves survive, so
+the mass can be put back — see `contractions()`. German gets none, its spelling
+dictionary having no apostrophe words at all.
+
+Possessives are deliberately not shipped. The dictionary holds 29,467 of them
+against a few dozen contractions and cannot tell `it's` from `aardvark's`; the
+difference that matters is that `dont` is a typo while `cats` is a word.
 
 Licences are in app/src/main/assets/wordlists/PROVENANCE.md; all of them are
 compatible with this project's GPLv3.
@@ -58,6 +63,31 @@ REPO = Path(__file__).resolve().parent.parent
 OUT_DIR = REPO / "app/src/main/assets/wordlists"
 
 FREQUENCY = "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/{lang}/{lang}_50k.txt"
+
+# The same corpus, untruncated. Only ever read for a handful of tokens — the
+# apostrophe suffixes, which the 50k list drops — but there is no smaller source
+# for them, and reconstructing the contractions is worth one cached download.
+FREQUENCY_FULL = "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/{lang}/{lang}_full.txt"
+
+# Suffixes whose apostrophe form is a *contraction* rather than a possessive.
+#
+# The distinction matters because the spelling dictionary cannot make it: it
+# holds `it's` and `aardvark's` as the same kind of thing, 29,467 of the latter
+# and a few dozen of the former. Shipping every possessive would nearly double
+# the English list for forms the typist can already produce by typing the
+# apostrophe, while a contraction is the case where the apostrophe-less spelling
+# is unambiguously a typo — `dont` is not a word.
+CONTRACTION_SUFFIXES = ("'t", "'ve", "'d", "'ll", "'re", "'m")
+
+# `'s` is both, and only the stem tells them apart. These are the closed word
+# classes — pronouns and interrogatives — where `'s` contracts *is* or *has*
+# rather than marking possession. A list of English pronouns is a linguistic
+# fact rather than a judgement call; the frequencies still come from the corpus.
+CONTRACTION_S_STEMS = frozenset(
+    """he she it that there here this what who where when why how let one
+    everybody everyone everything nobody nothing somebody someone something
+    anybody anyone anything""".split()
+)
 
 LANGUAGES = {
     "de": {
@@ -139,6 +169,94 @@ def canonical(forms: list[str], override: str | None) -> str:
     return min(forms, key=lambda form: (sum(c.isupper() for c in form), form))
 
 
+def wanted_contraction(word: str) -> str | None:
+    """The apostrophe suffix of [word], if it is a contraction worth shipping."""
+    stem, sep, rest = word.partition("'")
+    if not sep:
+        return None
+    suffix = "'" + rest
+    if suffix in CONTRACTION_SUFFIXES:
+        return suffix
+    if suffix == "'s" and stem.lower() in CONTRACTION_S_STEMS:
+        return suffix
+    return None
+
+
+def contractions(
+    words: list[str], counts: dict[str, int], full: dict[str, int], casing: dict[str, str]
+) -> tuple[list[tuple[str, int]], dict[str, int]]:
+    """Reconstruct contraction frequencies the corpus threw away.
+
+    OpenSubtitles tokenises on the apostrophe, so `don't` never appears: the
+    corpus has `don` and a separate `'t`. That is why the shipped list has no
+    contractions at all, and why `don` sits there with 4.16 million occurrences
+    — six tenths of a percent of the corpus, for a verb nobody uses. Almost all
+    of that count is `don't` filed under the wrong key.
+
+    The mass is recoverable because both halves survive. For each apostrophe
+    suffix, its total (`'t`, 9.6 million) is divided among the stems that can
+    take it, in proportion to how often each stem appears:
+
+        count(X'Y) = total(Y) x count(X) / sum of count over stems of Y
+
+    Exact where the stem is not a word on its own — `didn`, `isn`, `wouldn`
+    occur only as contraction stems, so they take their whole count with them.
+    An estimate where the stem is also a word: `can` is both a modal verb and
+    the front of `can't`, and nothing here can separate them. The numbers come
+    out plausible — `I'm` 0.60% of the corpus, `don't` 0.45%, `can't` 0.41% —
+    which is the most that can be said for them.
+
+    The allocation is then **subtracted from the stem**, because it was never
+    the stem's to begin with. That is what drops `don` to something a verb might
+    plausibly score, and it is also where the estimate's error propagates: an
+    over-allocated `can't` leaves `can` correspondingly light.
+
+    Returns the new entries, and the counts to subtract from stems.
+    """
+    # One casing per contraction, by the same rule as everything else: the
+    # dictionary carries both `He's` and `he's`, and shipping both would be two
+    # entries competing for one slot in the strip.
+    forms: dict[str, list[str]] = {}
+    for word in words:
+        if wanted_contraction(word) is not None:
+            forms.setdefault(word.lower(), []).append(word)
+
+    by_suffix: dict[str, list[tuple[str, str]]] = {}
+    for lowered, spellings in forms.items():
+        stem, _, rest = lowered.partition("'")
+        override = casing.get(stem)
+        chosen = canonical(spellings, f"{override}'{rest}" if override else None)
+        by_suffix.setdefault("'" + rest, []).append((chosen, stem))
+
+    # Possessives are dropped from the output but not from the arithmetic: `'s`
+    # attaches to every noun in the language, and dividing its total among the
+    # two dozen pronouns alone would hand each of them a share of the corpus
+    # that belongs to `aardvark's`.
+    pools: dict[str, int] = {}
+    for word in words:
+        stem, sep, rest = word.partition("'")
+        if sep:
+            pools["'" + rest] = pools.get("'" + rest, 0) + counts.get(stem.lower(), 0)
+
+    entries: list[tuple[str, int]] = []
+    owed: dict[str, int] = {}
+    for suffix, items in by_suffix.items():
+        total = full.get(suffix, 0)
+        pool = pools.get(suffix, 0)
+        if not total or not pool:
+            continue
+        for word, stem in items:
+            share = counts.get(stem, 0)
+            if not share:
+                continue
+            count = round(total * share / pool)
+            if count <= 0:
+                continue
+            entries.append((word, count))
+            owed[stem] = owed.get(stem, 0) + count
+    return entries, owed
+
+
 def build(lang: str, cache: Path) -> None:
     spec = LANGUAGES[lang]
     deb = fetch(spec["deb"], cache)
@@ -149,15 +267,35 @@ def build(lang: str, cache: Path) -> None:
     for word in spelling_words(deb, spec["dict_path"], cache):
         by_lower.setdefault(word.lower(), []).append(word)
 
+    counts = dict(frequencies(freq_file))
+
+    # Contractions, reconstructed from the halves the tokeniser left behind, and
+    # the mass each one takes back off its stem. Only worth the extra download
+    # for a language whose dictionary has apostrophe words at all — German's has
+    # none, so `geht's` stays a matter for D27's suggestion-side rule.
+    words = spelling_words(deb, spec["dict_path"], cache)
+    added: list[tuple[str, int]] = []
+    owed: dict[str, int] = {}
+    if any("'" in word for word in words):
+        full = dict(frequencies(fetch(FREQUENCY_FULL.format(lang=lang), cache)))
+        added, owed = contractions(words, counts, full, spec["casing"])
+
     entries: list[tuple[str, str, int]] = []  # folded, word, count
-    for token, count in frequencies(freq_file):
+    for token, count in counts.items():
         folded = fold(token)
         if not ALLOWED.match(folded):
             continue
         forms = by_lower.get(token)
         if not forms:
             continue
+        # What the contractions took is not this word's to keep. Never to zero:
+        # the token did occur, and a word that drops out of the list entirely
+        # stops being suggestible at all.
+        count = max(1, count - owed.get(token, 0))
         entries.append((folded, canonical(forms, spec["casing"].get(token)), count))
+
+    for word, count in added:
+        entries.append((fold(word), word, count))
 
     # Folded order is what the app relies on. Ties — `über` and `uber` would be
     # one, if both were words — go to the more common word first.
@@ -173,6 +311,11 @@ def build(lang: str, cache: Path) -> None:
             "# Frequencies: hermitdave/FrequencyWords 2018 "
             f"{lang}_50k, from OpenSubtitles 2018 (CC BY-SA 4.0)\n"
         )
+        if added:
+            handle.write(
+                f"# {len(added)} contractions reconstructed from {lang}_full "
+                "apostrophe tokens; see build-wordlists.py\n"
+            )
         handle.write("# Built by scripts/build-wordlists.py; see PROVENANCE.md\n")
         handle.write(f"# {len(entries)} entries, {total} corpus occurrences\n")
         handle.write("# Sorted by folded form. One entry per line: word<TAB>count\n")

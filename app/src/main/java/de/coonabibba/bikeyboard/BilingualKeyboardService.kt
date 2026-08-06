@@ -67,6 +67,9 @@ class BilingualKeyboardService : InputMethodService() {
         haptics = Haptics.fromPrefs(this)
         autoCorrectEnabled = KeyboardPrefs.autoCorrect(this)
         autoCorrectConfidence = KeyboardPrefs.autoCorrectConfidence(this)
+        // The dictionaries are read once per service, so the falloff is pushed
+        // into the scorer rather than being a reason to reload them (D34).
+        applyFalloff()
         spaceGesture = SpaceGesture(KeyboardPrefs.timing(this, KeyboardPrefs.DOUBLE_TAP_MS))
         shiftTaps = DoubleTap(KeyboardPrefs.timing(this, KeyboardPrefs.DOUBLE_TAP_MS))
 
@@ -753,7 +756,10 @@ class BilingualKeyboardService : InputMethodService() {
                 personal = personalStore,
             )
             suggestionSource = source
-            mainHandler.post(::refreshSuggestions)
+            mainHandler.post {
+                applyFalloff()
+                refreshSuggestions()
+            }
         }
     }
 
@@ -763,6 +769,17 @@ class BilingualKeyboardService : InputMethodService() {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Hands the current falloff setting to the scorer (D34).
+     *
+     * Called both when the input view is rebuilt and when the dictionaries
+     * finish loading, because either can be the later of the two.
+     */
+    private fun applyFalloff() {
+        (suggestionSource as? DictionarySuggestions)?.confidenceDecay =
+            KeyboardPrefs.confidenceFalloff(this)
+    }
 
     private fun refreshSuggestions() {
         // Before the view guard, because the space bar reads this whether or not

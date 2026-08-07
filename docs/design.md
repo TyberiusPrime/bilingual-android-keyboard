@@ -2000,6 +2000,79 @@ list of words plus a set of tags — two fields cannot be swapped together, and 
 reader landing between the two writes would see a word tagged quick that the
 store does not have.
 
+### D43 — The unknown-word prior stops being a constant
+
+`hsnging` was not corrected to `hanging`, and `hanging` was the **only**
+candidate on the table. It scored 0.045 against a threshold of 0.90.
+
+Nothing was wrong with the correction. What it had to beat was wrong.
+
+D3 makes confidence a share of everything on the table, and that table has
+always included `UNKNOWN_WORD_PRIOR` — a standing 1e-6 for "what was typed is a
+real word nobody has told the keyboard about: a name, a codeword, jargon". It is
+the thing that stops the keyboard rewriting `Coonabibba`. But it was a flat
+constant, and a flat constant says `hsnging` is as plausibly somebody's surname
+as `Coonabibba` is. `hanging`'s score, discounted for a full-price substitution,
+came to 4.7e-8 — twenty times smaller than the standing claim that `hsnging` was
+a word all along. No correction of a rare-ish word can ever clear 90% against
+that, however obvious it is.
+
+So the prior is now multiplied by a **character-trigram model of the two
+languages**, built from the wordlists at startup. `hsn` occurs in no German or
+English word; `oon`, `nab` and `bba` all do. `hsnging` now corrects at 0.99.
+
+Four things about it were decided deliberately.
+
+**Built, not shipped.** The wordlists are already being read and parsed at
+startup; counting trigrams over them is one more pass and costs 5ms on the disk
+thread. An asset would need a format, a provenance note, and a way to stay in
+step with the lists it was derived from.
+
+**It can only ever lower the prior, never raise it.** Plausibility is clamped at
+one, so a word-shaped string keeps exactly the protection the flat constant gave
+it and gains none — every change this model can produce is in the direction of
+correcting something that was previously left alone, and no correction that
+works today can be weakened by it. The reason is that *plausible-looking typos
+are the common kind*: `teh` is word-shaped, because German has `stehen`, and
+rewarding it for that would weaken the single most valuable correction in
+English.
+
+**Seven nats of floor, chosen by measurement.** `NameProtectionTest` scores
+fifty-odd names, place names and pieces of jargon against a set of real slips in
+both languages, and sweeps the floor:
+
+| floor | typos fixed | names lost |
+|-------|-------------|------------|
+| 12    | 17          | 4          |
+| 9     | 17          | 3          |
+| **7** | **16**      | **1**      |
+| 6     | 13          | 1          |
+| 5     | 10          | 1          |
+
+Twelve nats correct `Tyberius` to `Tiberius` and `systemd` to `system`. Seven
+protects both and gives up almost nothing. Under D8 that trade is not close:
+a typo left standing costs a backspace, while a name corrected away can only be
+recovered by adding it to the store by hand.
+
+The one casualty at seven is `Jost` → `Just`, which was already at 0.73 before
+any of this — a four-letter name one slip from a word in the commonest hundred.
+Short names are exposed and no setting here changes that; D40's purple plus
+does.
+
+**It declines to have an opinion on a small corpus.** The table has 19,683
+cells. Learn it from a few dozen words and it describes *those words* rather
+than a language: everything ordinary looks implausible and the prior collapses
+for strings it has no business doubting. Below a thousand words it is flat.
+That was found by a test fixture, and it is the right behaviour in production
+too — if a wordlist asset ever fails to load, the alternative is a keyboard
+rewriting text on the strength of nothing.
+
+**What this is not** is the context model of D10/D12. It knows nothing about the
+previous word; it is a claim about spelling alone, which is precisely why it is
+cheap enough to be exact and safe enough to ship ahead of step 6. The gains left
+on the table — `Wohnzimer`, `Schmeterling`, `Gescichte` all still sit below the
+threshold — are the ones that need to know what sentence they are in.
+
 ---
 
 ## Architecture

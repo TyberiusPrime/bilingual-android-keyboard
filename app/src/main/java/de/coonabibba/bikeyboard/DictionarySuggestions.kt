@@ -37,6 +37,29 @@ class DictionarySuggestions(
     @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
 ) : SuggestionSource {
 
+    /**
+     * The shape of the two languages, for judging whether an unrecognised
+     * string could be a word (D43).
+     *
+     * Built here rather than passed in, because it is a function of the
+     * lexicons and nothing else — anyone holding the one holds the other. Built
+     * eagerly, because this class is constructed on the disk thread right after
+     * the wordlists are parsed, so the one pass it costs lands where every
+     * other startup cost already does, and never on a keystroke.
+     */
+    private val wordShape = WordShape.of(lexicons)
+
+    /**
+     * The chance that [typed] is a real word nobody knows, which is what any
+     * correction has to beat (D43).
+     *
+     * [UNKNOWN_WORD_PRIOR] is the standing figure for an average-looking
+     * string; this discounts it for one that does not look like a word of
+     * either language. Never raises it — see [WordShape.plausibility].
+     */
+    private fun priorFor(typed: CharSequence): Float =
+        UNKNOWN_WORD_PRIOR * wordShape.plausibility(typed)
+
     private class Candidate(
         val word: String,
         val weight: Float,
@@ -119,7 +142,7 @@ class DictionarySuggestions(
         var bestScore = 0f
         // The typed word standing as it is, which is what a correction has to
         // beat rather than merely lead.
-        var mass = UNKNOWN_WORD_PRIOR
+        var mass = priorFor(typed)
 
         forEachNearby(typed, touches) { lexicon, index, cost ->
             val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
@@ -465,7 +488,7 @@ class DictionarySuggestions(
         if (typed.length < 2) return null
 
         var best: Candidate? = null
-        var mass = UNKNOWN_WORD_PRIOR
+        var mass = priorFor(typed)
 
         for (index in typed.indices) {
             if (typed[index].lowercaseChar() != APOSTROPHE_KEY) continue
@@ -519,7 +542,7 @@ class DictionarySuggestions(
         if (typed.length != 1 || !typed[0].isLetter()) return null
 
         var best: Candidate? = null
-        var mass = UNKNOWN_WORD_PRIOR
+        var mass = priorFor(typed)
 
         lexicons.forEach { lexicon ->
             val index = lexicon.indexOf(typed)
@@ -729,6 +752,10 @@ class DictionarySuggestions(
          * threshold does, it does relative to this number, so it is the most
          * load-bearing guess in the file — and under D8, which forbids learning
          * from anything but an explicit add, being wrong about it is expensive.
+         *
+         * The figure for a string that *looks* like a word of either language.
+         * One that does not is discounted from here by [WordShape] (D43) — see
+         * [priorFor], which is what any correction actually has to beat.
          */
         const val UNKNOWN_WORD_PRIOR = 1e-6f
 

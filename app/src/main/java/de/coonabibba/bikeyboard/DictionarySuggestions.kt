@@ -99,11 +99,18 @@ class DictionarySuggestions(
             }
         }
 
+        // A capital in the middle says the typist meant every letter of this
+        // (D44). Candidates are still gathered — the strip may as well be
+        // useful — but nothing here will be replaced.
+        val named = TextEdits.hasInternalCapital(typed)
+
         val cased = addCasedForms(typed, candidates)
         addApostropheS(typed, candidates)
         val apostrophe = addApostropheForms(typed, candidates)
-        val nearby = scanNearby(typed, touches, into = candidates)
-        val correction = listOfNotNull(cased, apostrophe, nearby).maxByOrNull { it.confidence }
+        val nearby = scanNearby(typed, touches, named = named, into = candidates)
+        val correction =
+            if (named) null
+            else listOfNotNull(cased, apostrophe, nearby).maxByOrNull { it.confidence }
 
         // A word the keyboard is about to change is worth offering back, but
         // only when the spelling actually is a word in one of the languages.
@@ -130,11 +137,13 @@ class DictionarySuggestions(
     private fun scanNearby(
         typed: String,
         touches: List<TypedTouch>,
+        named: Boolean,
         into: MutableList<Candidate>,
     ): Correction? {
         // D28's hard gate, and the reason the scan can often be skipped
-        // outright: a word in either dictionary is a word, however rare.
-        val correcting = !knowsExactly(typed)
+        // outright: a word in either dictionary is a word, however rare. D44's
+        // gate is the same shape: a capital in the middle settles it too.
+        val correcting = !named && !knowsExactly(typed)
         val filling = into.size < SuggestionSlots.CAPACITY
         if (!correcting && !filling) return null
 
@@ -682,8 +691,15 @@ class DictionarySuggestions(
      *
      * Only the first letter, and only upwards: a word stored capitalised stays
      * capitalised, because German nouns are not optional.
+     *
+     * **Except when the word is being shouted**, where the wordlist's casing
+     * has no say at all. `I DONT CARE` came back as `I Don't CARE`, because a
+     * rule about the first letter is the wrong rule for a word that is all
+     * capitals — and correcting inside a shout is exactly when a stray
+     * lowercase run is most obvious.
      */
     private fun applyTypedCase(candidate: String, typed: String): String {
+        if (TextEdits.isShouted(typed)) return candidate.uppercase()
         val first = typed.firstOrNull() ?: return candidate
         if (!first.isUpperCase()) return candidate
         return candidate.replaceFirstChar { it.uppercaseChar() }

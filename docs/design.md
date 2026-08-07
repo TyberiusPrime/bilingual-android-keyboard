@@ -2106,6 +2106,41 @@ cheap enough to be exact and safe enough to ship ahead of step 6. The gains left
 on the table — `Wohnzimer`, `Schmeterling`, `Gescichte` all still sit below the
 threshold — are the ones that need to know what sentence they are in.
 
+### D44 — A capital in the middle means a name
+
+Neither of this keyboard's languages puts a capital inside a word. German
+capitalises the first letter of a noun, English the first of a sentence or a
+proper noun; nothing in either puts one in the middle. So anything that does is
+a brand, a product, an identifier or a surname — `iPhone`, `eBay`, `McDonald`,
+`JavaScript`, `GmbH`, `PostgreSQL`, `TyberiusPrime` — and it got there by a
+deliberate shift press in a deliberate place. **It is the strongest evidence the
+keyboard ever gets that the typist knows exactly what they are writing**, and it
+is free: no model, no wordlist, no measurement, just a property of the string.
+
+So it turns auto-correction off outright, in the same way D28's "already a word"
+does. Candidates are still gathered and the strip still fills, because a
+suggestion costs nothing and might be wanted; what stops is replacement.
+
+What it was worth, measured across twenty camel-cased names: **one live bug** —
+`iOS` was being replaced by `is` at 0.91 — and three near misses that a nudge to
+the falloff slider would have let through, `DeepL` → `Deep` at 0.74, `AGit` →
+`Gait`, `macOS` → `Marcos`. Modest, and it costs nothing, because a word with a
+capital in the middle is essentially never in either wordlist and so had nothing
+to gain from correction in the first place.
+
+**A word in capitals throughout is exempt, and that exception carries the
+decision.** Shouting is a styling choice rather than a claim about the word, and
+the naive rule would have caught it: `TEH` → `THE`, `UDN` → `UND`, `ADN` →
+`AND`, `DONT` → `DON'T` and `HELOL` → `HELLO` all correct perfectly well today.
+Five good corrections lost to a rule aimed at `iPhone` would have been a bad
+trade — and acronyms like `USA` and `GPL` are protected by other means already,
+being nowhere near a dictionary word.
+
+Measuring the exception turned up a bug beside it. `I DONT CARE` came back as
+`I Don't CARE`, because `applyTypedCase` only ever restored the *first* letter's
+case — the right rule for `Haus` and the wrong one for a word that is all
+capitals. A correction inside a shout now stays shouted.
+
 ---
 
 ## Architecture

@@ -106,6 +106,47 @@ object TextEdits {
     fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
 
     /**
+     * Whether [word] carries a capital somewhere other than the front, which
+     * makes it a name and not a misspelling (D44).
+     *
+     * Neither of this keyboard's languages puts a capital inside a word.
+     * German capitalises the first letter of a noun and English the first of a
+     * sentence or a proper noun, but nothing in either puts one in the middle —
+     * so anything that does is a brand, a product, an identifier or a surname:
+     * `iPhone`, `eBay`, `McDonald`, `JavaScript`, `GmbH`, `PostgreSQL`. It is a
+     * deliberate keystroke in a deliberate place, and the strongest evidence
+     * the keyboard ever gets that the typist knows exactly what they are
+     * writing.
+     *
+     * **A word in capitals throughout is not this**, and the exception is not
+     * a nicety — shouting is a styling choice rather than a claim about the
+     * word, and `TEH`, `UDN`, `ADN`, `DONT` and `HELOL` are all corrected
+     * perfectly well today. Losing them to a rule aimed at `iPhone` would cost
+     * far more than the rule was worth.
+     */
+    fun hasInternalCapital(word: CharSequence): Boolean {
+        if (word.length < 2) return false
+        var internal = false
+        var lower = false
+        for (index in word.indices) {
+            val char = word[index]
+            if (char.isLowerCase()) lower = true
+            if (index > 0 && char.isUpperCase()) internal = true
+        }
+        return internal && lower
+    }
+
+    /**
+     * Whether [word] is being shouted: at least two characters and not a
+     * lowercase letter among them.
+     *
+     * Digits and apostrophes count as neither, so `DON'T` and `MP3` are as
+     * shouted as `HELLO`.
+     */
+    fun isShouted(word: CharSequence): Boolean =
+        word.length >= 2 && word.any { it.isUpperCase() } && word.none { it.isLowerCase() }
+
+    /**
      * Whether the cursor is at the start of a sentence, and so whether the next
      * letter should be a capital (D42).
      *

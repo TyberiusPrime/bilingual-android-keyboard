@@ -38,7 +38,20 @@ class TypedTouch(val char: Char, val alternatives: Map<Char, Float>) {
  * here. What is here is the geometry, which is enough to tell an adjacent-key
  * slip from a typo, and that is what the auto-correction threshold rests on.
  */
-class KeyGeometry(private val keys: List<Entry>, val keyWidth: Float) {
+class KeyGeometry(
+    private val keys: List<Entry>,
+    val keyWidth: Float,
+    /**
+     * How tall a letter key is. Half again as tall as it is wide on a phone,
+     * which is why it has to be known separately: a swipe's cost is quoted in
+     * key widths, so measuring a vertical miss against a horizontal unit
+     * charges it half as much again as it deserves (D39b).
+     */
+    val keyHeight: Float = keyWidth,
+) {
+
+    /** Scales a vertical distance so that a key is one unit in both directions. */
+    val verticalScale: Float get() = if (keyHeight > 0f) keyWidth / keyHeight else 1f
 
     class Entry(val char: Char, val centreX: Float, val centreY: Float)
 

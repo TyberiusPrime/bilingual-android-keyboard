@@ -299,8 +299,8 @@ class KeyboardView @JvmOverloads constructor(
         }
         // The letter keys are all one width; the space bar and the modifiers are
         // not letters and are not in here.
-        val width = placed.firstOrNull { it.key.action is KeyAction.Text }?.bounds?.width() ?: 0f
-        return KeyGeometry(letters, width)
+        val letterKey = placed.firstOrNull { it.key.action is KeyAction.Text }?.bounds
+        return KeyGeometry(letters, letterKey?.width() ?: 0f, letterKey?.height() ?: 0f)
     }
 
     /**

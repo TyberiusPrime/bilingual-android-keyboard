@@ -1610,6 +1610,46 @@ at all — including on the one coarse-sampling case that sits at 99% rather tha
 100% in the top three, which is therefore the model's doing and not the
 pruning's.
 
+### D39d — A key is a rectangle, and it is taller than it is wide
+
+A second `swiping` stroke came back as `stopping`, and reconstructing it from
+the screenshot pixel by pixel found two mistakes in the *unit*, not in the
+model.
+
+The finger came up off `s`, turned inside the **bottom** of the `w` key, and
+set off right. Every letter of `stopping` sat within 0.35 of a key of the
+stroke; every letter of `swiping` did too, except `w` at **0.71**. That single
+number lost the word.
+
+Neither half of it was the typist's fault:
+
+- **The miss was almost entirely vertical**, and every cost here is quoted in
+  key *widths* while a phone's keys are half again as tall as they are wide. A
+  0.44-key-height error was billed as 0.66. Distances are now measured in key
+  *units* — the vertical scaled by the aspect — so one unit is one key in
+  either direction.
+- **The corner was inside the `w` key.** The keyboard's own hit testing would
+  call that a `w` without hesitating; only the decoder disagreed, because it
+  measured to the centre of a key as though a key were a point. A key's own
+  extent is now free.
+
+Together they reverse the answer: `swiping` cost 0.627 against `stopping`'s
+0.584, and now costs 0.251 against 0.281. The corpus agrees — sloppy traces
+95% to 96%, the rest unmoved — and the pruning bound had to learn the same
+free reach, or it would have started refusing candidates the full cost would
+have accepted, which is the one thing a pruning step may never do. That cost
+about half the speed won by the pruning: 0.8ms to 1.7ms, still a fifth of what
+it was before any of it.
+
+**And `swiping` still is not offered, which is now definitely not geometry.**
+The shape ranks it first; frequency puts it fourth. It occurs 236 times against
+`stopping`'s 14,667, `song`'s 86,877 and `sweeping`'s 2,435 — sixty, three
+hundred and ten times over — and after the square root that is still a factor
+of three to seven, where the cost advantage is worth about one and a half. No
+honest weighting of a corpus that has barely heard the word will put it top.
+The personal key settles it in one hold, and that is the mechanism D8 exists
+for rather than a consolation.
+
 ### D39c — The address bar is a search bar
 
 `TYPE_TEXT_VARIATION_URI` was refused suggestions along with email addresses and

@@ -43,6 +43,7 @@ object SwipeFixtures {
     private fun build(layout: KeyboardLayout): KeyGeometry {
         val entries = mutableListOf<KeyGeometry.Entry>()
         var letterWidth = 0f
+        var letterHeight = 0f
         val perRow = (HEIGHT - GAP * 2) / layout.rows.size
 
         layout.rows.forEachIndexed { rowIndex, row ->
@@ -55,6 +56,7 @@ object SwipeFixtures {
                 val text = (key.action as? KeyAction.Text)?.text
                 if (text != null && text.length == 1) {
                     if (letterWidth == 0f) letterWidth = width
+                    if (letterHeight == 0f) letterHeight = perRow - GAP
                     entries += KeyGeometry.Entry(
                         text[0].lowercaseChar(),
                         x + width / 2f,
@@ -64,7 +66,7 @@ object SwipeFixtures {
                 x += width + GAP
             }
         }
-        return KeyGeometry(entries, letterWidth)
+        return KeyGeometry(entries, letterWidth, letterHeight)
     }
 
     /** Where [char] sits, for building a swipe by hand. */

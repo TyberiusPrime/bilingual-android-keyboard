@@ -123,6 +123,15 @@ class GestureDecoder(private val keys: KeyGeometry) {
         return visit + coverage
     }
 
+    /** The two halves of [cost], for tests and diagnostics. */
+    fun costParts(path: GesturePath, word: CharSequence): Pair<Float, Float> {
+        prepare(path)
+        val letters = letterCentres(word)
+        if (letters < 2) return UNSWIPEABLE to UNSWIPEABLE
+        return sqrt(visitCost(path, letters) / letters) / keys.keyWidth to
+            sqrt(coverageCost(path, letters)) / keys.keyWidth
+    }
+
     /**
      * A floor under what [cost] would say, for a fraction of the work.
      *
@@ -162,7 +171,12 @@ class GestureDecoder(private val keys: KeyGeometry) {
             // A letter off the alphabet has no precomputed distance, so there
             // is no bound to apply and the candidate goes the long way round.
             if (d < 0f) return 0f
-            total += d * d
+            // The same free reach the real term allows, or this stops being a
+            // *lower* bound and starts refusing candidates the full cost would
+            // have accepted — which is the one thing a pruning step may never
+            // do.
+            val gap = d - reach
+            if (gap > 0f) total += gap * gap
         }
         return sqrt(total / letters) / keys.keyWidth
     }
@@ -273,7 +287,19 @@ class GestureDecoder(private val keys: KeyGeometry) {
         return total / cornerTotal
     }
 
-    /** Distance from a point to the line segment between two key centres. */
+    /**
+     * Distance from a point to a line segment, measured in **key units**.
+     *
+     * Vertical distances are scaled by the key's aspect before anything else
+     * happens, so that one unit is one key in either direction. Without it a
+     * miss straight downwards costs half again what the same miss sideways
+     * does, purely because a phone's keys are half again as tall as they are
+     * wide and every cost here is quoted in key *widths*. That is not a
+     * judgement about fingers, it is an accident of the unit.
+     *
+     * The answer comes back in pixels-equivalent-to-horizontal, so callers
+     * divide by [KeyGeometry.keyWidth] exactly as before.
+     */
     private fun distanceToSegment(
         px: Float,
         py: Float,
@@ -282,12 +308,15 @@ class GestureDecoder(private val keys: KeyGeometry) {
         bx: Float,
         by: Float,
     ): Float {
+        val scale = keys.verticalScale
+        val qy = py * scale
+        val cy = ay * scale
+        val dy = by * scale - cy
         val dx = bx - ax
-        val dy = by - ay
         val lengthSquared = dx * dx + dy * dy
-        if (lengthSquared <= 0f) return hypot(px - ax, py - ay)
-        val t = (((px - ax) * dx + (py - ay) * dy) / lengthSquared).coerceIn(0f, 1f)
-        return hypot(px - (ax + t * dx), py - (ay + t * dy))
+        if (lengthSquared <= 0f) return hypot(px - ax, qy - cy)
+        val t = (((px - ax) * dx + (qy - cy) * dy) / lengthSquared).coerceIn(0f, 1f)
+        return hypot(px - (ax + t * dx), qy - (cy + t * dy))
     }
 
     /**
@@ -375,9 +404,23 @@ class GestureDecoder(private val keys: KeyGeometry) {
             polyX[letter], polyY[letter],
             path.xs[j], path.ys[j],
             path.xs[j + 1], path.ys[j + 1],
-        )
+        ) - reach
+        if (d <= 0f) return 0f
         return d * d
     }
+
+    /**
+     * How close to a key's centre counts as having reached it: half a key.
+     *
+     * A key is a rectangle, not a point, and the keyboard's own hit testing
+     * says so — a press anywhere inside `w` is a `w`. Only the decoder
+     * disagreed, and it cost a real stroke its word: a finger that came up off
+     * `s`, turned inside the *bottom* of the `w` key and set off right was
+     * billed 0.71 of a key for `w`, which was enough to lose `swiping` to
+     * `stopping` on a stroke that went nowhere near a `t` corner. Being inside
+     * the key you meant is not a mistake to be charged for.
+     */
+    private val reach: Float get() = keys.keyWidth * KEY_REACH
 
     /**
      * Fills the scratch polyline with [word]'s key centres and says how many
@@ -467,6 +510,9 @@ class GestureDecoder(private val keys: KeyGeometry) {
          * How much more a corner counts than a straight. Measured, not picked.
          */
         const val CORNER_EMPHASIS = 10f
+
+        /** How much of a key's own size is free; see the `reach` property. */
+        const val KEY_REACH = 0.5f
 
         /** Samples either side used to measure a turn, to see past the noise. */
         const val CORNER_WINDOW = 3

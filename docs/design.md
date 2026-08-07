@@ -1551,8 +1551,12 @@ So frequency decides, ten to one, and the loser is second in the strip. Teaching
 the word with the personal key (D40) settles it for good, which is exactly what
 D8 built that key for, and there is a test that says so.
 
-**Corners count for more than straights.** Suggested from the phone while
-chasing the above, and kept although it did not help the above. In the middle of
+**Corners count for more than straights**, and this is what fixed the stroke
+above — a stroke I had twice mis-read, first as being about `sweeping` and then
+as being about frequency. What actually came back was `seeing`, with `song` and
+`strong` beside it, and the objection from the phone was exact: all three ignore
+the corner at `w`, and `strong` additionally wants a back-and-forth over `r` and
+`t` that the finger never made. In the middle of
 a straight run the finger had to be *somewhere*, and where it was says almost
 nothing about which word this is — any candidate running roughly that way
 explains it. A corner is a deliberate change of direction, and fingers change
@@ -1561,10 +1565,22 @@ account for the evidence. Coverage therefore weights each point of the stroke by
 how sharply the finger turned there, measured across a window of a few samples
 so the reading is a corner rather than digitiser noise.
 
-It earned its place on the corpus even though it was powerless on the word that
-prompted it: realistic traces 96% to 97%, sloppy 95% to 96%, frame-rate sampled
-93% to 94%. Which is the useful shape of that result — the idea was right, the
-diagnosis it came from was wrong, and those are separate questions.
+Reconstructed from the screenshot and measured, the weighting does exactly what
+was asked of it. `seeing` climbs from 0.66 to 1.08 as corners come to count for
+more, `strong` from 0.82 to 1.00 and `song` from 0.71 to 0.79, while `swiping`
+does not move from 0.05 — because its corners *are* the stroke's corners. All
+three are now out of the strip entirely, and a test holds them there.
+
+It pays on the corpus too: realistic traces 96% to 97%, sloppy 95% to 96%,
+frame-rate sampled 93% to 94%.
+
+What is left over is a three-way tie no geometry can break. `swiping`,
+`sweeping` and `swooping` are `s w i p i n g`, `s w e p i n g` and
+`s w o p i n g`, and `e`, `i`, `o` and `p` all sit on the top row at the same
+height — so all three trace one identical polyline, to within half a percent.
+Frequency orders them, the strip carries all three, and the personal key (D40)
+settles it permanently. That is `das` and `dass` again in a less obvious
+costume, and it is the right place for the argument to end.
 
 **The cost of all this** was decode time: from about 0.3ms to about 3ms per
 stroke. Once per word rather than once per keystroke, so there was room — but a

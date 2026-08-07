@@ -148,28 +148,57 @@ class DictionarySuggestions(
         if (firsts.isEmpty() || lasts.isEmpty()) return Candidates.NONE
 
         val decoder = GestureDecoder(keys)
-        val candidates = mutableListOf<Candidate>()
+
+        // Sift before scoring. Each survivor of the cheap filters gets a floor
+        // under its cost, and a floor under the cost is a *ceiling* on the
+        // score — which is enough to tell most candidates apart from the winner
+        // without doing either of the expensive terms.
+        val shortlist = mutableListOf<Pending>()
+        var bestPossible = 0f
 
         firsts.forEach { first ->
             val bucket = first.toString()
 
             personal.completions(bucket).forEach { word ->
-                scoreGesture(decoder, path, word, lasts)?.let { cost ->
-                    candidates += Candidate(word, gestureScore(PERSONAL_WEIGHT, cost), null)
+                boundGesture(decoder, path, word, lasts)?.let { bound ->
+                    val pending = Pending(word, PERSONAL_WEIGHT, null, bound)
+                    if (pending.ceiling > bestPossible) bestPossible = pending.ceiling
+                    shortlist += pending
                 }
             }
 
             lexicons.forEach { lexicon ->
                 for (index in lexicon.completions(bucket)) {
                     val word = lexicon.wordAt(index)
-                    val cost = scoreGesture(decoder, path, word, lasts) ?: continue
-                    candidates += Candidate(
-                        word,
-                        gestureScore(lexicon.weightAt(index), cost),
-                        lexicon.language,
-                    )
+                    val bound = boundGesture(decoder, path, word, lasts) ?: continue
+                    val pending = Pending(word, lexicon.weightAt(index), lexicon.language, bound)
+                    if (pending.ceiling > bestPossible) bestPossible = pending.ceiling
+                    shortlist += pending
                 }
             }
+        }
+
+        val candidates = mutableListOf<Candidate>()
+        // What the skipped candidates would have been worth at their most
+        // flattering. Added to the divisor rather than dropped, so the pruning
+        // can only ever *understate* how sure the keyboard is — an optimisation
+        // that quietly inflated confidence would be changing the answer, and
+        // D3 rests on that number meaning something.
+        var skipped = 0f
+        val floor = bestPossible * PRUNE_RATIO
+
+        shortlist.forEach { pending ->
+            if (pending.ceiling < floor) {
+                skipped += pending.ceiling
+                return@forEach
+            }
+            val cost = decoder.cost(path, pending.word)
+            if (cost > GestureDecoder.MAX_COST) return@forEach
+            candidates += Candidate(
+                pending.word,
+                gestureScore(pending.weight, cost),
+                pending.language,
+            )
         }
 
         // No correction: a swipe has no original spelling to be corrected away
@@ -184,18 +213,36 @@ class DictionarySuggestions(
         // too. Left as it is, it would be swamped and every stroke would come
         // back certain.
         val prior = exp(GESTURE_FREQUENCY_POWER * ln(UNKNOWN_WORD_PRIOR))
-        return Candidates(rank("", candidates, prior = prior), correction = null)
+        return Candidates(rank("", candidates, prior = prior + skipped), correction = null)
     }
 
     /**
-     * What tracing [word] would have cost, or null if it is not worth asking.
+     * A candidate that has passed the cheap filters and been given a floor
+     * under its cost, but has not yet been properly scored.
+     *
+     * [ceiling] is the most it could possibly be worth: the real cost can only
+     * be higher than the bound, so the real score can only be lower than this.
+     */
+    private inner class Pending(
+        val word: String,
+        val weight: Float,
+        val language: Language?,
+        bound: Float,
+    ) {
+        val ceiling: Float = gestureScore(weight, bound)
+    }
+
+    /**
+     * The least tracing [word] could have cost, or null if it is not worth
+     * asking at all.
      *
      * Ordered by price. The last letter is one character comparison and throws
      * away about ninety-five percent of the bucket; the journey length is one
-     * pass over the word and throws away most of the rest; only what survives
-     * both gets the full path comparison.
+     * pass over the word and throws away most of the rest; and what survives
+     * both gets a *floor* under its cost rather than the cost itself, which is
+     * a table lookup per letter.
      */
-    private fun scoreGesture(
+    private fun boundGesture(
         decoder: GestureDecoder,
         path: GesturePath,
         word: String,
@@ -209,8 +256,8 @@ class DictionarySuggestions(
         if (ideal < path.length * GestureDecoder.MIN_LENGTH_RATIO) return null
         if (ideal > path.length * GestureDecoder.MAX_LENGTH_RATIO) return null
 
-        val cost = decoder.cost(path, word)
-        return if (cost > GestureDecoder.MAX_COST) null else cost
+        val bound = decoder.bound(path, word)
+        return if (bound > GestureDecoder.MAX_COST) null else bound
     }
 
     /**
@@ -527,6 +574,17 @@ class DictionarySuggestions(
          * root. Measured, not picked — see [gestureScore].
          */
         const val GESTURE_FREQUENCY_POWER = 0.5f
+
+        /**
+         * How far below the best possible candidate a word may be and still be
+         * worth scoring properly.
+         *
+         * Ten thousand to one. The pruned ones are not discarded silently —
+         * their most flattering possible score goes into the confidence
+         * divisor — so the effect of being wrong here is that the keyboard
+         * sounds very slightly less sure than it might, never more.
+         */
+        const val PRUNE_RATIO = 1e-4f
 
         /** A ceiling on the scan, however ambiguous the first touch was. */
         const val MAX_SEARCH_PREFIXES = 4

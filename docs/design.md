@@ -1547,9 +1547,33 @@ class as `das` and `dass`. Frequency breaks the tie, ten to one, and the runner
 up is one tap away. Teaching the word with the personal key (D40) settles it
 permanently, which is exactly what D8 built that key for.
 
-**The cost of all this** is decode time, from about 0.3ms to about 3ms per
-stroke. Once per word rather than once per keystroke, so there is room, but it
-is ten times what it was and wants watching on the actual phone.
+**The cost of all this** was decode time: from about 0.3ms to about 3ms per
+stroke. Once per word rather than once per keystroke, so there was room — but a
+phone runs on a battery, and several hundred candidates each getting two
+dynamic programmes is a poor way to discover that most of them start with the
+wrong letters.
+
+So the search sifts before it scores. **There are only twenty-six places a
+letter can be**, so the distance from every key to the stroke is worked out once
+and read off by every candidate. Ignoring the order the letters must come in can
+only make the answer smaller, and coverage is never negative, so that gives a
+genuine *floor* under a candidate's cost for the price of a table lookup per
+letter — and a floor under the cost is a **ceiling on the score**. A candidate
+whose best conceivable score is ten thousand times below the best conceivable
+score going is not scored properly at all.
+
+That took 3ms to 0.8ms with no measured accuracy change whatever. It is not
+quite free of consequence, so the consequence is arranged to fall the right way:
+the skipped candidates' most flattering possible scores go into the confidence
+*divisor* rather than being dropped, which means the pruning can only ever make
+the keyboard sound less sure than it is, never more. An optimisation that
+quietly inflated confidence would be changing the answer, and D3 rests on that
+number meaning something.
+
+Loosening the threshold tenfold was tried and doubles the time for no accuracy
+at all — including on the one coarse-sampling case that sits at 99% rather than
+100% in the top three, which is therefore the model's doing and not the
+pruning's.
 
 ### D40 — The personal key
 

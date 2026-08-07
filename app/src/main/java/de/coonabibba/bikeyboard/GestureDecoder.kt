@@ -26,9 +26,16 @@ class GestureDecoder(private val keys: KeyGeometry) {
     private var polyX = FloatArray(INITIAL_POLYLINE)
     private var polyY = FloatArray(INITIAL_POLYLINE)
 
+    /** Per-letter distance to the stroke, read off [keyDistance] (-1: unknown). */
+    private var polyD = FloatArray(INITIAL_POLYLINE)
+
     /** Two rows of the alignment table, swapped rather than reallocated. */
     private val costRow = FloatArray(GesturePath.SAMPLES)
     private val nextRow = FloatArray(GesturePath.SAMPLES)
+
+    /** Distance from each letter key to the stroke being decoded, worked out once. */
+    private val keyDistance = FloatArray(26)
+    private var prepared: GesturePath? = null
 
     /**
      * How far the finger would travel to swipe [word], in pixels, or
@@ -84,13 +91,93 @@ class GestureDecoder(private val keys: KeyGeometry) {
      * the auto-replace threshold read (D33, D37).
      */
     fun cost(path: GesturePath, word: CharSequence): Float {
+        if (keys.keyWidth <= 0f) return UNSWIPEABLE
+        // Before the letters are gathered, not after: they read their distances
+        // straight out of the table this fills.
+        prepare(path)
+
         val letters = letterCentres(word)
         if (letters < 2 || letters > GesturePath.SAMPLES) return UNSWIPEABLE
-        if (keys.keyWidth <= 0f) return UNSWIPEABLE
+
+        // Cheap first, and exactly cheap enough: a candidate whose letters were
+        // never approached is refused before either of the real terms runs.
+        if (lowerBound(letters) > MAX_COST) return UNSWIPEABLE
 
         val visit = sqrt(visitCost(path, letters) / letters) / keys.keyWidth
         val coverage = sqrt(coverageCost(path, letters)) / keys.keyWidth
         return visit + coverage
+    }
+
+    /**
+     * A floor under what [cost] would say, for a fraction of the work.
+     *
+     * The search uses this to decide which candidates are worth scoring
+     * properly — see `DictionarySuggestions.PRUNE_RATIO`.
+     */
+    fun bound(path: GesturePath, word: CharSequence): Float {
+        if (keys.keyWidth <= 0f) return UNSWIPEABLE
+        prepare(path)
+        val letters = letterCentres(word)
+        if (letters < 2 || letters > GesturePath.SAMPLES) return UNSWIPEABLE
+        return lowerBound(letters)
+    }
+
+    /**
+     * A floor under [cost] that costs almost nothing to work out.
+     *
+     * There are only twenty-six places a letter can be, so the distance from
+     * each key to the stroke is worked out **once per swipe** and then read off
+     * by every one of the several hundred candidates. Ignoring the order the
+     * letters have to come in can only make the answer smaller, and coverage is
+     * never negative, so this is a genuine lower bound on the full cost — a
+     * candidate it refuses would have been refused anyway. Nothing is decided
+     * differently; the arithmetic simply does not happen.
+     *
+     * Worth doing because the alternative is not free. A stroke is decoded once
+     * per word rather than once per keystroke, which bought room for the two
+     * terms that made swiping work — and then spent it: the pair cost about ten
+     * times what the first attempt did. A phone runs on a battery, and several
+     * hundred candidates each getting two dynamic programmes is a poor way to
+     * discover that most of them start with the wrong letters.
+     */
+    private fun lowerBound(letters: Int): Float {
+        var total = 0f
+        for (i in 0 until letters) {
+            val d = polyD[i]
+            // A letter off the alphabet has no precomputed distance, so there
+            // is no bound to apply and the candidate goes the long way round.
+            if (d < 0f) return 0f
+            total += d * d
+        }
+        return sqrt(total / letters) / keys.keyWidth
+    }
+
+    /**
+     * Measures every key against this stroke, once.
+     *
+     * Twenty-six keys against forty-seven segments is about the work of three
+     * candidates, and it is spent instead of the work of hundreds.
+     */
+    private fun prepare(path: GesturePath) {
+        if (prepared === path) return
+        prepared = path
+        for (index in keyDistance.indices) {
+            val entry = keys.centreOf('a' + index)
+            keyDistance[index] = if (entry == null) {
+                Float.MAX_VALUE
+            } else {
+                nearestOnPath(path, entry.centreX, entry.centreY)
+            }
+        }
+    }
+
+    private fun nearestOnPath(path: GesturePath, x: Float, y: Float): Float {
+        var best = Float.MAX_VALUE
+        for (j in 0 until path.xs.size - 1) {
+            val d = distanceToSegment(x, y, path.xs[j], path.ys[j], path.xs[j + 1], path.ys[j + 1])
+            if (d < best) best = d
+        }
+        return best
     }
 
     /**
@@ -253,6 +340,7 @@ class GestureDecoder(private val keys: KeyGeometry) {
         if (polyX.size < word.length) {
             polyX = FloatArray(word.length)
             polyY = FloatArray(word.length)
+            polyD = FloatArray(word.length)
         }
         var count = 0
         for (index in word.indices) {
@@ -262,6 +350,9 @@ class GestureDecoder(private val keys: KeyGeometry) {
             }
             polyX[count] = entry.centreX
             polyY[count] = entry.centreY
+            // Carried alongside so the cheap bound needs no geometry at all.
+            val letter = Folding.foldChar(word[index]) - 'a'
+            polyD[count] = if (letter in keyDistance.indices) keyDistance[letter] else -1f
             count++
         }
         return count

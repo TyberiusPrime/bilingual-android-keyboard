@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D40 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D41 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -1766,6 +1766,60 @@ go below, so **geometry is close to spent**. Getting past it needs context —
 knowing that the word before was `ich` makes `das`/`dass` a decidable question
 rather than a coin toss weighted by frequency. That is D10 and D12, and this
 measurement is the argument for them.
+
+### D41 — `i` is `I`, and `ivll` is `I'll`
+
+Measured first, because the size of it decided the shape. `I` alone is
+**20.7 million occurrences — the second commonest word in English**, after
+`the`. With `I'm`, `I'll`, `I've` and `I'd` the I-forms are **4.01% of English
+typing**.
+
+And the keyboard offered nothing for any of them. Two separate reasons, neither
+deliberate:
+
+- **A single letter never reached the strip.** [MIN_PREFIX] wants two before it
+  will guess, which is right for *completing* — one letter is not evidence of
+  anything and its candidates are most of the alphabet's worth of words — but
+  it also turned away the case question, which needs no completion at all.
+- **And it was never corrected**, because `Lexicon.knowsExactly` ignores case on
+  purpose (D5's reasoning: the typist decides case, `über` versus `uber` is the
+  question it exists to answer) and so judged `i` perfectly well spelled.
+
+**This is not a rule about capitals but about which casing the dictionaries
+prefer**, which is the only honest way to ask it on a bilingual keyboard:
+English has `I` and no lowercase form, German has a lowercase `i` (19,718) and
+no capital. Their corpus shares settle it at better than two hundred to one, so
+`i` corrects to `I` at 0.996 — **and the German `i` stays in the strip**, because
+a keyboard choosing between two real words should show its working. Only single
+letters: the same reasoning would capitalise every German noun on sight, `haus`
+to `Haus`, which may well be right and is emphatically a separate decision.
+
+**The apostrophe rule got much wider and much simpler.** It knew one pattern —
+a word ending `vs` — and had to *build* the answer, because the corpus the
+frequencies came from split `don't` into `don` and `t` before counting and the
+wordlists carried no contractions. They carry seventy-four now, so the rule
+collapses to: put an apostrophe where the `v` is and see whether that is a word.
+Every position, not just the last, which is what reaches `ivll` and `ivm`. It
+brings `donvt`, `youvre`, `wevre`, `ivve` and `ivd` with it, all above 0.99.
+
+**The old rule stays beside it**, and deleting it was a mistake caught by its
+own tests. The lookup only knows the fixed contractions; `'s` is **productive** —
+every English noun takes a possessive and every German verb takes the clipped
+`es`, so `have's` and `geht's` are real and no wordlist will ever list them all.
+One rule for the closed class, one for the open one.
+
+Rejected on the way, and worth recording because both were reasonable:
+
+- **Swipe up on a letter to capitalise it** only works on the top row. Below it,
+  an upward swipe is already the start of a swiped word — `de`, `free`, `great`
+  all begin by going up — and a rule that works on `i` but turns `s` into `se`
+  is worse than no rule.
+- **Tap, press again, swipe up**, the general version, is conflict-free but two
+  touches with a timing constraint, where shift-then-letter is two touches
+  without one. It is not faster than what already exists.
+
+Doing it automatically costs no gesture, no discovery, and nothing to perform
+four percent of the time.
 
 ### D40 — The personal key
 

@@ -47,32 +47,48 @@ class DictionarySuggestions(
 
     override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates {
         val prefix = Folding.fold(word)
-        if (prefix.length < MIN_PREFIX) return Candidates.NONE
+        if (prefix.isEmpty()) return Candidates.NONE
 
         val typed = word.toString()
         val candidates = mutableListOf<Candidate>()
 
-        // The user's own words first, and they mostly win: PERSONAL_WEIGHT puts
-        // them above everything except the few hundred commonest words of
-        // either language. They are here because someone asked for them.
-        personal.completions(prefix).forEach {
-            candidates += Candidate(it, PERSONAL_WEIGHT, language = null)
-        }
+        // **Completing** still wants two letters: one is not evidence of
+        // anything, and the candidates for it are most of the alphabet's worth
+        // of words. But a single letter is no longer turned away at the door,
+        // because it can still be the *wrong case* of a word — and `I` is the
+        // second commonest word in English (D41).
+        if (prefix.length >= MIN_PREFIX) {
+            // The user's own words first, and they mostly win: PERSONAL_WEIGHT
+            // puts them above everything except the few hundred commonest words
+            // of either language. They are here because someone asked for them.
+            personal.completions(prefix).forEach {
+                candidates += Candidate(it, PERSONAL_WEIGHT, language = null)
+            }
 
-        lexicons.forEach { lexicon ->
-            for (index in lexicon.completions(prefix)) {
-                candidates += Candidate(
-                    lexicon.wordAt(index),
-                    lexicon.weightAt(index),
-                    lexicon.language,
-                )
+            lexicons.forEach { lexicon ->
+                for (index in lexicon.completions(prefix)) {
+                    candidates += Candidate(
+                        lexicon.wordAt(index),
+                        lexicon.weightAt(index),
+                        lexicon.language,
+                    )
+                }
             }
         }
 
+        val cased = addCasedForms(typed, candidates)
         addApostropheS(typed, candidates)
+        val apostrophe = addApostropheForms(typed, candidates)
+        val nearby = scanNearby(typed, touches, into = candidates)
+        val correction = listOfNotNull(cased, apostrophe, nearby).maxByOrNull { it.confidence }
 
-        val correction = scanNearby(typed, touches, into = candidates)
-        return Candidates(rank(typed, candidates), correction)
+        // A word the keyboard is about to change is worth offering back, but
+        // only when the spelling actually is a word in one of the languages.
+        // `i` is: German has it and English has `I`, and which one was meant is
+        // the typist's business. `teh` is not, and a slot spent offering it
+        // back would be a slot wasted.
+        val keepTyped = correction != null && candidates.any { it.word == typed }
+        return Candidates(rank(typed, candidates, keepTyped = keepTyped), correction)
     }
 
     /**
@@ -368,6 +384,7 @@ class DictionarySuggestions(
         typed: String,
         candidates: List<Candidate>,
         prior: Float = 0f,
+        keepTyped: Boolean = false,
     ): List<Suggestion> {
         if (candidates.isEmpty()) return emptyList()
 
@@ -382,26 +399,28 @@ class DictionarySuggestions(
             .sortedByDescending { it.weight }
             .asSequence()
             .map { Suggestion(applyTypedCase(it.word, typed), it.weight / mass, it.language) }
-            // Offering back exactly what is already there wastes a slot.
-            .filter { it.text != typed }
+            // Offering back exactly what is already there wastes a slot —
+            // unless it is about to be replaced, in which case it is the way to
+            // say no.
+            .filter { keepTyped || it.text != typed }
             .distinctBy { it.text }
             .take(SuggestionSlots.CAPACITY)
             .toList()
     }
 
     /**
-     * `letvs` means `let's`, and so does `gehtvs` mean `geht's` (D27).
+     * `gehtvs` means `geht's`, for any stem at all (D27).
      *
-     * The apostrophe is the long-press alternate on `v` (D17), so the way to
-     * miss it is to tap the key instead of holding it — and the letters that
-     * follow are almost always `s`. A word ending in `vs` is otherwise close to
-     * nonexistent, which is what makes the rule safe enough to apply blindly.
+     * Kept alongside [addApostropheForms], which looks contractions up, because
+     * this one is **productive** and a lookup cannot be. Every English noun
+     * takes a possessive `'s` and every German verb takes the clipped `es`, so
+     * `have's` and `geht's` are real and no wordlist will ever list them all.
+     * The seventy-four contractions that did ship are the fixed ones — `don't`,
+     * `I'll` — and this is the open class beside them.
      *
-     * It has to *build* the candidate rather than look it up: the wordlists
-     * carry no contractions at all, because the corpus their frequencies come
-     * from split `don't` into `don` and `t` before counting (see
-     * PROVENANCE.md). So the stem is looked up, and the apostrophe is added to
-     * the spelling the dictionary has.
+     * So the stem is looked up and the apostrophe added to the spelling the
+     * dictionary has. A word ending in `vs` is otherwise close to nonexistent,
+     * which is what makes that safe to do blindly.
      */
     private fun addApostropheS(typed: String, into: MutableList<Candidate>) {
         if (typed.length < STEM_MIN + 2) return
@@ -423,6 +442,99 @@ class DictionarySuggestions(
                 lexicon.language,
             )
         }
+    }
+
+    /**
+     * `letvs` means `let's`, `ivll` means `I'll`, `donvt` means `don't` (D27,
+     * D41).
+     *
+     * The apostrophe is the long-press alternate on `v` (D17), so the way to
+     * miss it is to tap the key instead of holding it. The first version of
+     * this knew one pattern — a word ending `vs` — and had to *build* the
+     * answer, because the corpus the frequencies came from split `don't` into
+     * `don` and `t` before counting and the wordlists carried no contractions
+     * at all. They do now, seventy-four of them, so the rule collapses into
+     * something both simpler and far wider: put an apostrophe where the `v` is
+     * and see whether that is a word.
+     *
+     * Every `v` is tried, not just the last, which is what reaches `ivll` and
+     * `ivm` — the ones worth having, since I-forms are four percent of English
+     * typing.
+     */
+    private fun addApostropheForms(typed: String, into: MutableList<Candidate>): Correction? {
+        if (typed.length < 2) return null
+
+        var best: Candidate? = null
+        var mass = UNKNOWN_WORD_PRIOR
+
+        for (index in typed.indices) {
+            if (typed[index].lowercaseChar() != APOSTROPHE_KEY) continue
+            val swapped = typed.substring(0, index) + '\'' + typed.substring(index + 1)
+
+            personal.completions(Folding.fold(swapped))
+                .firstOrNull { Folding.fold(it) == Folding.fold(swapped) }
+                ?.let { into += Candidate(it, PERSONAL_WEIGHT, language = null) }
+
+            lexicons.forEach { lexicon ->
+                val found = lexicon.indexOf(swapped)
+                if (found < 0) return@forEach
+                val word = lexicon.wordAt(found)
+                // A known slip with a known shape, so it is discounted far less
+                // than an arbitrary substitution would be.
+                val score = lexicon.weightAt(found) * exp(-confidenceDecay * APOSTROPHE_SLIP)
+                mass += score
+                into += Candidate(word, score, lexicon.language)
+                if (score > (best?.weight ?: 0f)) {
+                    best = Candidate(applyTypedCase(word, typed), score, lexicon.language)
+                }
+            }
+        }
+
+        val winner = best ?: return null
+        return Correction(winner.word, typed, winner.weight / mass, winner.language)
+    }
+
+    /**
+     * `i` is `I`, and which `i` is a question only a bilingual keyboard has to
+     * ask (D41).
+     *
+     * A single letter never reached the strip at all — [MIN_PREFIX] wants two
+     * before it will guess — and it was never corrected either, because
+     * [Lexicon.knowsExactly] ignores case on purpose and so judged `i`
+     * perfectly well spelled. Between them that left the second commonest word
+     * in English with no help of any kind.
+     *
+     * Not a rule about capitals but about *which casing the dictionaries
+     * prefer*, which is the honest question here: English has `I` and no
+     * lowercase form, German has a lowercase `i` and no capital, and their
+     * corpus shares settle it at better than two hundred to one. The loser goes
+     * in the strip, because a keyboard that decides between two real words
+     * should show its working.
+     *
+     * Deliberately only for single letters. The same reasoning would capitalise
+     * every German noun on sight — `haus` to `Haus` — which may well be right
+     * and is emphatically a separate decision.
+     */
+    private fun addCasedForms(typed: String, into: MutableList<Candidate>): Correction? {
+        if (typed.length != 1 || !typed[0].isLetter()) return null
+
+        var best: Candidate? = null
+        var mass = UNKNOWN_WORD_PRIOR
+
+        lexicons.forEach { lexicon ->
+            val index = lexicon.indexOf(typed)
+            if (index < 0) return@forEach
+            val word = lexicon.wordAt(index)
+            val score = lexicon.weightAt(index)
+            mass += score
+            into += Candidate(word, score, lexicon.language)
+            if (word != typed && score > (best?.weight ?: 0f)) {
+                best = Candidate(word, score, lexicon.language)
+            }
+        }
+
+        val winner = best ?: return null
+        return Correction(winner.word, typed, winner.weight / mass, winner.language)
     }
 
     /**
@@ -570,6 +682,18 @@ class DictionarySuggestions(
 
         /** A one-letter stem in front of an apostrophe is a typo, not a word. */
         const val STEM_MIN = 2
+
+        /** The key the apostrophe hides behind, as a long-press (D17). */
+        const val APOSTROPHE_KEY = 'v'
+
+        /**
+         * What tapping `v` where an apostrophe was meant is judged to cost.
+         *
+         * Small, because this is not a thumb landing somewhere random — it is
+         * one specific slip with one specific cause, and a word that comes back
+         * from it is almost certainly the word that was wanted.
+         */
+        const val APOSTROPHE_SLIP = 0.2f
 
         /**
          * Shorter than this and the keyboard has no business looking: half the

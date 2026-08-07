@@ -37,7 +37,13 @@ class DictionarySuggestions(
     @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
 ) : SuggestionSource {
 
-    private class Candidate(val word: String, val weight: Float, val language: Language?)
+    private class Candidate(
+        val word: String,
+        val weight: Float,
+        val language: Language?,
+        /** How badly the stroke fitted, for a swipe. Meaningless for a tap. */
+        val cost: Float = 0f,
+    )
 
     override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates {
         val prefix = Folding.fold(word)
@@ -198,6 +204,7 @@ class DictionarySuggestions(
                 pending.word,
                 gestureScore(pending.weight, cost),
                 pending.language,
+                cost,
             )
         }
 
@@ -213,7 +220,52 @@ class DictionarySuggestions(
         // too. Left as it is, it would be swamped and every stroke would come
         // back certain.
         val prior = exp(GESTURE_FREQUENCY_POWER * ln(UNKNOWN_WORD_PRIOR))
-        return Candidates(rank("", candidates, prior = prior + skipped), correction = null)
+        return Candidates(rankGesture(candidates, prior + skipped), correction = null)
+    }
+
+    /**
+     * Orders what a stroke could have been: the best guess first, and then the
+     * appeal against it.
+     *
+     * **The two halves are ordered by different questions, and that is the
+     * point.** What gets committed is the best guess overall, so it weighs how
+     * well the shape fits against how common the word is, and frequency
+     * deserves its say there. But the strip is only ever read when that guess
+     * was *wrong* — so ranking the rest by frequency again asks the question
+     * that has just failed, and answers it the same way.
+     *
+     * Observed, on a stroke that spelled `swiping`: the four best fits were
+     * `swiping`, `sweeping`, `swooping` and `stopping`, between 0.25 and 0.28.
+     * The strip offered `song` and `strong`, at 0.51 and 0.56 — twice the
+     * misfit — because they are some three hundred times commoner. The word the
+     * finger had actually drawn was nowhere, beaten by two that plainly did not
+     * match the picture on the screen.
+     *
+     * So the runners-up are ordered by **how well they fit**, ties going to the
+     * commoner word. If the frequency table has already had its turn and lost,
+     * what is left to consult is the finger.
+     *
+     * One more than the strip holds, because the first of these is committed
+     * rather than offered (D39) — asking for three left the last slot empty.
+     */
+    private fun rankGesture(candidates: List<Candidate>, prior: Float): List<Suggestion> {
+        if (candidates.isEmpty()) return emptyList()
+        var mass = prior
+        candidates.forEach { mass += it.weight }
+        if (mass <= 0f) return emptyList()
+
+        val byScore = candidates.sortedByDescending { it.weight }
+        val ordered = listOf(byScore.first()) +
+            byScore.drop(1).sortedWith(compareBy({ it.cost }, { -it.weight }))
+
+        return ordered.asSequence()
+            .map { Suggestion(it.word, it.weight / mass, it.language) }
+            // A finger cannot express capitals, so `song` and `Song` are one
+            // answer to a swipe and spending two slots on them wastes one.
+            // D24's re-case gesture is how the other casing is reached.
+            .distinctBy { it.text.lowercase() }
+            .take(SuggestionSlots.CAPACITY + 1)
+            .toList()
     }
 
     /**

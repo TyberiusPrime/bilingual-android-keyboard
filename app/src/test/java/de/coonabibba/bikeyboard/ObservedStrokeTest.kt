@@ -113,11 +113,47 @@ class ObservedStrokeTest {
         assertTrue("swiping still pays $visit for a corner inside w", visit < 0.05f)
     }
 
+    /**
+     * The strip is the appeal against the commit, so it is ordered by fit.
+     *
+     * `song` and `strong` fit this stroke at 0.51 and 0.56 against the best
+     * candidates' 0.25 — twice the misfit — and were being offered anyway,
+     * because they are some three hundred times commoner. Ranking the
+     * runners-up by frequency asks the question that has just failed and
+     * answers it the same way; ranking them by shape asks the finger.
+     */
+    @Test
+    fun `words that plainly do not match the picture are not offered`() {
+        val got = source.candidatesForGesture(observed(), SwipeFixtures.geometry)
+            .suggestions.map { it.text }
+        listOf("song", "strong", "seeing").forEach {
+            assertTrue("$it is still offered: $got", it !in got)
+        }
+    }
+
+    /** Three alternates, not two: the committed word is not one of them (D39). */
+    @Test
+    fun `the strip is filled`() {
+        val got = source.candidatesForGesture(observed(), SwipeFixtures.geometry).suggestions
+        assertTrue(
+            "only ${got.size} candidates, so the last slot stays empty",
+            got.size >= SuggestionSlots.CAPACITY + 1,
+        )
+        // And no word twice in two casings.
+        val folded = got.map { it.text.lowercase() }
+        assertTrue("a casing is repeated: ${got.map { it.text }}", folded.size == folded.distinct().size)
+    }
+
     @Test
     fun analyse() {
         val path = observed()
         val got = source.candidatesForGesture(path, SwipeFixtures.geometry).suggestions
         println("offered -> " + got.joinToString { "${it.text} %.3f".format(it.confidence) })
+        // Where everything sits by shape alone, which is the other order the
+        // strip could be in.
+        val byCost = listOf("swiping", "sweeping", "swooping", "stopping", "song", "strong", "seeing", "sting")
+            .map { it to decoder.cost(path, it) }.sortedBy { it.second }
+        println("by cost -> " + byCost.joinToString { "${it.first} %.3f".format(it.second) })
         listOf("swiping", "stopping", "song", "sweeping", "swooping", "seeing").forEach {
             val (visit, coverage) = decoder.costParts(path, it)
             println("   %-9s cost=%.3f  visit=%.3f coverage=%.3f".format(

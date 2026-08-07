@@ -1650,6 +1650,46 @@ honest weighting of a corpus that has barely heard the word will put it top.
 The personal key settles it in one hold, and that is the mechanism D8 exists
 for rather than a consolation.
 
+### D39e — The strip is the appeal, so order it by the finger
+
+Two bugs in one screenshot, both about what the strip is *for*.
+
+**The last slot was always empty.** A swipe commits its best candidate and
+offers the rest (D39), and the ranking returned exactly three — so after the
+commit took one there were two left and the third slot stood blank. The fourth
+candidate was never worked out at all. It asks for one more than the strip
+holds now.
+
+**And two of the three slots were the same word**, `song` and `Song`. A finger
+cannot express a capital, so those are one answer to a stroke; the runners-up
+are folded case-insensitively, and D24's re-case gesture is how the other
+casing is reached. Tapping keeps them distinct, because there the letters typed
+already say something about the case.
+
+**The third thing was not a bug so much as a wrong question.** The strip was
+ordered the same way the commit is — shape weighed against frequency. But the
+strip is only ever read *when the commit was wrong*, so ranking the rest by
+frequency again asks the question that has just failed and answers it the same
+way. On the observed stroke the four best fits were `swiping`, `sweeping`,
+`swooping` and `stopping`, between 0.25 and 0.28, while the strip offered
+`song` and `strong` at 0.51 and 0.56 — twice the misfit, on the strength of
+being three hundred times commoner. Two of the three slots went to words that
+plainly did not match the picture on the screen.
+
+So the commit still weighs both, because for a first guess frequency deserves
+its say. The runners-up are ordered by **how well they fit**, ties to the
+commoner word. If the frequency table has had its turn and lost, what is left
+to consult is the finger. Corpus top-3 stays at 100% and frame-rate sampling
+improves two points.
+
+**`swiping` is still not in the strip, and the reason has stopped being
+interesting.** It ties `sweeping` and `swooping` exactly — all three trace one
+polyline — and loses the tie-break by twelve occurrences in six hundred and
+seventy-five million; `seeping`, one letter shorter, edges it on a
+root-mean-square over fewer letters. It is a photo finish between words that
+are the same stroke, and no principle decides it. The personal key does, in one
+hold.
+
 ### D39c — The address bar is a search bar
 
 `TYPE_TEXT_VARIATION_URI` was refused suggestions along with email addresses and

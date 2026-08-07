@@ -59,10 +59,28 @@ object FieldPolicy {
      * - **passwords and `NO_SUGGESTIONS`**, which the API notes list as an
      *   obligation rather than a courtesy: no prediction, no learning, no
      *   logging;
-     * - **email addresses, URIs and filter/search-within-a-list fields**, whose
+     * - **email addresses and filter/search-within-a-list fields**, whose
      *   contents are not prose and where word-level correction is noise;
      * - **anything that is not a text field**. Numbers, phone numbers and dates
      *   have no words to correct.
+     *
+     * **A URI field is not on that list, though it was.** On a phone the
+     * address bar is the search bar — Firefox has one box for both — so
+     * refusing to help there withholds suggestions from a good deal of ordinary
+     * prose in order to avoid interfering with the occasional hand-typed URL.
+     * That is the wrong way round: people type far more searches into that box
+     * than addresses, and the ones who type an address usually paste it.
+     *
+     * The obvious worry is auto-correction mangling a URL, and it turns out to
+     * be self-limiting. A correction only ever fires on **space** (D28), and a
+     * space in the address bar is precisely the signal that this is a search
+     * and not an address — nobody types a space inside a hostname. So the
+     * destructive half only reaches the text in the case where it is wanted,
+     * without anything having to detect which mode the box is in.
+     *
+     * Swiping follows suggestions (D39), so it comes back here too, which is
+     * the larger part of the benefit: searches are exactly the sort of throwaway
+     * prose a swipe is for.
      *
      * Not consulted here: `IME_FLAG_NO_PERSONALIZED_LEARNING`, which lives in
      * `imeOptions` and bars *learning* from the field rather than suggesting
@@ -77,7 +95,6 @@ object FieldPolicy {
             InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
             InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
-            InputType.TYPE_TEXT_VARIATION_URI,
             InputType.TYPE_TEXT_VARIATION_FILTER,
             -> false
 

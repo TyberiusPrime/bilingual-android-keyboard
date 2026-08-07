@@ -44,9 +44,29 @@ class FieldPolicyTest {
         listOf(
             InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
-            InputType.TYPE_TEXT_VARIATION_URI,
             InputType.TYPE_TEXT_VARIATION_FILTER,
         ).forEach { assertFalse(FieldPolicy.suggestionsAllowed(text(it))) }
+    }
+
+    /**
+     * But a URI field is, most of the time. On a phone the address bar *is* the
+     * search bar, so refusing to help there withholds suggestions from a great
+     * deal of ordinary prose to avoid interfering with the occasional
+     * hand-typed URL — and people paste those.
+     *
+     * The hazard of mangling an address turns out to be self-limiting: a
+     * correction only fires on space (D28), and a space in the address bar is
+     * exactly the signal that this is a search rather than a hostname.
+     */
+    @Test
+    fun `the address bar is a search bar and gets suggestions`() {
+        assertTrue(FieldPolicy.suggestionsAllowed(text(InputType.TYPE_TEXT_VARIATION_URI)))
+        // A browser that genuinely wants no help can still say so.
+        assertFalse(
+            FieldPolicy.suggestionsAllowed(
+                text(InputType.TYPE_TEXT_VARIATION_URI) or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            ),
+        )
     }
 
     @Test
@@ -110,7 +130,6 @@ class FieldPolicyTest {
         listOf(
             InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
-            InputType.TYPE_TEXT_VARIATION_URI,
             InputType.TYPE_TEXT_VARIATION_FILTER,
         ).forEach { variation ->
             assertFalse("suggestions in $variation", FieldPolicy.suggestionsAllowed(text(variation)))

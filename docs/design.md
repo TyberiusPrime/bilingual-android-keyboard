@@ -1610,6 +1610,32 @@ at all — including on the one coarse-sampling case that sits at 99% rather tha
 100% in the top three, which is therefore the model's doing and not the
 pruning's.
 
+### D39c — The address bar is a search bar
+
+`TYPE_TEXT_VARIATION_URI` was refused suggestions along with email addresses and
+search filters, on the grounds that its contents are not prose. On a desktop
+that is true. On a phone it is not: the address bar and the search bar are one
+box, and Firefox's is the one people type most of their questions into.
+Refusing to help there withholds suggestions from a great deal of ordinary
+prose in order to avoid interfering with the occasional hand-typed URL — and an
+address that matters usually arrives by paste, not by typing.
+
+**The obvious hazard turns out to be self-limiting.** A correction only ever
+fires on **space** (D28), and a space in the address bar is precisely the signal
+that this is a search and not a hostname: nobody types a space inside a domain.
+So the destructive half of the feature reaches the text only in the case where
+it is wanted, and nothing has to detect which mode the box is in. That is worth
+more than a mode detector would be, because it cannot be wrong.
+
+Swiping follows suggestions (D39), so it returns here too, and that is the
+larger part of the gain — a search is exactly the kind of throwaway prose a
+swipe is for.
+
+Email and filter fields keep their refusal: those really are not prose, and
+neither doubles as anything else. And a browser that genuinely wants no help
+can still say so with `NO_SUGGESTIONS`, which is checked before any of this and
+is the app's decision rather than a guess made from a variation code.
+
 ### D40 — The personal key
 
 **The strip could only offer to remember a word when it had a slot going

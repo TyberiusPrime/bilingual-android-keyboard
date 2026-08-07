@@ -1487,6 +1487,70 @@ picked. And the retraction asks the field what is actually in front of the
 cursor rather than assuming, because between the tap and the drag the app may
 have done anything.
 
+### D39b — What the phone said next
+
+Two strokes from real use, and they turned out to be two different problems.
+
+**`learning`, decoded as `laughing`.** Both begin `l`, end `g`, are the right
+length, and `laughing` is six times the commoner — so the geometry had to
+overturn that and could not. It never charged `laughing` for the plain fact
+that the finger went up to `e` and out to `r`, which its route passes nowhere
+near.
+
+Comparing the two paths point for point asks the wrong question twice. It
+charges full price for the *route between* two letters, when how a finger chose
+to travel is not evidence about anything. And it couples by position, so a
+loop — which is what a reversal looks like at speed — shifts every later sample
+against its counterpart. Measured: as a loop grows, the cost of the **correct**
+word climbs from 0.00 to 0.79 while the wrong one, already misaligned and with
+nothing left to lose, sits flat around 0.9. It punished the word it was meant
+to find.
+
+Two alignment-free terms replaced it, and they are converses. **Visit** asks
+whether the finger came near each of the word's letters, in order. **Coverage**
+asks whether the word's route explains where the finger actually went. Neither
+survives alone — a short word satisfies the first trivially, a rambling one the
+second — and together they are hard to cheat. Both are root-mean-square rather
+than mean, because a word is wrong if *any* letter went unvisited and averaging
+buried exactly that: `leaving` misses `v` by two key widths, and spread across
+seven letters it vanished.
+
+Letters are measured to the nearest point *on* the stroke rather than the
+nearest sample, which removed a floor of half a key that had nothing to do with
+the typist, and `SAMPLES` rose to 48 because corner fidelity now matters where
+it did not before. On the reported stroke `laughing` costs 1.12 against
+`learning`'s 0.15.
+
+**`swiping`, not offered at all — and that one was not geometry.** The decoder
+had it right: 0.05 against `stopping`'s 0.49 and `selling`'s 1.16, the best fit
+by a wide margin. `swiping` occurs **236 times in 675 million words** of film
+subtitles. Its share of the corpus is *smaller than* [UNKNOWN_WORD_PRIOR], so
+the keyboard rated "a word I have never heard of" as three times likelier than
+the word itself, and no quality of trace could have rescued it. The frequency
+data is film dialogue and the word is from the smartphone era.
+
+So **rarity counts for less when swiping**: the score uses the square root of
+the corpus weight rather than the weight. The justification is not the one word
+it rescues but what a stroke *is* — a whole word's worth of geometric evidence,
+where a typo correction works from one or two characters, so the shape has
+earned the right to overrule the frequency table further than it may there. It
+pays for itself on the corpus as well, lifting top-1 from 95% to 96% on
+realistic traces and 93% to 95% on sloppy ones. The unknown-word prior is
+raised to the same power, or it would be swamped and every stroke would come
+back certain.
+
+`swiping` still does not win — it lands third, in the strip, one tap away — and
+that is correct rather than a shortfall. `swiping` and `sweeping` fold to
+`s-w-i-p-i-n-g` and `s-w-e-p-i-n-g`, and the straight run from `w` to `p`
+crosses both `e` and `i`: they are very nearly the same stroke, in the same
+class as `das` and `dass`. Frequency breaks the tie, ten to one, and the runner
+up is one tap away. Teaching the word with the personal key (D40) settles it
+permanently, which is exactly what D8 built that key for.
+
+**The cost of all this** is decode time, from about 0.3ms to about 3ms per
+stroke. Once per word rather than once per keystroke, so there is room, but it
+is ten times what it was and wants watching on the actual phone.
+
 ### D40 — The personal key
 
 **The strip could only offer to remember a word when it had a slot going

@@ -48,6 +48,9 @@
     <string name="learned_title">Learned words (%1$d)</string>
     <string name="learned_empty">Nothing learned yet. Hold the + key while typing a word to remember it, or take the suggestion strip\u2019s offer when it appears.</string>
     <string name="action_forget">Forget</string>
+    <string name="settings_section_trace">Typing trace</string>
+    <string name="setting_show_trace">Show what was just typed</string>
+    <string name="setting_show_trace_explanation">Colours the last few keys pressed, and leaves a swiped word\u2019s path on the keyboard until the next press. In password fields this is off by default and switched with the key next to ?123.</string>
     <string name="action_quick">Quick</string>
     <string name="action_quick_word">Put %1$s on the quick menu</string>
     <string name="quick_explanation">Tick Quick to put a word on the menu the + key opens — for the things worth inserting whole, like an email address or a name.</string>

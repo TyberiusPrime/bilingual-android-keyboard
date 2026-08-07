@@ -409,6 +409,11 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private fun applyTrailVisibility() {
         keyboardView.trailEnabled = showTrail
+        // One switch over both pictures of what was just typed (D40). The
+        // swiped stroke is the franker of the two — the trail says which five
+        // keys, the stroke draws the word's shape and leaves it on screen — so
+        // hiding one without the other would make the switch a half-truth.
+        keyboardView.strokeVisible = showTrail
         if (!showTrail) clearTrail()
     }
 

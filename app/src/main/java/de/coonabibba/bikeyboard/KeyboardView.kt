@@ -192,6 +192,28 @@ class KeyboardView @JvmOverloads constructor(
         }
 
     /**
+     * Whether a swiped stroke is *drawn* — the live ribbon and the one left on
+     * screen afterwards (D19, D38, D40).
+     *
+     * The same switch as [trailEnabled], because they are the same promise.
+     * Both are pictures of what was just typed, and the stroke is the franker
+     * of the two: the trail says which five keys, while the stroke draws the
+     * word's shape across the board and then leaves it there. A switch that
+     * hid one and not the other would not mean anything.
+     *
+     * Recording is untouched. Unlike the trail — which D38 stops *writing down*
+     * rather than merely stops drawing — the stroke's points are not a record
+     * kept for later, they are how the word is worked out at all, and they are
+     * gone the moment it is. What settles on screen is what this controls.
+     */
+    var strokeVisible: Boolean = true
+        set(value) {
+            field = value
+            if (!value) clearSettledGlide()
+            invalidate()
+        }
+
+    /**
      * Recently pressed keys, most recent first. The service owns the stack;
      * this view only renders it.
      */
@@ -1390,7 +1412,7 @@ class KeyboardView @JvmOverloads constructor(
         val path = GesturePath.of(glideX, glideY, glideCount)
         glidePointer = MotionEvent.INVALID_POINTER_ID
         gliding = false
-        glideSettled = path != null
+        glideSettled = strokeVisible && path != null
         if (!glideSettled) glideCount = 0
         return path
     }
@@ -1412,6 +1434,7 @@ class KeyboardView @JvmOverloads constructor(
      * gesture, which is the one moment the keyboard is doing the most work.
      */
     private fun drawGlide(canvas: Canvas) {
+        if (!strokeVisible) return
         if (!gliding && !glideSettled) return
         if (glideCount < 2) return
         val chunks = GLIDE_FADE_CHUNKS.coerceAtMost(glideCount - 1)

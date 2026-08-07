@@ -1507,6 +1507,32 @@ the correction flash, because everything in this keyboard that means "the
 keyboard knows something about your words" is that colour and this is the key
 that decides what it knows.
 
+**One switch over both pictures of what was just typed.** There are now two:
+the keypress trail (D19) and the stroke a swipe leaves on the keyboard (D39).
+The stroke is the franker of the pair — the trail says which five keys were
+pressed, while the stroke draws the whole word's shape across the board and
+then stays there until the next press — so a switch that hid one and not the
+other would not mean anything. Both now follow the same setting.
+
+Recording is untouched by it. Unlike the trail, which D38 stops *writing down*
+rather than merely stops drawing, a stroke's points are not a record kept for
+later: they are how the word is worked out at all, and they are gone the moment
+it is. What settles on screen is what the switch controls.
+
+**And the switch needed somewhere to live.** Moving the toggle key into
+password fields alone left the setting for every *other* field unreachable —
+stuck on, with nothing anywhere to change it. It is a switch in the settings
+screen now, which is where a preference that is not urgent belongs; the key
+remains for the one case that *is* urgent, which is somebody standing behind
+you while you type a password.
+
+**A stroke never appears in a password field regardless**, because swiping is
+switched off there entirely: without suggestions there is no dictionary to
+decode a path against, so the gesture could produce nothing. That is a
+functional limit rather than a policy one, and it is worth saying plainly
+because it means the toggle's effect on strokes is invisible in exactly the
+field the toggle is on.
+
 **The trail toggle keeps the position in password fields, and only there.**
 That was always where its argument lived — the moment somebody is standing
 behind you — and D38's per-field settings already meant the two kinds of field

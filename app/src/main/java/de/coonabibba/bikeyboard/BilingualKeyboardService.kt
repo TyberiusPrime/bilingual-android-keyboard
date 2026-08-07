@@ -482,8 +482,11 @@ class BilingualKeyboardService : InputMethodService() {
             return
         }
         // The word is known now, so the strip's own add-word offer goes away
-        // and the completions change. Both are the confirmation.
-        keyboardView.flashCorrection()
+        // and the completions change. The wave falls *into* the keys rather
+        // than rising off the space bar: a correction is the keyboard deciding
+        // something and this is the keyboard being told, which is the same
+        // event from the other end (D40).
+        keyboardView.flashLearned()
         haptics?.correction()
     }
 

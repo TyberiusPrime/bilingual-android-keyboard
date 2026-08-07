@@ -32,14 +32,21 @@ class GestureDecoderTest {
     @Test
     fun `a character with no key is skipped rather than refused`() {
         assertEquals(decoder.idealLength("dont"), decoder.idealLength("don't"), 1e-3f)
-        assertEquals(0f, decoder.cost(SwipeFixtures.perfectSwipe("dont"), "don't"), 1e-4f)
+        // The two spellings are the *same stroke*, which is the point — not
+        // that either costs nothing. A perfect trace still carries a small
+        // residue, because resampling cuts corners and a word's letters are
+        // exactly where its corners are.
+        val stroke = SwipeFixtures.perfectSwipe("dont")
+        assertEquals(decoder.cost(stroke, "dont"), decoder.cost(stroke, "don't"), 1e-4f)
     }
 
     /** Accents fold onto the key they are typed from. */
     @Test
     fun `an accented word traces the plain one`() {
-        assertEquals(0f, decoder.cost(SwipeFixtures.perfectSwipe("uber"), "über"), 1e-4f)
-        assertEquals(0f, decoder.cost(SwipeFixtures.perfectSwipe("strasse"), "Straße"), 1e-4f)
+        listOf("uber" to "über", "strasse" to "Straße").forEach { (plain, accented) ->
+            val stroke = SwipeFixtures.perfectSwipe(plain)
+            assertEquals(decoder.cost(stroke, plain), decoder.cost(stroke, accented), 1e-4f)
+        }
     }
 
     @Test
@@ -62,11 +69,17 @@ class GestureDecoderTest {
         assertEquals(decoder.idealLength("berlin"), decoder.idealLength("Berlin"), 1e-3f)
     }
 
+    /**
+     * A perfect trace is cheap but not free: resampling cuts across corners,
+     * and a word's letters sit on its corners. What matters is the gap to a
+     * word the finger did not trace.
+     */
     @Test
-    fun `a perfect trace of a word costs nothing and a wrong word costs more`() {
+    fun `a perfect trace is far cheaper than a wrong word`() {
         val path = SwipeFixtures.perfectSwipe("keyboard")
-        assertEquals(0f, decoder.cost(path, "keyboard"), 1e-4f)
-        assertTrue(decoder.cost(path, "kitchen") > 0.5f)
+        val right = decoder.cost(path, "keyboard")
+        assertTrue("a perfect trace cost $right", right < 0.25f)
+        assertTrue(decoder.cost(path, "kitchen") > right * 3f)
     }
 
     /** Longer words need a longer buffer; the decoder grows its own. */

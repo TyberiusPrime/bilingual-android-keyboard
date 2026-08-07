@@ -13,14 +13,13 @@ import kotlin.math.hypot
  * throws the speed away and keeps the shape, which is the part that carries the
  * word (D39).
  *
- * The same class holds the *ideal* path of a candidate word — the polyline
- * through its key centres, resampled the same way — so that scoring is a
- * comparison between two objects of one kind rather than between a path and a
- * list of keys. That distinction matters more than it looks: swiping `hello`
- * crosses `r`, `t`, `y`, `d`, `f`, `g` and `j` on the way, and any scheme that
- * matches touch points against candidate *letters* has to explain away every
- * one of them. Matching path against path does not, because the ideal path
- * travels over those keys too.
+ * Scoring no longer compares two of these point for point. It did at first,
+ * and that turned out to be the decoder's central mistake: matching by position
+ * along the stroke means a loop, or any other stretch of extra travel, shifts
+ * every later sample against its counterpart and wrecks the alignment of the
+ * *correct* word while barely touching a wrong one that was misaligned anyway.
+ * See [GestureDecoder] for what replaced it. What this class still provides is
+ * the even spacing both halves of that replacement depend on.
  */
 class GesturePath private constructor(
     val xs: FloatArray,
@@ -33,25 +32,6 @@ class GesturePath private constructor(
     val startY: Float get() = ys[0]
     val endX: Float get() = xs[xs.size - 1]
     val endY: Float get() = ys[ys.size - 1]
-
-    /**
-     * Mean distance between corresponding points of this path and [other],
-     * divided by [keyWidth] so the answer reads in key widths rather than
-     * pixels and survives a change of screen density.
-     *
-     * Index-wise rather than a best alignment: both paths have already been
-     * spaced evenly, so point *i* of each is the same fraction of the way
-     * along, and letting them slide would forgive a path that visits the right
-     * keys in the right order at wildly the wrong pace.
-     */
-    fun distanceTo(other: GesturePath, keyWidth: Float): Float {
-        if (keyWidth <= 0f) return Float.MAX_VALUE
-        var total = 0f
-        for (i in xs.indices) {
-            total += hypot(xs[i] - other.xs[i], ys[i] - other.ys[i])
-        }
-        return total / xs.size / keyWidth
-    }
 
     companion object {
 
@@ -71,7 +51,7 @@ class GesturePath private constructor(
          * the process at this setting. That loss is why the number is not
          * lower: it lands on the corners, and the corners are the letters.
          */
-        const val SAMPLES = 32
+        const val SAMPLES = 48
 
         /**
          * Builds a path from the first [count] entries of [xs] and [ys].

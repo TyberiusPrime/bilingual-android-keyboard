@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import kotlin.math.hypot
+import kotlin.math.sqrt
 
 /**
  * Turns a word into the path it would have been swiped along, and says how far
@@ -24,6 +25,10 @@ class GestureDecoder(private val keys: KeyGeometry) {
     /** Scratch for the candidate polyline, reused across a single decode pass. */
     private var polyX = FloatArray(INITIAL_POLYLINE)
     private var polyY = FloatArray(INITIAL_POLYLINE)
+
+    /** Two rows of the alignment table, swapped rather than reallocated. */
+    private val costRow = FloatArray(GesturePath.SAMPLES)
+    private val nextRow = FloatArray(GesturePath.SAMPLES)
 
     /**
      * How far the finger would travel to swipe [word], in pixels, or
@@ -55,22 +60,15 @@ class GestureDecoder(private val keys: KeyGeometry) {
         return if (seen < 2) UNSWIPEABLE else length
     }
 
-    /** The path [word] would have been swiped along, or null if it has none. */
+    /**
+     * The path [word] would have been swiped along, or null if it has none.
+     *
+     * No longer what scoring uses — see [visitCost] — but still the honest
+     * picture of a word as a journey, and what the tests draw comparisons
+     * against.
+     */
     fun idealPath(word: CharSequence): GesturePath? {
-        if (polyX.size < word.length) {
-            polyX = FloatArray(word.length)
-            polyY = FloatArray(word.length)
-        }
-        var count = 0
-        for (index in word.indices) {
-            val entry = keys.centreOf(word[index]) ?: continue
-            if (count > 0 && entry.centreX == polyX[count - 1] && entry.centreY == polyY[count - 1]) {
-                continue
-            }
-            polyX[count] = entry.centreX
-            polyY[count] = entry.centreY
-            count++
-        }
+        val count = letterCentres(word)
         if (count < 2) return null
         return GesturePath.of(polyX, polyY, count)
     }
@@ -86,8 +84,187 @@ class GestureDecoder(private val keys: KeyGeometry) {
      * the auto-replace threshold read (D33, D37).
      */
     fun cost(path: GesturePath, word: CharSequence): Float {
-        val ideal = idealPath(word) ?: return UNSWIPEABLE
-        return path.distanceTo(ideal, keys.keyWidth)
+        val letters = letterCentres(word)
+        if (letters < 2 || letters > GesturePath.SAMPLES) return UNSWIPEABLE
+        if (keys.keyWidth <= 0f) return UNSWIPEABLE
+
+        val visit = sqrt(visitCost(path, letters) / letters) / keys.keyWidth
+        val coverage = sqrt(coverageCost(path, letters)) / keys.keyWidth
+        return visit + coverage
+    }
+
+    /**
+     * How much of the stroke the word fails to account for: the mean distance
+     * from each point of the stroke to the nearest point of the word's route.
+     *
+     * The other half of the question, and the half that was missing. [visitCost]
+     * asks whether the finger went where the word needed it to; this asks
+     * whether the word explains where the finger actually went. Neither is
+     * sufficient alone — a short word satisfies the first trivially by having
+     * few letters to visit, and a rambling one satisfies the second by having a
+     * route that covers everything — and together they are hard to cheat.
+     *
+     * This is the term that decides `learning` against `laughing` on the stroke
+     * that prompted it. Both begin `l` and end `g`, both are the right sort of
+     * length, and `laughing` is six times the commoner — but the finger plainly
+     * went up to `e` and out to `r`, and `laughing`'s route passes nowhere near
+     * either. Nothing charged it for that before.
+     *
+     * **Alignment-free on purpose**, which is the other repair. Distance to the
+     * nearest point of the route does not care *when* the finger was there, so
+     * a loop where somebody swung wide and came back costs almost nothing — the
+     * loop stays close to the route it is looping around. Comparing the two
+     * paths position by position instead, as the first version did, made a loop
+     * catastrophic: the extra travel shifted every later sample against its
+     * counterpart, so the correct word's cost rose from nothing to 0.79 while
+     * the wrong word — already misaligned, with nothing left to lose — barely
+     * moved. It punished exactly the word it should have been finding.
+     */
+    private fun coverageCost(path: GesturePath, letters: Int): Float {
+        var total = 0f
+        for (j in path.xs.indices) {
+            var best = Float.MAX_VALUE
+            for (i in 0 until letters - 1) {
+                val d = distanceToSegment(
+                    path.xs[j], path.ys[j],
+                    polyX[i], polyY[i],
+                    polyX[i + 1], polyY[i + 1],
+                )
+                if (d < best) best = d
+            }
+            total += best * best
+        }
+        return total / path.xs.size
+    }
+
+    /** Distance from a point to the line segment between two key centres. */
+    private fun distanceToSegment(
+        px: Float,
+        py: Float,
+        ax: Float,
+        ay: Float,
+        bx: Float,
+        by: Float,
+    ): Float {
+        val dx = bx - ax
+        val dy = by - ay
+        val lengthSquared = dx * dx + dy * dy
+        if (lengthSquared <= 0f) return hypot(px - ax, py - ay)
+        val t = (((px - ax) * dx + (py - ay) * dy) / lengthSquared).coerceIn(0f, 1f)
+        return hypot(px - (ax + t * dx), py - (ay + t * dy))
+    }
+
+    /**
+     * How far the finger strayed from the letters it had to visit, in order.
+     *
+     * **This asks a different question from comparing the two paths point for
+     * point, and the difference is the whole of what went wrong first time.**
+     * Matching by position along the stroke charges full price for the *route*
+     * between two letters: swiping `laughing`, the finger left `a` and arced up
+     * over `e` and `r` on its way to `u` instead of taking the straight
+     * diagonal, and every sample of that arc was scored against a straight line
+     * a key and a half below it. The word was thrown out entirely — 5th
+     * commonest of the 147 words that begin with `l` and end with `g`, and not
+     * offered at all.
+     *
+     * What actually identifies a word is that the stroke **passes near its
+     * letters in the right order**. So each letter is matched to its own point
+     * on the stroke, the matches must advance, and every point in between costs
+     * nothing — it is travel, and how the finger chose to travel is not
+     * evidence about anything.
+     *
+     * This is the model rejected when the decoder was first written, on the
+     * grounds that swiping `hello` crosses `r`, `t`, `y`, `d`, `f`, `g` and `j`
+     * and something would have to explain them away. That objection confused
+     * two things: matching every *point* to a letter, which is indeed hopeless,
+     * and matching every *letter* to a point, which is this — and which says
+     * nothing whatever about the keys passed over on the way.
+     *
+     * Both ends are pinned, first letter to first point and last to last, which
+     * is the same assumption the search's endpoints already rest on. Without it
+     * a word could be found entirely within the first half of a stroke and the
+     * rest ignored, and every short word would beat every long one.
+     */
+    private fun visitCost(path: GesturePath, letters: Int): Float {
+        // Letters are placed on *segments* of the stroke rather than on its
+        // sample points. Measuring to the nearest sample sounds equivalent and
+        // is not: samples sit a whole key apart on a long word, so the distance
+        // from a letter to the nearest one has a floor of half a key however
+        // perfectly the word was traced. Measuring to the nearest point on the
+        // stroke itself removes a floor that had nothing to do with the typist.
+        val segments = path.xs.size - 1
+        var previous = costRow
+        var current = nextRow
+
+        // The first letter is where the finger came down, so it has exactly one
+        // place it can be.
+        previous[0] = gap(path, 0, 0)
+        for (j in 1 until segments) previous[j] = Float.MAX_VALUE
+
+        for (letter in 1 until letters) {
+            current[0] = Float.MAX_VALUE
+            // The best way to have placed every earlier letter strictly before
+            // this segment, carried along as the row is filled.
+            var best = previous[0]
+            for (j in 1 until segments) {
+                if (previous[j - 1] < best) best = previous[j - 1]
+                current[j] = if (best == Float.MAX_VALUE) {
+                    Float.MAX_VALUE
+                } else {
+                    best + gap(path, letter, j)
+                }
+            }
+            val swap = previous
+            previous = current
+            current = swap
+        }
+
+        // And the last letter is where the finger lifted.
+        return previous[segments - 1]
+    }
+
+    /**
+     * *Squared* distance from the [letter]th key centre to segment [j] of the
+     * stroke.
+     *
+     * Squared because a word is wrong if **any** of its letters was never
+     * approached, and a plain mean hides that: `leaving` misses `v` by nearly
+     * two key widths on a stroke that spells `learning`, and averaged across
+     * seven letters that single miss all but vanished. Squaring makes one large
+     * gap cost far more than several small ones, which is the shape of the
+     * question actually being asked.
+     */
+    private fun gap(path: GesturePath, letter: Int, j: Int): Float {
+        val d = distanceToSegment(
+            polyX[letter], polyY[letter],
+            path.xs[j], path.ys[j],
+            path.xs[j + 1], path.ys[j + 1],
+        )
+        return d * d
+    }
+
+    /**
+     * Fills the scratch polyline with [word]'s key centres and says how many
+     * there are. Consecutive repeats collapse: the finger does not move for the
+     * second `l` of `hello`, so there is nothing for that letter to visit that
+     * the first one has not already.
+     */
+    private fun letterCentres(word: CharSequence): Int {
+        if (polyX.size < word.length) {
+            polyX = FloatArray(word.length)
+            polyY = FloatArray(word.length)
+        }
+        var count = 0
+        for (index in word.indices) {
+            val entry = keys.centreOf(word[index]) ?: continue
+            if (count > 0 && entry.centreX == polyX[count - 1] && entry.centreY == polyY[count - 1]) {
+                continue
+            }
+            polyX[count] = entry.centreX
+            polyY[count] = entry.centreY
+            count++
+        }
+        return count
     }
 
     /**

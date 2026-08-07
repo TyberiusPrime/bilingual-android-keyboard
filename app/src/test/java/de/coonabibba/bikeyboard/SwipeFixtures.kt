@@ -76,7 +76,8 @@ object SwipeFixtures {
      * rounding, no overshoot. The easiest possible input, and the floor any
      * decoder has to clear before the realistic ones are worth running.
      */
-    fun perfectSwipe(word: String): GesturePath = swipe(word, rounding = 0f, jitter = 0f)
+    fun perfectSwipe(word: String): GesturePath =
+        swipe(word, rounding = 0f, jitter = 0f, overshoot = 0f)
 
     /**
      * A finger tracing [word] the way a thumb actually does it.
@@ -105,6 +106,12 @@ object SwipeFixtures {
         word: String,
         rounding: Float = 0.4f,
         jitter: Float = 0.12f,
+        /**
+         * How far past a key the finger is carried before it can turn, in key
+         * widths, at a full reversal. Scaled by how sharp each turn actually
+         * is, so a gentle bend is barely affected.
+         */
+        overshoot: Float = 0.35f,
         endpointSlop: Float = 0f,
         /**
          * Pixels between reported touch points. The default is roughly what a
@@ -143,15 +150,24 @@ object SwipeFixtures {
         for (i in 1 until xs.size - 1) {
             val (px, py) = towards(xs[i], ys[i], xs[i - 1], ys[i - 1], radius)
             val (qx, qy) = towards(xs[i], ys[i], xs[i + 1], ys[i + 1], radius)
+
+            // Momentum carries the finger *past* a key before it can turn, and
+            // the sharper the turn the further past. A stroke that only ever
+            // cut corners was the model's second big lie: it made every path
+            // shorter than the ideal, when a real one full of reversals — the
+            // `u`-`g`-`h` of `laughing`, say — comes out longer, with visible
+            // loops where the finger swung wide and came back.
+            val (cx, cy) = overshootAt(xs, ys, i, overshoot * keyWidth)
+
             cutX += px
             cutY += py
-            // A quadratic through the vertex, which is what keeps the finger
-            // passing close to the key rather than short of it.
+            // A quadratic through the control point, which is the vertex itself
+            // when there is no overshoot and beyond it when there is.
             for (step in 1 until ARC_STEPS) {
                 val t = step.toFloat() / ARC_STEPS
                 val u = 1f - t
-                cutX += u * u * px + 2f * u * t * xs[i] + t * t * qx
-                cutY += u * u * py + 2f * u * t * ys[i] + t * t * qy
+                cutX += u * u * px + 2f * u * t * cx + t * t * qx
+                cutY += u * u * py + 2f * u * t * cy + t * t * qy
             }
             cutX += qx
             cutY += qy
@@ -242,6 +258,35 @@ object SwipeFixtures {
             keptY += ys.last()
         }
         return keptX to keptY
+    }
+
+    /**
+     * Where the finger actually gets to at vertex [i] before momentum lets it
+     * turn — the control point of the corner's curve.
+     *
+     * Sharpness is the turn angle mapped to 0 for dead straight and 1 for a
+     * full reversal, so a stroke bulges past the keys it has to double back
+     * from and passes cleanly through the ones it merely bends around.
+     */
+    private fun overshootAt(
+        xs: List<Float>,
+        ys: List<Float>,
+        i: Int,
+        distance: Float,
+    ): Pair<Float, Float> {
+        if (distance <= 0f) return xs[i] to ys[i]
+        val inX = xs[i] - xs[i - 1]
+        val inY = ys[i] - ys[i - 1]
+        val outX = xs[i + 1] - xs[i]
+        val outY = ys[i + 1] - ys[i]
+        val inLen = hypot(inX, inY)
+        val outLen = hypot(outX, outY)
+        if (inLen <= 0f || outLen <= 0f) return xs[i] to ys[i]
+
+        val cos = (inX * outX + inY * outY) / (inLen * outLen)
+        val sharpness = ((1f - cos) / 2f).coerceIn(0f, 1f)
+        val carry = distance * sharpness
+        return xs[i] + inX / inLen * carry to ys[i] + inY / inLen * carry
     }
 
     /**

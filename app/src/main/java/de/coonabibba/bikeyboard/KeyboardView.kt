@@ -547,6 +547,9 @@ class KeyboardView @JvmOverloads constructor(
 
     fun flashCorrection() = flash.start()
 
+    /** The downward wave, for a word the keyboard was told rather than chose (D40). */
+    fun flashLearned() = flash.startDownwards()
+
     private fun drawFlash(canvas: Canvas) {
         // From the top of the space bar, because that is the key that caused it.
         val spaceBar = placedKeys.firstOrNull { it.key.action == KeyAction.Space }

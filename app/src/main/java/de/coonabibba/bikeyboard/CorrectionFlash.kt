@@ -64,10 +64,32 @@ class CorrectionFlash(var shape: FlashShape, private val invalidate: () -> Unit)
     private var progress = 0f
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+    /**
+     * Which way the wave travels, and so which of two things just happened.
+     *
+     * Upwards is the keyboard changing a word on its own (D28) — it starts at
+     * the space bar because that is the key that caused it. Downwards is the
+     * keyboard being *told* something: holding the personal key to remember a
+     * word (D40) pushes the wave from the top of the keys down into it.
+     *
+     * The same animation reversed rather than a second one, because the two are
+     * the same event seen from either end: one is the keyboard's decision
+     * arriving, the other is the user's. Read without looking at the keys, the
+     * direction is the whole message.
+     */
+    private var downwards = false
+
     val running: Boolean get() = animator?.isRunning == true
 
-    fun start() {
+    /** The keyboard changed a word: the wave rises off the space bar (D28). */
+    fun start() = start(downwards = false)
+
+    /** The keyboard was taught a word: the wave falls into the keys (D40). */
+    fun startDownwards() = start(downwards = true)
+
+    private fun start(downwards: Boolean) {
         if (shape.durationMs <= 0L) return
+        this.downwards = downwards
         animator?.cancel()
         animator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = shape.durationMs
@@ -119,11 +141,19 @@ class CorrectionFlash(var shape: FlashShape, private val invalidate: () -> Unit)
         // starts: at zero the gradient is one pixel wide and the front is a hard
         // bright edge, at one it fades the whole way back to the space bar.
         val tail = (1f - shape.softness).coerceIn(0f, 1f)
+
+        // Both directions are the same gradient: transparent at the near edge,
+        // brightest at the wave front. Reversing is a matter of which edge is
+        // which, so the shape settings mean the same thing either way and the
+        // preview in the settings screen still describes both.
+        val origin = if (downwards) 0f else from
+        val front = if (downwards) reach else from - reach
+
         paint.shader = LinearGradient(
             0f,
-            from,
+            origin,
             0f,
-            from - reach,
+            front,
             intArrayOf(
                 Color.TRANSPARENT,
                 ColorUtils.setAlphaComponent(COLOUR, alpha / 2),
@@ -132,7 +162,7 @@ class CorrectionFlash(var shape: FlashShape, private val invalidate: () -> Unit)
             floatArrayOf(0f, tail.coerceAtMost(MID_STOP), 1f),
             Shader.TileMode.CLAMP,
         )
-        canvas.drawRect(0f, from - reach, width, from, paint)
+        canvas.drawRect(0f, minOf(origin, front), width, maxOf(origin, front), paint)
     }
 
     private companion object {

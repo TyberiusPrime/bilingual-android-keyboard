@@ -78,20 +78,7 @@ class GesturePathTest {
         assertNotNull(path(5f to 5f, 6f to 5f))
     }
 
-    @Test
-    fun `distance to itself is zero and rises with separation`() {
-        val a = path(0f to 0f, 100f to 100f)!!
-        val b = path(0f to 40f, 100f to 140f)!!
-        assertEquals(0f, a.distanceTo(a, keyWidth = 40f), 1e-4f)
-        assertEquals(1f, a.distanceTo(b, keyWidth = 40f), 1e-3f)
-    }
 
-    /** Nothing may divide by a key width of zero — a view mid-layout has one. */
-    @Test
-    fun `a keyboard with no width yields no distance`() {
-        val a = path(0f to 0f, 10f to 0f)!!
-        assertEquals(Float.MAX_VALUE, a.distanceTo(a, keyWidth = 0f), 0f)
-    }
 
     private fun walk(path: GesturePath): Float {
         var walked = 0f

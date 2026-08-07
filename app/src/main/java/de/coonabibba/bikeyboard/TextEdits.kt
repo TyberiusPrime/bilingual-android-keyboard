@@ -104,6 +104,49 @@ object TextEdits {
      * word — it is on long-press `v` precisely because contractions need it.
      */
     fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
+
+    /**
+     * Everything between the spaces around the cursor, for remembering a word
+     * by hand (D40).
+     *
+     * A *different* question from [wordAtCursor], and the difference is the
+     * whole point. Suggestions and corrections are about words, so they stop at
+     * anything that is not a letter — but the things worth putting in the
+     * personal store on purpose are frequently not words by that definition.
+     * `john@coonabibba.de` is three of them with punctuation in between, and
+     * asking the tokeniser for it returns `de`. So the token is delimited by
+     * whitespace and nothing else, which is the same rule the eye uses.
+     *
+     * Both sides of the cursor, because the finger holding the key is nowhere
+     * near it and there is no reason to assume it sits at the end.
+     *
+     * Punctuation that is plainly framing is trimmed: a trailing comma or
+     * closing bracket is part of the sentence rather than of the thing. **The
+     * full stop is deliberately left alone** — German abbreviates `z.B.`,
+     * `d.h.` and `usw.` with one, and a domain is nothing but full stops, so
+     * trimming would break more than it fixed. The cost is that remembering an
+     * address after the sentence's own full stop keeps it, which is visible in
+     * the launcher and removable there.
+     */
+    fun tokenAtCursor(before: CharSequence?, after: CharSequence?): String {
+        val head = before?.takeLastWhile { !it.isWhitespace() }?.toString().orEmpty()
+        val tail = after?.takeWhile { !it.isWhitespace() }?.toString().orEmpty()
+        return (head + tail)
+            .trimStart(*OPENING)
+            .trimEnd(*CLOSING)
+    }
+
+    private val OPENING = charArrayOf('(', '[', '{', '<', '¿', '¡') + QUOTES
+    private val CLOSING = charArrayOf(',', ';', ':', '!', '?', '…', ')', ']', '}', '>') + QUOTES
+
+    /**
+     * Quotes are trimmed from **both** ends, because on this keyboard they have
+     * no fixed side. German writes `„Fairphone“` and English writes
+     * `“Fairphone”`, so `“` opens one language's quotation and closes the
+     * other's — and D2 says both are in play in the same sentence.
+     */
+    private val QUOTES: CharArray
+        get() = charArrayOf('"', '„', '“', '”', '‚', '‘', '’', '«', '»')
 }
 
 /** A word split at the cursor: [before] it and [after] it. */

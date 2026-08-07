@@ -1507,6 +1507,47 @@ the correction flash, because everything in this keyboard that means "the
 keyboard knows something about your words" is that colour and this is the key
 that decides what it knows.
 
+**What gets remembered is whatever is between the spaces**, not what the word
+tokeniser thinks a word is. Those are different questions and the first version
+asked the wrong one. `WordInProgress` stops at the first character that is not
+a letter, because suggestions and corrections are about words — so asking it to
+remember `john@coonabibba.de` produced `de`. The things people deliberately put
+in a personal store are frequently not words by that definition: addresses,
+paths, phone numbers, hyphenated compounds. Whitespace is the delimiter the eye
+uses and it is the right one here.
+
+Framing punctuation is trimmed — a trailing comma or closing bracket belongs to
+the sentence rather than to the thing — and quotes come off **both** ends,
+because `“` closes a German quotation and opens an English one and D2 says both
+are live in the same paragraph. **The full stop is deliberately kept**: German
+abbreviates `z.B.`, `d.h.` and `usw.` with one and a domain is nothing but full
+stops, so trimming would break far more than it fixed. The cost is remembering
+a sentence's own stop when a word is learned after it, which the launcher can
+undo.
+
+**And learning had to be untangled from suggesting.** `learningAllowed` was
+defined as `suggestionsAllowed` plus the no-personalized-learning flag, which
+bundles two things that only look alike: whether the keyboard should volunteer
+completions into a field, and whether the user may deliberately tell it to
+remember something typed there. An email field refuses the first because
+addresses are not prose — and so refused the second, making it impossible to
+remember an email address while standing in the one field an email address is
+typed into. Same for URIs and for search boxes carrying `NO_SUGGESTIONS`.
+
+Under D8 nothing is ever absorbed silently; every write to the store is already
+somebody asking for it. There is no case for second-guessing that request in a
+field whose only sin is not containing sentences. Learning now refuses exactly
+three things, each for a reason of its own: **passwords**, because a secret
+written to a plain file is a secret no longer; **`IME_FLAG_NO_PERSONALIZED_LEARNING`**,
+because the app has said not to and that is not optional; and **anything that is
+not a text field**, which has nothing in it worth a place in a vocabulary.
+
+This is the third time the same mistake has been caught in three decisions —
+D38's inert toggle, D40's unreachable trail setting, and now this — and they
+share a shape: **a capability switched off by a rule that was written for a
+different question.** Worth naming, because the next one will look reasonable
+too.
+
 **One switch over both pictures of what was just typed.** There are now two:
 the keypress trail (D19) and the stroke a swipe leaves on the keyboard (D39).
 The stroke is the franker of the pair — the trail says which five keys were

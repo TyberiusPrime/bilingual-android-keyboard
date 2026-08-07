@@ -470,7 +470,7 @@ class BilingualKeyboardService : InputMethodService() {
      * actually typed".
      */
     private fun learnCurrentWord() {
-        val text = word.full
+        val text = tokenToLearn()
         if (text.isEmpty()) {
             // Nothing to learn is not nothing to do: say so with the same
             // double tick a correction uses, so the hold is never silent.
@@ -485,6 +485,27 @@ class BilingualKeyboardService : InputMethodService() {
         // and the completions change. Both are the confirmation.
         keyboardView.flashCorrection()
         haptics?.correction()
+    }
+
+    /**
+     * What the personal key would remember: everything between the spaces
+     * around the cursor (D40).
+     *
+     * Read back from the field rather than taken from [word], which tracks a
+     * *word* and therefore stops at the first character that is not a letter.
+     * That is right for suggesting and correcting and useless here — asking it
+     * for `john@coonabibba.de` returns `de`, and an address is one of the very
+     * things somebody most wants remembered.
+     */
+    private fun tokenToLearn(): String {
+        val ic = currentInputConnection ?: return ""
+        val token = TextEdits.tokenAtCursor(
+            before = ic.getTextBeforeCursor(LEARN_REACH, 0),
+            after = ic.getTextAfterCursor(LEARN_REACH, 0),
+        )
+        // A run this long with no space in it is pasted text, not something
+        // anybody typed meaning to keep.
+        return if (token.length > MAX_LEARNED_LENGTH) "" else token
     }
 
     /** Opens the launcher screen, which is where the menu's words are managed. */
@@ -1322,6 +1343,16 @@ class BilingualKeyboardService : InputMethodService() {
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64
+
+        /**
+         * How far either side of the cursor to read when remembering something
+         * by hand (D40). Longer than a word, because the things worth
+         * remembering deliberately are addresses and long compounds.
+         */
+        const val LEARN_REACH = 96
+
+        /** Past this it is pasted text rather than something typed to be kept. */
+        const val MAX_LEARNED_LENGTH = 64
 
         /** How far forward to read when recovering the word the cursor landed in. */
         const val WORD_LOOKAHEAD = 64

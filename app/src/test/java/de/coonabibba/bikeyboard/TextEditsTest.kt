@@ -149,4 +149,69 @@ class TextEditsTest {
         assertEquals("word", TextEdits.wordAtCursor("word", null).text)
         assertEquals("word", TextEdits.wordAtCursor(null, "word").text)
     }
+
+
+    // -- what the personal key remembers (D40) --------------------------------
+
+    private fun token(before: String, after: String = "") =
+        TextEdits.tokenAtCursor(before, after)
+
+    /**
+     * The complaint this exists for. The word tokeniser stops at the first
+     * character that is not a letter, so it answers `de` — and an address is
+     * one of the very things somebody most wants remembered.
+     */
+    @Test
+    fun `an email address is one token`() {
+        assertEquals("john@coonabibba.de", token("mail me at john@coonabibba.de"))
+        assertEquals("de", TextEdits.wordAtCursor("mail me at john@coonabibba.de", "").text)
+    }
+
+    @Test
+    fun `the token spans the cursor rather than ending at it`() {
+        assertEquals("john@coonabibba.de", token("mail me at john@coona", "bibba.de and ask"))
+    }
+
+    @Test
+    fun `whitespace is the only delimiter`() {
+        assertEquals("+49-30-1234", token("call +49-30-1234"))
+        assertEquals("C:\\Users\\john", token("C:\\Users\\john"))
+        assertEquals("Rindfleisch-Etikettierung", token("Rindfleisch-Etikettierung"))
+    }
+
+    @Test
+    fun `a cursor in open space has nothing to remember`() {
+        assertEquals("", token(""))
+        assertEquals("", token("finished the sentence "))
+        assertEquals("", token("a line\n", "\nanother"))
+    }
+
+    /** Framing punctuation is the sentence's, not the thing's. */
+    @Test
+    fun `surrounding brackets and quotes are trimmed`() {
+        assertEquals("john@coonabibba.de", token("write to (john@coonabibba.de)"))
+        assertEquals("Fairphone", token("the \u201eFairphone\u201c"))
+        assertEquals("Fairphone", token("bought a Fairphone,"))
+        assertEquals("really", token("really?!"))
+    }
+
+    /**
+     * The full stop is deliberately kept. German abbreviates with one and a
+     * domain is nothing but full stops, so trimming would break far more than
+     * it fixed — at the cost of keeping a sentence's own stop when somebody
+     * remembers a word after typing it, which the launcher screen can undo.
+     */
+    @Test
+    fun `a trailing full stop survives because abbreviations need it`() {
+        assertEquals("z.B.", token("zum Beispiel z.B."))
+        assertEquals("d.h.", token("d.h."))
+        assertEquals("coonabibba.de", token("coonabibba.de"))
+    }
+
+    /** Nothing to trim, nothing trimmed. */
+    @Test
+    fun `an ordinary word is returned unchanged`() {
+        assertEquals("Fairphone", token("my Fairphone"))
+        assertEquals("don't", token("don't"))
+    }
 }

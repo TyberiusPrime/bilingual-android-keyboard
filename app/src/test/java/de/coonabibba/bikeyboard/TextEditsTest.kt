@@ -214,4 +214,54 @@ class TextEditsTest {
         assertEquals("Fairphone", token("my Fairphone"))
         assertEquals("don't", token("don't"))
     }
+
+    // -- where a sentence begins (D42) ----------------------------------------
+
+    /**
+     * Shift used to be set once, when focus arrived, and never again — and the
+     * only thing that turned it back on was the double-space full stop. Since
+     * `?` and `!` are reachable only by long-press, every question and every
+     * exclamation was followed by a lowercase letter.
+     */
+    @Test
+    fun `a sentence mark and a space open a new sentence`() {
+        assertTrue(TextEdits.startsSentence("Hello. "))
+        assertTrue(TextEdits.startsSentence("Really? "))
+        assertTrue(TextEdits.startsSentence("Stop! "))
+        assertTrue(TextEdits.startsSentence("Well\u2026 "))
+    }
+
+    @Test
+    fun `an empty field and a fresh line start one too`() {
+        assertTrue(TextEdits.startsSentence(""))
+        assertTrue(TextEdits.startsSentence(null))
+        assertTrue(TextEdits.startsSentence("a line\n"))
+        assertTrue(TextEdits.startsSentence("   "))
+    }
+
+    /**
+     * Not on the mark itself. `e.g.` and `3.14` are typed tight, and
+     * capitalising between the dot and the next character would fight both.
+     */
+    @Test
+    fun `a mark with nothing after it is still mid-sentence`() {
+        assertFalse(TextEdits.startsSentence("Hello."))
+        assertFalse(TextEdits.startsSentence("e.g."))
+        assertFalse(TextEdits.startsSentence("3."))
+    }
+
+    @Test
+    fun `an ordinary word and space does not`() {
+        assertFalse(TextEdits.startsSentence("hello world "))
+        assertFalse(TextEdits.startsSentence("a comma, "))
+        assertFalse(TextEdits.startsSentence("a colon: "))
+    }
+
+    /** The mark can hide behind a closing quote or bracket. */
+    @Test
+    fun `quotes and brackets between the mark and the space are stepped over`() {
+        assertTrue(TextEdits.startsSentence("He said \"Stop.\" "))
+        assertTrue(TextEdits.startsSentence("(Ask him.) "))
+        assertTrue(TextEdits.startsSentence("\u201eHalt!\u201c "))
+    }
 }

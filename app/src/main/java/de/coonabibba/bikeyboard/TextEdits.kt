@@ -106,6 +106,50 @@ object TextEdits {
     fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
 
     /**
+     * Whether the cursor is at the start of a sentence, and so whether the next
+     * letter should be a capital (D42).
+     *
+     * True at the very beginning, after a newline, and after a sentence mark
+     * followed by a space. Not immediately after the mark itself: `Hello.` with
+     * the cursor tight against the full stop is still the same sentence until a
+     * space says otherwise, and capitalising there would fight anyone typing
+     * `e.g.` or a decimal.
+     *
+     * Closing quotes and brackets are stepped over, so `He said "Stop." ` opens
+     * a sentence the same as `Stop. ` does.
+     */
+    fun startsSentence(before: CharSequence?): Boolean {
+        if (before.isNullOrEmpty()) return true
+        var index = before.length - 1
+
+        var spaces = 0
+        while (index >= 0 && before[index] == ' ') {
+            index--
+            spaces++
+        }
+        if (index < 0) return true
+        if (before[index] == '\n') return true
+        // A mark with nothing after it has not finished the sentence yet.
+        if (spaces == 0) return false
+
+        while (index >= 0 && before[index] in AFTER_MARK) index--
+        return index >= 0 && before[index] in SENTENCE_MARKS
+    }
+
+    /** What ends a sentence. The two languages agree. */
+    const val SENTENCE_MARKS = ".!?…"
+
+    /**
+     * Quotes and brackets that may sit between the mark and the space.
+     *
+     * Every quote character, whichever side it nominally belongs to: German
+     * closes a quotation with `“` where English opens one with it, and D2 says
+     * both languages are live in the same paragraph. The same trap as the one
+     * [tokenAtCursor] fell into.
+     */
+    private const val AFTER_MARK = "\")]}'\u2018\u2019\u201c\u201d\u00ab\u00bb"
+
+    /**
      * Everything between the spaces around the cursor, for remembering a word
      * by hand (D40).
      *

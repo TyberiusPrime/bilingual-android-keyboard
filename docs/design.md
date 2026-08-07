@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D41 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D42 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -1820,6 +1820,36 @@ Rejected on the way, and worth recording because both were reasonable:
 
 Doing it automatically costs no gesture, no discovery, and nothing to perform
 four percent of the time.
+
+### D42 — Sentences after the first one
+
+Auto-capitalisation was applied **once**, when focus arrived, and never again.
+The only thing that ever turned shift back on afterwards was the double-space
+full stop — and since that gesture only ever writes `.`, while `?` and `!` are
+reachable only by long-press, **every question and every exclamation was
+followed by a lowercase letter.** So was every sentence whose full stop was
+typed from the symbol layer rather than by double-tapping space.
+
+Now the same question is asked after every edit that could have ended a
+sentence. A sentence starts at the very beginning of a field, after a newline,
+and after a sentence mark followed by a space.
+
+Three details worth having decided:
+
+- **Not on the mark itself.** `Hello.` with the cursor tight against the stop
+  is still mid-sentence until a space says otherwise, or `e.g.` and `3.14`
+  would fight it.
+- **Only ever on.** Turning shift *off* would be second-guessing a press the
+  typist made deliberately, and `consumeShift` already spends it on the next
+  letter.
+- **The field is only asked when the edit could plausibly have ended a
+  sentence** — a space, a newline or a mark — which keeps an IPC round trip off
+  every keystroke.
+
+And the same bilingual quote trap as D41's: the mark can hide behind a closing
+quote, and German closes a quotation with `“` where English opens one with it,
+so every quote character counts as one to step over regardless of which side it
+nominally belongs to.
 
 ### D40 — The personal key
 

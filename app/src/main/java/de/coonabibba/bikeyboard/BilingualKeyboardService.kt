@@ -60,6 +60,19 @@ class BilingualKeyboardService : InputMethodService() {
      * crashed once.
      */
     private var haptics: Haptics? = null
+
+    /**
+     * Whether this field wants sentences capitalised (D42).
+     *
+     * Read once from the `EditorInfo`, but *applied* after every edit rather
+     * than only when focus arrives. It used to be applied once and never again,
+     * so the first sentence began with a capital and no other did — and since
+     * the only thing that ever turned shift back on was the double-space full
+     * stop, every question and every exclamation was followed by a lowercase
+     * letter, `?` and `!` being reachable only by long-press.
+     */
+    private var autoCapitalise = false
+
     /**
      * Whether the keypress trail is being drawn, and which of the two settings
      * that answer came from (D19, D38).
@@ -190,7 +203,8 @@ class BilingualKeyboardService : InputMethodService() {
         // dictionary. Recorded here so later stages can honour it.
         val isPassword = FieldPolicy.isPassword(info.inputType)
         layer = if (FieldPolicy.isNumeric(info.inputType)) Layer.SYMBOLS else Layer.LETTERS
-        shifted = !isPassword && shouldAutoCapitalise(info)
+        autoCapitalise = !isPassword && shouldAutoCapitalise(info)
+        shifted = autoCapitalise
         capsLock = false
         shiftTaps.reset()
         keyboardView.layout = Layouts.forLayer(layer, inPassword = isPassword)
@@ -256,6 +270,7 @@ class BilingualKeyboardService : InputMethodService() {
                 // and ordinary input is what closes this window. The space is
                 // part of the same gesture, so it does not count.
                 pendingUndo = corrected
+                applyAutoShift(ic)
             }
 
             // No double tap here: two quick taps are what you do when you want
@@ -363,6 +378,8 @@ class BilingualKeyboardService : InputMethodService() {
         noteInsertion(key, alternate, text, touch)
         consumeShift()
 
+        applyAutoShift(ic, text)
+
         if (retract) {
             // The apostrophe is a word character (D27), so retracting the space
             // in front of one does not end a word — it joins the punctuation to
@@ -387,6 +404,26 @@ class BilingualKeyboardService : InputMethodService() {
         spaceGesture.afterAcceptedSuggestion &&
             TextEdits.hugsPreviousWord(text) &&
             ic.getTextBeforeCursor(1, 0)?.toString() == " "
+
+    /**
+     * Turns shift on when the cursor has arrived at the start of a sentence
+     * (D42).
+     *
+     * Only ever *on*. Turning it off again would be second-guessing a shift the
+     * typist pressed on purpose, and [consumeShift] already spends it on the
+     * next letter.
+     *
+     * The field is only asked when the edit could plausibly have ended a
+     * sentence — a space, a newline or a mark — which keeps a round trip off
+     * every keystroke.
+     */
+    private fun applyAutoShift(ic: InputConnection, inserted: String = " ") {
+        if (!autoCapitalise || shifted || capsLock) return
+        if (inserted.none { it.isWhitespace() || it in TextEdits.SENTENCE_MARKS }) return
+        if (!TextEdits.startsSentence(ic.getTextBeforeCursor(SENTENCE_START_LOOKBEHIND, 0))) return
+        shifted = true
+        keyboardView.shifted = true
+    }
 
     /**
      * Spends a one-shot shift. A latched one is not spent — that is the whole
@@ -1343,6 +1380,12 @@ class BilingualKeyboardService : InputMethodService() {
          * character in front of them.
          */
         const val SENTENCE_LOOKBEHIND = 3
+
+        /**
+         * Enough to see a sentence mark, any closing quotes after it, and the
+         * spaces after those.
+         */
+        const val SENTENCE_START_LOOKBEHIND = 8
 
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64

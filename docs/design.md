@@ -2067,6 +2067,39 @@ That was found by a test fixture, and it is the right behaviour in production
 too — if a wordlist asset ever fails to load, the alternative is a keyboard
 rewriting text on the strength of nothing.
 
+**Splitting the counts by position does not help, and was measured.** The
+obvious next move is that a trigram only sees the word start for the first two
+positions — by the third character the boundary has slid out of the window, so
+`teh`'s `(t,e,h)` is the same context as `stehen`'s. Bucketing the table by
+distance from the nearer end puts them back apart. Built and swept at two, three
+and four buckets against the nine slips the prior currently blocks:
+
+| | 1 bucket | 2 | 3 | 4 |
+|---|---|---|---|---|
+| `thier` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `freind` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `villeicht` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `untill` | 0.75 | 0.49 | 0.92 | 1.0 |
+
+Nothing moves, and the giveaway is the control: the model scores the *correct*
+words just as badly — `friend` at 0.089, `until` at 0.060. It has no
+discriminating power on this class in any configuration, while names degrade as
+the buckets multiply and thin the data (`Sven` from 0.0065 to 0.0013).
+
+The reason is D2 rather than the window. `freind` is built from `rei`, `ein` and
+`ind`, all extremely common **German**; `villeicht` is German-plausible
+throughout; `thier` looks like `hier` and `Tier`. These sequences are legitimate
+somewhere in the union of the two languages, and where in the word they sit does
+not change that. **A bilingual keyboard's spelling model is structurally weaker
+than a monolingual one**, for the same reason D39f found more swipe collisions
+in German than in English and more again in both together. This is a tax on D2,
+not a bug to be fixed.
+
+Loosening the falloff instead (D34's slider) trades about one for one — from 7
+to 5 buys three of the nine and loses `Tyberius` and `Rhys` — which is far worse
+than the sixteen-for-one the shape model itself got. There is no cheap lever
+left.
+
 **What this is not** is the context model of D10/D12. It knows nothing about the
 previous word; it is a claim about spelling alone, which is precisely why it is
 cheap enough to be exact and safe enough to ship ahead of step 6. The gains left

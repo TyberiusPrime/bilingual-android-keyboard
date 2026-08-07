@@ -38,6 +38,21 @@ class GestureDecoder(private val keys: KeyGeometry) {
     private var prepared: GesturePath? = null
 
     /**
+     * How much each point of the stroke counts, worked out once per swipe.
+     *
+     * Not every point is equally telling. In the middle of a straight run the
+     * finger had to be *somewhere*, and where it was says next to nothing about
+     * which word this is — any candidate whose route runs roughly that way
+     * explains it. A **corner** is different: the finger changed direction on
+     * purpose, and it does that at letters. So a word that fails to account for
+     * a corner is failing to account for the evidence, while one that misses a
+     * bit of straight is merely taking a slightly different line to the same
+     * place.
+     */
+    private val cornerWeight = FloatArray(GesturePath.SAMPLES)
+    private var cornerTotal = 0f
+
+    /**
      * How far the finger would travel to swipe [word], in pixels, or
      * [UNSWIPEABLE] if the word has fewer than two distinct keys.
      *
@@ -169,6 +184,39 @@ class GestureDecoder(private val keys: KeyGeometry) {
                 nearestOnPath(path, entry.centreX, entry.centreY)
             }
         }
+        measureCorners(path)
+    }
+
+    /**
+     * Scores every point of the stroke by how sharply the finger turned there.
+     *
+     * Measured across a window of several samples rather than between
+     * neighbours: adjacent points are a few pixels apart and the angle between
+     * them is mostly digitiser noise, which would scatter the emphasis at
+     * random instead of putting it on the corners.
+     */
+    private fun measureCorners(path: GesturePath) {
+        val count = path.xs.size
+        cornerTotal = 0f
+        for (j in 0 until count) {
+            val before = (j - CORNER_WINDOW).coerceAtLeast(0)
+            val after = (j + CORNER_WINDOW).coerceAtMost(count - 1)
+            val inX = path.xs[j] - path.xs[before]
+            val inY = path.ys[j] - path.ys[before]
+            val outX = path.xs[after] - path.xs[j]
+            val outY = path.ys[after] - path.ys[j]
+            val inLength = hypot(inX, inY)
+            val outLength = hypot(outX, outY)
+            val turn = if (inLength <= 0f || outLength <= 0f) {
+                0f
+            } else {
+                val cos = (inX * outX + inY * outY) / (inLength * outLength)
+                ((1f - cos) / 2f).coerceIn(0f, 1f)
+            }
+            val weight = 1f + CORNER_EMPHASIS * turn
+            cornerWeight[j] = weight
+            cornerTotal += weight
+        }
     }
 
     private fun nearestOnPath(path: GesturePath, x: Float, y: Float): Float {
@@ -219,9 +267,10 @@ class GestureDecoder(private val keys: KeyGeometry) {
                 )
                 if (d < best) best = d
             }
-            total += best * best
+            // Weighted by how much of a corner this point is; see [cornerWeight].
+            total += cornerWeight[j] * best * best
         }
-        return total / path.xs.size
+        return total / cornerTotal
     }
 
     /** Distance from a point to the line segment between two key centres. */
@@ -413,6 +462,14 @@ class GestureDecoder(private val keys: KeyGeometry) {
          * costs the word.
          */
         const val MAX_COST = 1.8f
+
+        /**
+         * How much more a corner counts than a straight. Measured, not picked.
+         */
+        const val CORNER_EMPHASIS = 10f
+
+        /** Samples either side used to measure a turn, to see past the noise. */
+        const val CORNER_WINDOW = 3
 
         private const val INITIAL_POLYLINE = 32
     }

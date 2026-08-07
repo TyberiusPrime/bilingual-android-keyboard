@@ -1539,13 +1539,32 @@ realistic traces and 93% to 95% on sloppy ones. The unknown-word prior is
 raised to the same power, or it would be swamped and every stroke would come
 back certain.
 
-`swiping` still does not win — it lands third, in the strip, one tap away — and
-that is correct rather than a shortfall. `swiping` and `sweeping` fold to
-`s-w-i-p-i-n-g` and `s-w-e-p-i-n-g`, and the straight run from `w` to `p`
-crosses both `e` and `i`: they are very nearly the same stroke, in the same
-class as `das` and `dass`. Frequency breaks the tie, ten to one, and the runner
-up is one tap away. Teaching the word with the personal key (D40) settles it
-permanently, which is exactly what D8 built that key for.
+`swiping` still does not win, and after a second look that is not a shortfall
+at all — it is **arithmetic**. `swiping` is `s w i p i n g` and `sweeping` is
+`s w e p i n g`, and `w`, `e`, `i` and `p` all sit on the top row at the same
+height: `w→i→p` and `w→e→p` are *the same straight line*, and the tails
+`p→i→n→g` are identical. Same start, same corners, same end, same length. The
+two words are one stroke, exactly, and no geometry will ever separate them —
+they are `das` and `dass` again, in a less obvious costume.
+
+So frequency decides, ten to one, and the loser is second in the strip. Teaching
+the word with the personal key (D40) settles it for good, which is exactly what
+D8 built that key for, and there is a test that says so.
+
+**Corners count for more than straights.** Suggested from the phone while
+chasing the above, and kept although it did not help the above. In the middle of
+a straight run the finger had to be *somewhere*, and where it was says almost
+nothing about which word this is — any candidate running roughly that way
+explains it. A corner is a deliberate change of direction, and fingers change
+direction at letters, so a word that fails to account for a corner is failing to
+account for the evidence. Coverage therefore weights each point of the stroke by
+how sharply the finger turned there, measured across a window of a few samples
+so the reading is a corner rather than digitiser noise.
+
+It earned its place on the corpus even though it was powerless on the word that
+prompted it: realistic traces 96% to 97%, sloppy 95% to 96%, frame-rate sampled
+93% to 94%. Which is the useful shape of that result — the idea was right, the
+diagnosis it came from was wrong, and those are separate questions.
 
 **The cost of all this** was decode time: from about 0.3ms to about 3ms per
 stroke. Once per word rather than once per keystroke, so there was room — but a

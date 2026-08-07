@@ -1716,6 +1716,57 @@ neither doubles as anything else. And a browser that genuinely wants no help
 can still say so with `NO_SUGGESTIONS`, which is checked before any of this and
 is the app's decision rather than a guess made from a variation code.
 
+### D39f — How much of a language a swipe cannot see, and why Dvorak is worse
+
+`scripts/swipe-collisions.py`, run on the shipped wordlists. A word's shape is
+the polyline through its letters' key centres, reduced: consecutive repeats
+collapse, and a vertex lying *on* the line between its neighbours disappears.
+Two words with the same reduced shape cannot be told apart by any decoder,
+however good — only by how common they are.
+
+| | QWERTY | Dvorak |
+|---|---|---|
+| English — typing that collides | 41.6% | 51.8% |
+| English — **irreducible error** | **3.10%** | **4.47%** |
+| German — typing that collides | 42.3% | 50.8% |
+| German — **irreducible error** | **4.91%** | **7.82%** |
+
+The irreducible error is the share of words a perfect decoder must still get
+wrong, because all it can do with a collision is answer with whichever member
+is commoner. About one word in thirty in English, one in twenty in German.
+
+**Dvorak is markedly worse — half again as bad in German — and the reason is
+that it is optimised for exactly the property that destroys a swipe.** Its
+design puts the frequent letters on the home row: all five vowels together on
+the left, the common consonants on the right. Letters sharing a row are
+*collinear*, and a vertex on a straight line leaves no trace in the shape. So
+Dvorak turns `in`/`ihn`/`ihnen` into one stroke, and `ein`/`einen`/`essen`/
+`eben` into another. Minimising finger travel and maximising home-row use is
+the same thing as flattening the shapes, and a swipe is nothing but shape.
+
+The measurement is robust in the ways that could have made it an artifact. It
+is unchanged across key aspect ratios from square to 1.8 — collinearity
+survives scaling — and unchanged whether the rows are a uniform grid or
+stretched to fill the width as this keyboard actually places them. The
+collisions are within-row and doubled-letter, not a detail of placement.
+
+Some things worth knowing beyond the totals:
+
+- **`das`/`dass` alone is 0.61% of German typing**, an eighth of the whole
+  German error. `the`/`there`/`these` is 0.60% of English.
+- **5.35% of English typing cannot be swiped at all** — it is `a` and `I`,
+  words of a single key. German's figure is 0.26%, having no common one-letter
+  words.
+- Case and accent collisions (`wurde`/`würde`) cost German a further 0.45% and
+  English nothing, as it has neither.
+
+Which puts a ceiling on the feature and says where the remaining work is. The
+decoder is at 96–97% top-1 on synthetic traces against a 3–5% floor it cannot
+go below, so **geometry is close to spent**. Getting past it needs context —
+knowing that the word before was `ich` makes `das`/`dass` a decidable question
+rather than a coin toss weighted by frequency. That is D10 and D12, and this
+measurement is the argument for them.
+
 ### D40 — The personal key
 
 **The strip could only offer to remember a word when it had a slot going

@@ -68,6 +68,76 @@ class DictionarySuggestions(
         val cost: Float = 0f,
     )
 
+    /**
+     * One word, however many lexicons happen to carry it (D45).
+     *
+     * Two thousand nine hundred spellings are in both wordlists — a fifth of
+     * the typing mass of either language — and until this ran they arrived as
+     * two rival candidates. Both went into the confidence divisor and only one
+     * could be the numerator, so a word in both languages was measurably harder
+     * to correct *to* than a word in one: `hnad` reached `hand` at 0.37 where
+     * `wrold` reached `world` at 0.99, the same transposition against the same
+     * falloff.
+     *
+     * Summing is not a thumb on the scale. "The typist meant German `Hand`" and
+     * "the typist meant English `hand`" both end with the same letters on the
+     * screen, so the chance the replacement is right is the chance of either.
+     */
+    private fun merge(candidates: List<Candidate>): List<Candidate> {
+        if (candidates.size < 2) return candidates
+        val merged = LinkedHashMap<String, Candidate>(candidates.size)
+        candidates.forEach { candidate ->
+            val key = keyOf(candidate.word)
+            val existing = merged[key]
+            merged[key] = if (existing == null) candidate else join(existing, candidate)
+        }
+        return if (merged.size == candidates.size) candidates else merged.values.toList()
+    }
+
+    /**
+     * What counts as the same word for merging: the folded spelling, so that
+     * `Hand` and `hand` are one entry.
+     *
+     * **A single letter is keyed by its exact spelling instead**, because for
+     * one letter the casing is not a detail of the word, it is the word: `i`
+     * and `I` are German and English respectively and D41 exists to choose
+     * between them. Folding them together would leave one candidate and nothing
+     * to correct.
+     */
+    private fun keyOf(word: String): String =
+        if (word.length == 1) word else Folding.fold(word)
+
+    /**
+     * Two entries for one word, added up.
+     *
+     * **Which spelling survives** is the only real decision here, and it is
+     * D22's rule — the least capitalised — reached from the other side. That
+     * rule kept one casing per word *within* a list; it says nothing about a
+     * German noun meeting its English twin, which is why `Moment` (commoner in
+     * German) was being handed to people writing English. The typist supplies
+     * the capital, as they already do for `Zeit`.
+     *
+     * Only when the two differ by nothing but case. `weiß` against `Weiss` is
+     * not one spelling of one word, so that stays settled by weight, as before.
+     *
+     * **The language goes neutral**, because it is now the honest answer: a
+     * word both lists carry is not evidence of either, and D4's indicator
+     * exists to explain corrections rather than to pick a side.
+     */
+    private fun join(a: Candidate, b: Candidate): Candidate {
+        val surface = when {
+            !a.word.equals(b.word, ignoreCase = true) -> if (b.weight > a.weight) b.word else a.word
+            b.word.firstOrNull()?.isLowerCase() == true -> b.word
+            else -> a.word
+        }
+        return Candidate(
+            surface,
+            a.weight + b.weight,
+            if (a.language == b.language) a.language else null,
+            minOf(a.cost, b.cost),
+        )
+    }
+
     override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates {
         val prefix = Folding.fold(word)
         if (prefix.isEmpty()) return Candidates.NONE
@@ -147,20 +217,22 @@ class DictionarySuggestions(
         val filling = into.size < SuggestionSlots.CAPACITY
         if (!correcting && !filling) return null
 
-        var best: Candidate? = null
-        var bestScore = 0f
         // The typed word standing as it is, which is what a correction has to
         // beat rather than merely lead.
         var mass = priorFor(typed)
+        // Keyed by folded spelling, so that a word both lists carry arrives
+        // once with its weight added up rather than twice as its own rival
+        // (D45). The mass is unaffected — the same scores, grouped.
+        val nearby = if (correcting) HashMap<String, Candidate>() else null
 
         forEachNearby(typed, touches) { lexicon, index, cost ->
             val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
-            if (correcting) {
+            if (nearby != null) {
                 mass += score
-                if (score > bestScore) {
-                    bestScore = score
-                    best = Candidate(lexicon.wordAt(index), score, lexicon.language)
-                }
+                val found = Candidate(lexicon.wordAt(index), score, lexicon.language)
+                val key = keyOf(found.word)
+                val existing = nearby[key]
+                nearby[key] = if (existing == null) found else join(existing, found)
             }
             // Cost zero is the word itself, which is not a correction. It gets
             // here because folding makes `uber` and `über` one lookup — and
@@ -170,12 +242,12 @@ class DictionarySuggestions(
             }
         }
 
-        val winner = best ?: return null
-        if (!correcting || winner.word.equals(typed, ignoreCase = true)) return null
+        val winner = nearby?.values?.maxByOrNull { it.weight } ?: return null
+        if (winner.word.equals(typed, ignoreCase = true)) return null
         return Correction(
             text = applyTypedCase(winner.word, typed),
             original = typed,
-            confidence = bestScore / mass,
+            confidence = winner.weight / mass,
             language = winner.language,
         )
     }
@@ -420,14 +492,18 @@ class DictionarySuggestions(
     ): List<Suggestion> {
         if (candidates.isEmpty()) return emptyList()
 
+        // A word both lists carry is one word and takes one slot (D45). Before
+        // this the strip could spend two of its three saying `baby` and `Baby`.
+        val merged = merge(candidates)
+
         // Confidence is the candidate's share of everything that matches: a
         // unigram P(word | what was typed so far). Crude, and honestly crude —
         // D3 wants a calibrated number and this is the most a lookup can say.
         var mass = prior
-        candidates.forEach { mass += it.weight }
+        merged.forEach { mass += it.weight }
         if (mass <= 0f) return emptyList()
 
-        return candidates
+        return merged
             .sortedByDescending { it.weight }
             .asSequence()
             .map { Suggestion(applyTypedCase(it.word, typed), it.weight / mass, it.language) }
@@ -546,6 +622,11 @@ class DictionarySuggestions(
      * Deliberately only for single letters. The same reasoning would capitalise
      * every German noun on sight — `haus` to `Haus` — which may well be right
      * and is emphatically a separate decision.
+     *
+     * **The one place a word in both lists is deliberately left doubled** (D45).
+     * Everywhere else `i` and `I` are one word arriving twice; here the
+     * difference between them is the entire question, and adding them up would
+     * leave nothing to correct.
      */
     private fun addCasedForms(typed: String, into: MutableList<Candidate>): Correction? {
         if (typed.length != 1 || !typed[0].isLetter()) return null

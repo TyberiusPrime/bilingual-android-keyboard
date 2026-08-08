@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D42 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D45 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -40,6 +40,13 @@ below.
       the lever for it.
 - [ ] Is the unknown-word prior right (D28)? Everything the auto-correction
       threshold does, it does relative to that one number, and it was guessed.
+- [ ] **Next-word prediction has no data source.** D9 promises it and the
+      wordlists are unigram, so the strip is blank between words until step 6 or
+      until a bigram asset with compatible licensing turns up.
+- [ ] **Language inference, as opposed to provenance.** D2 asks for per-word
+      inference from sentence context; what exists is a label saying which file
+      the word came from (D45 makes that label honest, it does not make it an
+      inference). Nothing reads `EditorInfo.hintLocales` either.
 - [ ] Auto-correction still cannot spell `Straße` from `strasse` (D28), `ß`
       folding one character at a time.
 - [ ] The `'s` contractions are systematically under-weighted (D34): their share
@@ -82,6 +89,15 @@ so far as evidence, and a scoring model where a candidate from either language
 can win at any position. The unit of language identity is the word, not the
 field and not the message.
 
+**None of the inference exists yet, and the decision reads as though it does.**
+What is built is per-candidate *provenance*: `Suggestion.language` records which
+file the word was read from, and no context of any kind is consulted anywhere in
+the path. The second half of the requirement — that a candidate from either
+language can win at any position — is built and is the part that matters so far
+(D22, D45). The first half waits on step 6. Nor is anything read from
+`EditorInfo`: this decision demotes `packageName` and the locale hints to a weak
+prior, which implies used-as-a-prior, and today they are used as nothing at all.
+
 ### D3 — Auto-replace only at high confidence
 
 Silent replacement is permitted, but only above a tuned confidence threshold;
@@ -120,6 +136,12 @@ Deliberately per candidate rather than per keyboard — under D2 the language
 belongs to the word, so a strip showing a German and an English candidate side
 by side, differently tinted, is the honest picture. There is nowhere else it
 could go without inventing a current language for it to describe.
+
+**The neutral wash means "no language claim", not "personal"** (D45). It was
+introduced for the personal store, which belongs to no language; a word both
+wordlists carry belongs to no language either, and for a fifth of typing mass
+the tint used to name whichever corpus happened to weigh the word more. Since
+the indicator is diagnostic, saying *both* is worth more than picking one.
 
 ### D5 — QWERTY letter positions, umlauts on long-press
 
@@ -229,6 +251,17 @@ are now load-bearing rather than nice-to-have:
 A permanently present strip, so keyboard height never changes while typing. It
 carries below-threshold corrections (which under D3 are offered rather than
 applied) and next-word predictions.
+
+**Only the first half is built, and the second is further off than it looks.**
+`candidatesFor` returns nothing for an empty prefix, and `MIN_PREFIX` wants two
+letters before it will complete, so the three slots are empty at every word
+boundary *and* at every word's first keystroke — roughly a third of the cycle.
+It is not a matter of wiring something up that exists: both shipped wordlists
+are unigram (FrequencyWords 50k), so there is no bigram data in the repo to
+predict from at all. Next-word prediction needs either a new corpus asset or
+step 6's model, and until one of them lands the strip has nothing true to say
+between words. Step 3 delivered half of this decision; the roadmap read as
+though it had delivered all of it.
 
 ### D10 — Small on-device neural model from the start
 
@@ -2140,6 +2173,78 @@ Measuring the exception turned up a bug beside it. `I DONT CARE` came back as
 `I Don't CARE`, because `applyTypedCase` only ever restored the *first* letter's
 case — the right rule for `Haus` and the wrong one for a word that is all
 capitals. A correction inside a shout now stays shouted.
+
+### D45 — A word in both dictionaries is one word
+
+Found by reviewing D2's promises against the build rather than by typing.
+
+**2,933 folded spellings are in both wordlists, and they carry 21.1% of the
+German corpus and 21.4% of the English.** `in`, `was`, `so`, `an`, `will`,
+`man`, `hand`, `name`, `problem`, `moment`, `baby`, `kind`. That is not a corner
+of the vocabulary, it is the part where the two languages actually touch — which
+under D1 and D2 is the part this project exists for.
+
+Both copies arrived as separate candidates. Both went into the confidence
+divisor and only one could ever be the numerator, so **a word in both languages
+stood in its own way**, at a discount measured between 27% and 48%. The effect
+was that corrections *toward* a shared word could not reach the threshold at
+all. Same slip, same falloff, the only variable being how many lists hold the
+target:
+
+| target in both | | target in one | |
+|---|---|---|---|
+| `hnad` → `hand` | 0.37 | `wrold` → `world` | 0.99 ✓ |
+| `probelm` → `Problem` | 0.52 | `peopel` → `people` | 1.00 ✓ |
+| `kidn` → `kind` | 0.58 | `hoem` → `home` | 1.00 ✓ |
+| `momnet` → `Moment` | 0.64 | `arbiet` → `Arbeit` | 1.00 ✓ |
+| `nmae` → `name` | 0.73 | | |
+
+**So candidates are grouped by folded spelling and their weights added.** Not a
+thumb on the scale: "the typist meant German `Hand`" and "the typist meant
+English `hand`" put the same letters on the screen, so the chance the
+replacement is right is the chance of either. The divisor is untouched — the
+same scores, grouped — which is why this can only raise confidence in the
+candidate that was already winning, never invent one.
+
+Measured after: `nmae` → `name` 1.00, `momnet` → `moment` 1.00, `probelm` →
+`problem` 1.00, `bayb` → `baby` 1.00, `wasd` → `was` 0.99, `kidn` → `kind` 0.92,
+all now firing. `hnad` → `hand` reaches 0.66 and `alos` → `also` 0.85 and still
+do not, beaten by genuine rivals rather than by themselves. Across the wider
+sets: 19 → 20 of the classic slips, 16 → 17 of D43's typos, and **no name loses
+its protection** — the floor sweep at 7 nats is unchanged at one.
+
+Two things fell out of the same grouping.
+
+**The casing was wrong, and nobody had noticed.** The surviving copy was
+whichever corpus weighed the word more, so anyone writing English was handed
+`Moment` and `Problem` — German spellings of English words. The merged entry
+keeps the **least capitalised** spelling, which is D22's rule arriving from the
+other side: that rule kept one casing per word *within* a list and said nothing
+about a German noun meeting its English twin. The typist supplies the capital,
+exactly as they already do for `Zeit`. Only when the two differ by nothing but
+case — `weiß` against `Weiss` is not one spelling of one word, and stays settled
+by weight.
+
+**The strip stops repeating itself.** `bab` was spending two of its three slots
+on `baby` and `Baby`; `prob`, `mom` and `nam` likewise. One word, one slot.
+
+**The D4 tint goes neutral for a shared word**, which is the honest reading: a
+word both lists carry is not evidence of either language, and the indicator
+exists to explain corrections rather than to pick a side. It shares the neutral
+wash with the personal store, and the two mean the same thing — *this keyboard
+makes no language claim about this word*.
+
+**One place is deliberately left doubled.** D41 turns `i` into `I`, and that
+runs entirely on the two lists disagreeing about the casing of one letter. For a
+single letter the casing is not a detail of the word, it is the word, so
+single letters are keyed by their exact spelling and the two survive separately.
+
+**Not done: the same divisor in the swipe path.** `rankGesture` double-counts a
+shared word in exactly the same way. It is left alone because gesture scores are
+square-rooted before they are summed, so grouping them is an approximation
+rather than the identity it is here, and because ordering there decides what
+gets committed — a change that needs its own accuracy run against D39's corpus,
+not a free ride on this one.
 
 ---
 

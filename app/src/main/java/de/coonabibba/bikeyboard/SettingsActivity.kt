@@ -116,6 +116,27 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun addCorrection(into: LinearLayout) {
+        // The trail switch, which until D40 lived only on a key. That key now
+        // appears in password fields alone, so without a home here the setting
+        // for every *other* field became unreachable the moment the personal
+        // key took its place — stuck on, with no way to say otherwise.
+        into.addView(section(R.string.settings_section_trace))
+        into.addView(
+            SwitchCompat(this).apply {
+                setText(R.string.setting_show_trace)
+                isChecked = KeyboardPrefs.showTrail(this@SettingsActivity, inPassword = false)
+                setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
+                    KeyboardPrefs.setShowTrail(this@SettingsActivity, inPassword = false, show = checked)
+                }
+            },
+        )
+        into.addView(
+            TextView(this).apply {
+                setText(R.string.setting_show_trace_explanation)
+                alpha = 0.7f
+            },
+        )
+
         into.addView(section(R.string.settings_section_correction))
 
         val explanation = TextView(this).apply {

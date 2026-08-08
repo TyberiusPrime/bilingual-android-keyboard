@@ -1,5 +1,6 @@
 package de.coonabibba.bikeyboard
 
+import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
@@ -59,6 +60,19 @@ class BilingualKeyboardService : InputMethodService() {
      * crashed once.
      */
     private var haptics: Haptics? = null
+
+    /**
+     * Whether this field wants sentences capitalised (D42).
+     *
+     * Read once from the `EditorInfo`, but *applied* after every edit rather
+     * than only when focus arrives. It used to be applied once and never again,
+     * so the first sentence began with a capital and no other did — and since
+     * the only thing that ever turned shift back on was the double-space full
+     * stop, every question and every exclamation was followed by a lowercase
+     * letter, `?` and `!` being reachable only by long-press.
+     */
+    private var autoCapitalise = false
+
     /**
      * Whether the keypress trail is being drawn, and which of the two settings
      * that answer came from (D19, D38).
@@ -97,6 +111,12 @@ class BilingualKeyboardService : InputMethodService() {
             onDeleteWord = ::handleDeleteWord
             onShiftSwipeUp = ::cycleWordCase
             onLineStep = ::moveCursorByLine
+            onGlide = ::handleGlide
+            onRetractSteerTap = ::retractSteerTap
+            onPersonalMenu = ::quickWords
+            onQuickInsert = ::insertQuickWord
+            onPersonalHold = ::learnCurrentWord
+            onPersonalSettings = ::openSetup
             onPress = { haptics?.keyPress(this) }
         }
         suggestionStrip = SuggestionStripView(this).apply {
@@ -183,10 +203,14 @@ class BilingualKeyboardService : InputMethodService() {
         // dictionary. Recorded here so later stages can honour it.
         val isPassword = FieldPolicy.isPassword(info.inputType)
         layer = if (FieldPolicy.isNumeric(info.inputType)) Layer.SYMBOLS else Layer.LETTERS
-        shifted = !isPassword && shouldAutoCapitalise(info)
+        autoCapitalise = !isPassword && shouldAutoCapitalise(info)
+        shifted = autoCapitalise
         capsLock = false
         shiftTaps.reset()
-        keyboardView.layout = Layouts.forLayer(layer)
+        keyboardView.layout = Layouts.forLayer(layer, inPassword = isPassword)
+        // A menu left open across a change of field would be offering to type
+        // somebody's address into whatever has the focus now.
+        keyboardView.dismissQuickMenu()
         keyboardView.shifted = shifted
         keyboardView.capsLocked = false
 
@@ -205,6 +229,9 @@ class BilingualKeyboardService : InputMethodService() {
 
         suggestionsAllowed = FieldPolicy.suggestionsAllowed(info.inputType)
         learningAllowed = FieldPolicy.learningAllowed(info.inputType, info.imeOptions)
+        // A stroke is decoded against the dictionaries or not at all, so
+        // wherever there are no suggestions there is no swiping either (D39).
+        keyboardView.glideEnabled = suggestionsAllowed
         // Focus can land in the middle of existing text, and what precedes the
         // cursor there is text this keyboard did not type. Only a cursor at
         // position zero means there is nothing in front of it to be wrong
@@ -243,6 +270,7 @@ class BilingualKeyboardService : InputMethodService() {
                 // and ordinary input is what closes this window. The space is
                 // part of the same gesture, so it does not count.
                 pendingUndo = corrected
+                applyAutoShift(ic)
             }
 
             // No double tap here: two quick taps are what you do when you want
@@ -251,7 +279,11 @@ class BilingualKeyboardService : InputMethodService() {
             KeyAction.Backspace -> {
                 // The one keystroke where backspace is not a deletion (D14).
                 val undo = pendingUndo
-                if (undo == null || !undoCorrection(ic, undo)) deleteOne(ic)
+                when {
+                    undo != null && undoCorrection(ic, undo) -> Unit
+                    deleteGlidedWord(ic) -> Unit
+                    else -> deleteOne(ic)
+                }
             }
 
             KeyAction.Enter -> {
@@ -288,7 +320,7 @@ class BilingualKeyboardService : InputMethodService() {
 
             KeyAction.ToggleLayer -> {
                 layer = Layouts.other(layer)
-                keyboardView.layout = Layouts.forLayer(layer)
+                keyboardView.layout = Layouts.forLayer(layer, inPassword = passwordField)
             }
 
             KeyAction.ToggleTrail -> {
@@ -296,6 +328,12 @@ class BilingualKeyboardService : InputMethodService() {
                 KeyboardPrefs.setShowTrail(this, passwordField, showTrail)
                 applyTrailVisibility()
             }
+
+            // Handled entirely in the view, which owns the menu (D40). It never
+            // reaches here, but the branch has to exist for the `when` to be
+            // exhaustive — and an exhaustive `when` is what will catch the next
+            // key action somebody adds and forgets to wire up.
+            KeyAction.Personal -> Unit
         }
     }
 
@@ -340,6 +378,8 @@ class BilingualKeyboardService : InputMethodService() {
         noteInsertion(key, alternate, text, touch)
         consumeShift()
 
+        applyAutoShift(ic, text)
+
         if (retract) {
             // The apostrophe is a word character (D27), so retracting the space
             // in front of one does not end a word — it joins the punctuation to
@@ -366,6 +406,26 @@ class BilingualKeyboardService : InputMethodService() {
             ic.getTextBeforeCursor(1, 0)?.toString() == " "
 
     /**
+     * Turns shift on when the cursor has arrived at the start of a sentence
+     * (D42).
+     *
+     * Only ever *on*. Turning it off again would be second-guessing a shift the
+     * typist pressed on purpose, and [consumeShift] already spends it on the
+     * next letter.
+     *
+     * The field is only asked when the edit could plausibly have ended a
+     * sentence — a space, a newline or a mark — which keeps a round trip off
+     * every keystroke.
+     */
+    private fun applyAutoShift(ic: InputConnection, inserted: String = " ") {
+        if (!autoCapitalise || shifted || capsLock) return
+        if (inserted.none { it.isWhitespace() || it in TextEdits.SENTENCE_MARKS }) return
+        if (!TextEdits.startsSentence(ic.getTextBeforeCursor(SENTENCE_START_LOOKBEHIND, 0))) return
+        shifted = true
+        keyboardView.shifted = true
+    }
+
+    /**
      * Spends a one-shot shift. A latched one is not spent — that is the whole
      * difference between them.
      */
@@ -386,7 +446,227 @@ class BilingualKeyboardService : InputMethodService() {
      */
     private fun applyTrailVisibility() {
         keyboardView.trailEnabled = showTrail
+        // One switch over both pictures of what was just typed (D40). The
+        // swiped stroke is the franker of the two — the trail says which five
+        // keys, the stroke draws the word's shape and leaves it on screen — so
+        // hiding one without the other would make the switch a half-truth.
+        keyboardView.strokeVisible = showTrail
         if (!showTrail) clearTrail()
+    }
+
+    // -- the personal key (D40) -----------------------------------------------
+
+    /**
+     * The words tagged for the quick menu.
+     *
+     * Re-read if the file has changed, because the launcher screen may have
+     * been in front of this keyboard a second ago adding one — that is the
+     * usual way a word gets onto this menu, and a menu that needed the keyboard
+     * restarted to notice would be useless.
+     */
+    private fun quickWords(): List<String> {
+        personalStore.reloadIfChanged()
+        return personalStore.quick()
+    }
+
+    /**
+     * Inserts a whole tagged string — an address, a name — at the cursor.
+     *
+     * Committed as it stands, with no trailing space and no shift applied. What
+     * is on this menu is exact by construction: somebody typed it once and said
+     * "remember precisely that", and capitalising it because a one-shot shift
+     * happened to be pending would be the keyboard second-guessing the one
+     * thing it was told for certain.
+     */
+    private fun insertQuickWord(text: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(text, 1)
+        if (expectedCursor >= 0) expectedCursor += text.length
+        consumeShift()
+        clearTrail()
+        word.reset(known = true)
+        word.insert(text)
+        glideWord = null
+        glideAlternates = emptyList()
+        reverted = null
+        pendingUndo = null
+        spaceGesture.otherInput()
+        haptics?.keyPress(keyboardView)
+        refreshSuggestions()
+    }
+
+    /**
+     * Remembers the word in front of the cursor (D8, D40).
+     *
+     * The whole point of the key. Under D8 the personal store is the only thing
+     * that ever teaches this keyboard anything, so how easily a word gets into
+     * it sets the ceiling on how good the keyboard becomes — and until now the
+     * only way in was an offer in the suggestion strip, which appeared only
+     * when there was a slot going spare. A word the keyboard *nearly* knows
+     * produces three confident suggestions and no room to say "no, the thing I
+     * actually typed".
+     */
+    private fun learnCurrentWord() {
+        val text = tokenToLearn()
+        if (text.isEmpty()) {
+            // Nothing to learn is not nothing to do: say so with the same
+            // double tick a correction uses, so the hold is never silent.
+            haptics?.correction()
+            return
+        }
+        if (!learningAllowed || !addWord(text)) {
+            haptics?.correction()
+            return
+        }
+        // The word is known now, so the strip's own add-word offer goes away
+        // and the completions change. The wave falls *into* the keys rather
+        // than rising off the space bar: a correction is the keyboard deciding
+        // something and this is the keyboard being told, which is the same
+        // event from the other end (D40).
+        keyboardView.flashLearned()
+        haptics?.correction()
+    }
+
+    /**
+     * What the personal key would remember: everything between the spaces
+     * around the cursor (D40).
+     *
+     * Read back from the field rather than taken from [word], which tracks a
+     * *word* and therefore stops at the first character that is not a letter.
+     * That is right for suggesting and correcting and useless here — asking it
+     * for `john@coonabibba.de` returns `de`, and an address is one of the very
+     * things somebody most wants remembered.
+     */
+    private fun tokenToLearn(): String {
+        val ic = currentInputConnection ?: return ""
+        val token = TextEdits.tokenAtCursor(
+            before = ic.getTextBeforeCursor(LEARN_REACH, 0),
+            after = ic.getTextAfterCursor(LEARN_REACH, 0),
+        )
+        // A run this long with no space in it is pasted text, not something
+        // anybody typed meaning to keep.
+        return if (token.length > MAX_LEARNED_LENGTH) "" else token
+    }
+
+    /** Opens the launcher screen, which is where the menu's words are managed. */
+    private fun openSetup() {
+        startActivity(
+            Intent(this, SetupActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        )
+    }
+
+    // -- swiping (D39) --------------------------------------------------------
+
+    /**
+     * The words the last stroke could also have been, for as long as they are
+     * still the answer to the question on screen.
+     *
+     * The strip carries these rather than completions of what was just
+     * committed, and it is the whole safety net under the feature. Two
+     * ambiguities in swipe typing are permanent — a doubled letter is one place
+     * on the keyboard, and no accent can be traced at all — so `das` and `dass`
+     * are the same stroke, and so are `wurde` and `würde`. Frequency picks the
+     * commoner every time, which is right rather more often than not, and the
+     * other has to be one tap away for the times it is not.
+     */
+    private var glideAlternates: List<Suggestion> = emptyList()
+
+    /**
+     * The word the stroke committed, which is what makes [glideAlternates] a
+     * single invariant rather than a flag to be cleared from a dozen places.
+     *
+     * The runners-up are the answer to "what else could *that* have been", so
+     * they stand exactly as long as *that* is still the word in front of the
+     * cursor. Typing on, backspacing, pressing space, moving the cursor,
+     * changing field — every one of them changes the word in progress and
+     * retires the alternates by doing so, with nothing to remember.
+     */
+    private var glideWord: String? = null
+
+    /**
+     * A word traced in one stroke (D39).
+     *
+     * Committed **without a trailing space**, and left standing as the word in
+     * progress. That is what makes everything after it work with no special
+     * cases: tapping an alternate in the strip replaces it exactly the way
+     * tapping a suggestion always has, typing `s` after swiping `dog` gives
+     * `dogs`, and backspace eats it a letter at a time. The next stroke puts
+     * the space in front of itself.
+     */
+    private fun handleGlide(path: GesturePath, keys: KeyGeometry) {
+        val ic = currentInputConnection ?: return
+        // A field with no suggestions has no dictionary to answer from, so
+        // there is nothing a stroke could mean. Better to do nothing than to
+        // guess at a password.
+        if (!suggestionsAllowed) return
+
+        val candidates = suggestionSource.candidatesForGesture(path, keys).suggestions
+        val best = candidates.firstOrNull() ?: return
+        val text = if (shifted) best.text.replaceFirstChar { it.uppercase() } else best.text
+
+        // Never swallow what was already typed. A half-typed word in front of a
+        // stroke is far likelier to be a word the typist wants than a mistake
+        // they wanted overwritten, and under D14 a replacement that cannot be
+        // undone is not one to make quietly.
+        val separator = if (word.text.isNotEmpty()) " " else ""
+
+        ic.beginBatchEdit()
+        ic.commitText("$separator$text", 1)
+        ic.endBatchEdit()
+        if (expectedCursor >= 0) expectedCursor += separator.length + text.length
+
+        consumeShift()
+        // Nothing here was typed on the keys, so there is no trail to show for
+        // it (D19) — and a ribbon that has just been drawn over them all would
+        // leave every letter of the word lit up.
+        clearTrail()
+
+        // Whatever sat on the far side of the cursor is still there (D23); the
+        // stroke went in front of it, not over it. Rebuilding what the word now
+        // is out of two halves is guesswork, so this is one of the cases where
+        // the field gets asked instead — the same escape hatch [commitTyped]
+        // uses, and rare enough to pay an IPC round trip for.
+        val midWord = word.suffix.isNotEmpty()
+        word.reset(known = true)
+        word.insert(text)
+        reverted = null
+        pendingUndo = null
+        spaceGesture.otherInput()
+        if (midWord) recoverWordAtCursor()
+
+        // Offer the runners-up only when the stroke stands alone. Tapping one
+        // replaces the word in front of the cursor, and with the far half of
+        // another word attached that is not the word they are alternatives to.
+        glideAlternates = if (midWord) emptyList() else candidates.drop(1)
+        glideWord = text
+        haptics?.keyPress(keyboardView)
+        refreshSuggestions()
+    }
+
+    /**
+     * Takes back the letter typed by the tap that armed the line-steering
+     * gesture (D38, D39).
+     *
+     * `h` carries both a letter and a gesture, and since a plain drag off a
+     * letter now traces a word, the gesture has to be reached by tapping first
+     * and pressing again. That first tap types an `h` nobody wanted. It is
+     * removed only once the drag actually starts, so a plain double tap still
+     * types both letters and `withhold` survives.
+     */
+    private fun retractSteerTap() {
+        val ic = currentInputConnection ?: return
+        // Ask the field rather than assume: between the tap and the drag the app
+        // may have done anything, and deleting a character that is not the one
+        // we put there would be worse than leaving ours behind.
+        val before = ic.getTextBeforeCursor(1, 0)?.singleOrNull() ?: return
+        if (!before.equals(Layouts.LINE_STEERING_KEY, ignoreCase = true)) return
+
+        ic.deleteSurroundingText(1, 0)
+        if (expectedCursor > 0) expectedCursor -= 1
+        word.deleteOne()
+        popTrail()
+        refreshSuggestions()
     }
 
     /** Leftward swipe on backspace, one call per word. */
@@ -441,6 +721,40 @@ class BilingualKeyboardService : InputMethodService() {
 
         shifted = true
         keyboardView.shifted = true
+    }
+
+    /**
+     * Backspace straight after a swipe removes the whole word (D39).
+     *
+     * A stroke is one act, so undoing it should be one act too. Taking a
+     * letter at a time off a word nobody typed a letter of is busywork: the
+     * word was wrong as a whole, and the next thing to happen is always either
+     * swiping it again or typing it out.
+     *
+     * Only while the swiped word is still exactly what stands in front of the
+     * cursor — the same invariant that keeps the alternates in the strip. Once
+     * a letter has been added or the cursor has moved, backspace is an ordinary
+     * backspace again.
+     */
+    private fun deleteGlidedWord(ic: InputConnection): Boolean {
+        val swiped = glideWord ?: return false
+        if (word.full != swiped || word.suffix.isNotEmpty()) return false
+        if (!ic.getSelectedText(0).isNullOrEmpty()) return false
+        // Ask the field rather than assume, as everywhere else that deletes
+        // more than it can see (D23).
+        if (ic.getTextBeforeCursor(swiped.length, 0)?.toString() != swiped) return false
+
+        ic.deleteSurroundingText(swiped.length, 0)
+        if (expectedCursor >= 0) expectedCursor = (expectedCursor - swiped.length).coerceAtLeast(0)
+        word.reset(known = true)
+        glideWord = null
+        glideAlternates = emptyList()
+        clearTrail()
+        spaceGesture.otherInput()
+        pendingUndo = null
+        reverted = null
+        refreshSuggestions()
+        return true
     }
 
     private fun deleteOne(ic: InputConnection) {
@@ -889,6 +1203,17 @@ class BilingualKeyboardService : InputMethodService() {
             return
         }
 
+        // The runners-up from a stroke displace the ordinary candidates while
+        // they last, because they answer a better question. After swiping
+        // `das`, completions of `das` are of no use to anybody; `dass`, which
+        // was traced along the very same path, is the one thing worth offering
+        // (D39).
+        val alternates = glideAlternates
+        if (alternates.isNotEmpty() && word.full == glideWord) {
+            suggestionStrip.slots = StripEntry.mark(alternates, correction = null)
+            return
+        }
+
         val justReverted = reverted
         if (justReverted != null && learningAllowed && !source.knows(justReverted)) {
             // D14: the moment after a correction is taken back is exactly when
@@ -947,11 +1272,13 @@ class BilingualKeyboardService : InputMethodService() {
      * Remembers a word. The text is not touched — the word is already typed;
      * what was missing is the keyboard knowing it.
      */
-    private fun addWord(text: String) {
-        if (!learningAllowed) return
-        if (!personalStore.add(text)) return
+    /** Returns whether anything was learned — the personal key reports it (D40). */
+    private fun addWord(text: String): Boolean {
+        if (!learningAllowed) return false
+        if (!personalStore.add(text)) return false
         diskThread.execute { personalStore.persist() }
         refreshSuggestions()
+        return true
     }
 
     /**
@@ -1054,8 +1381,24 @@ class BilingualKeyboardService : InputMethodService() {
          */
         const val SENTENCE_LOOKBEHIND = 3
 
+        /**
+         * Enough to see a sentence mark, any closing quotes after it, and the
+         * spaces after those.
+         */
+        const val SENTENCE_START_LOOKBEHIND = 8
+
         /** How far back to read when deleting a word. Longer than any real word. */
         const val WORD_LOOKBEHIND = 64
+
+        /**
+         * How far either side of the cursor to read when remembering something
+         * by hand (D40). Longer than a word, because the things worth
+         * remembering deliberately are addresses and long compounds.
+         */
+        const val LEARN_REACH = 96
+
+        /** Past this it is pasted text rather than something typed to be kept. */
+        const val MAX_LEARNED_LENGTH = 64
 
         /** How far forward to read when recovering the word the cursor landed in. */
         const val WORD_LOOKAHEAD = 64

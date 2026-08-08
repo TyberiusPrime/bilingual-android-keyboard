@@ -149,4 +149,119 @@ class TextEditsTest {
         assertEquals("word", TextEdits.wordAtCursor("word", null).text)
         assertEquals("word", TextEdits.wordAtCursor(null, "word").text)
     }
+
+
+    // -- what the personal key remembers (D40) --------------------------------
+
+    private fun token(before: String, after: String = "") =
+        TextEdits.tokenAtCursor(before, after)
+
+    /**
+     * The complaint this exists for. The word tokeniser stops at the first
+     * character that is not a letter, so it answers `de` — and an address is
+     * one of the very things somebody most wants remembered.
+     */
+    @Test
+    fun `an email address is one token`() {
+        assertEquals("john@coonabibba.de", token("mail me at john@coonabibba.de"))
+        assertEquals("de", TextEdits.wordAtCursor("mail me at john@coonabibba.de", "").text)
+    }
+
+    @Test
+    fun `the token spans the cursor rather than ending at it`() {
+        assertEquals("john@coonabibba.de", token("mail me at john@coona", "bibba.de and ask"))
+    }
+
+    @Test
+    fun `whitespace is the only delimiter`() {
+        assertEquals("+49-30-1234", token("call +49-30-1234"))
+        assertEquals("C:\\Users\\john", token("C:\\Users\\john"))
+        assertEquals("Rindfleisch-Etikettierung", token("Rindfleisch-Etikettierung"))
+    }
+
+    @Test
+    fun `a cursor in open space has nothing to remember`() {
+        assertEquals("", token(""))
+        assertEquals("", token("finished the sentence "))
+        assertEquals("", token("a line\n", "\nanother"))
+    }
+
+    /** Framing punctuation is the sentence's, not the thing's. */
+    @Test
+    fun `surrounding brackets and quotes are trimmed`() {
+        assertEquals("john@coonabibba.de", token("write to (john@coonabibba.de)"))
+        assertEquals("Fairphone", token("the \u201eFairphone\u201c"))
+        assertEquals("Fairphone", token("bought a Fairphone,"))
+        assertEquals("really", token("really?!"))
+    }
+
+    /**
+     * The full stop is deliberately kept. German abbreviates with one and a
+     * domain is nothing but full stops, so trimming would break far more than
+     * it fixed — at the cost of keeping a sentence's own stop when somebody
+     * remembers a word after typing it, which the launcher screen can undo.
+     */
+    @Test
+    fun `a trailing full stop survives because abbreviations need it`() {
+        assertEquals("z.B.", token("zum Beispiel z.B."))
+        assertEquals("d.h.", token("d.h."))
+        assertEquals("coonabibba.de", token("coonabibba.de"))
+    }
+
+    /** Nothing to trim, nothing trimmed. */
+    @Test
+    fun `an ordinary word is returned unchanged`() {
+        assertEquals("Fairphone", token("my Fairphone"))
+        assertEquals("don't", token("don't"))
+    }
+
+    // -- where a sentence begins (D42) ----------------------------------------
+
+    /**
+     * Shift used to be set once, when focus arrived, and never again — and the
+     * only thing that turned it back on was the double-space full stop. Since
+     * `?` and `!` are reachable only by long-press, every question and every
+     * exclamation was followed by a lowercase letter.
+     */
+    @Test
+    fun `a sentence mark and a space open a new sentence`() {
+        assertTrue(TextEdits.startsSentence("Hello. "))
+        assertTrue(TextEdits.startsSentence("Really? "))
+        assertTrue(TextEdits.startsSentence("Stop! "))
+        assertTrue(TextEdits.startsSentence("Well\u2026 "))
+    }
+
+    @Test
+    fun `an empty field and a fresh line start one too`() {
+        assertTrue(TextEdits.startsSentence(""))
+        assertTrue(TextEdits.startsSentence(null))
+        assertTrue(TextEdits.startsSentence("a line\n"))
+        assertTrue(TextEdits.startsSentence("   "))
+    }
+
+    /**
+     * Not on the mark itself. `e.g.` and `3.14` are typed tight, and
+     * capitalising between the dot and the next character would fight both.
+     */
+    @Test
+    fun `a mark with nothing after it is still mid-sentence`() {
+        assertFalse(TextEdits.startsSentence("Hello."))
+        assertFalse(TextEdits.startsSentence("e.g."))
+        assertFalse(TextEdits.startsSentence("3."))
+    }
+
+    @Test
+    fun `an ordinary word and space does not`() {
+        assertFalse(TextEdits.startsSentence("hello world "))
+        assertFalse(TextEdits.startsSentence("a comma, "))
+        assertFalse(TextEdits.startsSentence("a colon: "))
+    }
+
+    /** The mark can hide behind a closing quote or bracket. */
+    @Test
+    fun `quotes and brackets between the mark and the space are stepped over`() {
+        assertTrue(TextEdits.startsSentence("He said \"Stop.\" "))
+        assertTrue(TextEdits.startsSentence("(Ask him.) "))
+        assertTrue(TextEdits.startsSentence("\u201eHalt!\u201c "))
+    }
 }

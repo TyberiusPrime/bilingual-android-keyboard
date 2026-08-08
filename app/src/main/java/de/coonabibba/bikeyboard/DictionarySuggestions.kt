@@ -2,6 +2,7 @@ package de.coonabibba.bikeyboard
 
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.ln
 
 /**
  * Suggestions from the shipped wordlists and the personal store.
@@ -36,36 +37,88 @@ class DictionarySuggestions(
     @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
 ) : SuggestionSource {
 
-    private class Candidate(val word: String, val weight: Float, val language: Language?)
+    /**
+     * The shape of the two languages, for judging whether an unrecognised
+     * string could be a word (D43).
+     *
+     * Built here rather than passed in, because it is a function of the
+     * lexicons and nothing else — anyone holding the one holds the other. Built
+     * eagerly, because this class is constructed on the disk thread right after
+     * the wordlists are parsed, so the one pass it costs lands where every
+     * other startup cost already does, and never on a keystroke.
+     */
+    private val wordShape = WordShape.of(lexicons)
+
+    /**
+     * The chance that [typed] is a real word nobody knows, which is what any
+     * correction has to beat (D43).
+     *
+     * [UNKNOWN_WORD_PRIOR] is the standing figure for an average-looking
+     * string; this discounts it for one that does not look like a word of
+     * either language. Never raises it — see [WordShape.plausibility].
+     */
+    private fun priorFor(typed: CharSequence): Float =
+        UNKNOWN_WORD_PRIOR * wordShape.plausibility(typed)
+
+    private class Candidate(
+        val word: String,
+        val weight: Float,
+        val language: Language?,
+        /** How badly the stroke fitted, for a swipe. Meaningless for a tap. */
+        val cost: Float = 0f,
+    )
 
     override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates {
         val prefix = Folding.fold(word)
-        if (prefix.length < MIN_PREFIX) return Candidates.NONE
+        if (prefix.isEmpty()) return Candidates.NONE
 
         val typed = word.toString()
         val candidates = mutableListOf<Candidate>()
 
-        // The user's own words first, and they mostly win: PERSONAL_WEIGHT puts
-        // them above everything except the few hundred commonest words of
-        // either language. They are here because someone asked for them.
-        personal.completions(prefix).forEach {
-            candidates += Candidate(it, PERSONAL_WEIGHT, language = null)
-        }
+        // **Completing** still wants two letters: one is not evidence of
+        // anything, and the candidates for it are most of the alphabet's worth
+        // of words. But a single letter is no longer turned away at the door,
+        // because it can still be the *wrong case* of a word — and `I` is the
+        // second commonest word in English (D41).
+        if (prefix.length >= MIN_PREFIX) {
+            // The user's own words first, and they mostly win: PERSONAL_WEIGHT
+            // puts them above everything except the few hundred commonest words
+            // of either language. They are here because someone asked for them.
+            personal.completions(prefix).forEach {
+                candidates += Candidate(it, PERSONAL_WEIGHT, language = null)
+            }
 
-        lexicons.forEach { lexicon ->
-            for (index in lexicon.completions(prefix)) {
-                candidates += Candidate(
-                    lexicon.wordAt(index),
-                    lexicon.weightAt(index),
-                    lexicon.language,
-                )
+            lexicons.forEach { lexicon ->
+                for (index in lexicon.completions(prefix)) {
+                    candidates += Candidate(
+                        lexicon.wordAt(index),
+                        lexicon.weightAt(index),
+                        lexicon.language,
+                    )
+                }
             }
         }
 
-        addApostropheS(typed, candidates)
+        // A capital in the middle says the typist meant every letter of this
+        // (D44). Candidates are still gathered — the strip may as well be
+        // useful — but nothing here will be replaced.
+        val named = TextEdits.hasInternalCapital(typed)
 
-        val correction = scanNearby(typed, touches, into = candidates)
-        return Candidates(rank(typed, candidates), correction)
+        val cased = addCasedForms(typed, candidates)
+        addApostropheS(typed, candidates)
+        val apostrophe = addApostropheForms(typed, candidates)
+        val nearby = scanNearby(typed, touches, named = named, into = candidates)
+        val correction =
+            if (named) null
+            else listOfNotNull(cased, apostrophe, nearby).maxByOrNull { it.confidence }
+
+        // A word the keyboard is about to change is worth offering back, but
+        // only when the spelling actually is a word in one of the languages.
+        // `i` is: German has it and English has `I`, and which one was meant is
+        // the typist's business. `teh` is not, and a slot spent offering it
+        // back would be a slot wasted.
+        val keepTyped = correction != null && candidates.any { it.word == typed }
+        return Candidates(rank(typed, candidates, keepTyped = keepTyped), correction)
     }
 
     /**
@@ -84,11 +137,13 @@ class DictionarySuggestions(
     private fun scanNearby(
         typed: String,
         touches: List<TypedTouch>,
+        named: Boolean,
         into: MutableList<Candidate>,
     ): Correction? {
         // D28's hard gate, and the reason the scan can often be skipped
-        // outright: a word in either dictionary is a word, however rare.
-        val correcting = !knowsExactly(typed)
+        // outright: a word in either dictionary is a word, however rare. D44's
+        // gate is the same shape: a capital in the middle settles it too.
+        val correcting = !named && !knowsExactly(typed)
         val filling = into.size < SuggestionSlots.CAPACITY
         if (!correcting && !filling) return null
 
@@ -96,7 +151,7 @@ class DictionarySuggestions(
         var bestScore = 0f
         // The typed word standing as it is, which is what a correction has to
         // beat rather than merely lead.
-        var mass = UNKNOWN_WORD_PRIOR
+        var mass = priorFor(typed)
 
         forEachNearby(typed, touches) { lexicon, index, cost ->
             val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
@@ -125,14 +180,250 @@ class DictionarySuggestions(
         )
     }
 
-    /** Ranks the candidates and trims them to what the strip can show. */
-    private fun rank(typed: String, candidates: List<Candidate>): List<Suggestion> {
+    /**
+     * Every word that could have been traced by [path] (D39).
+     *
+     * The search is bounded by the two things a swipe says clearly. A finger
+     * comes down deliberately and lifts deliberately, so the **first and last
+     * letters** are near certain — and a first letter plus a last letter is a
+     * slice of about three hundred words across both dictionaries, measured,
+     * out of seventy thousand. Everything in between is a shape, and the shape
+     * is only asked about once the slice is that small.
+     *
+     * Both endpoints admit their close neighbours as well, since a thumb that
+     * starts a stroke is not always precise about where; that widens the slice
+     * by roughly the square of the number admitted, which is why the count is
+     * capped rather than merely thresholded.
+     */
+    override fun candidatesForGesture(path: GesturePath, keys: KeyGeometry): Candidates {
+        if (keys.isEmpty) return Candidates.NONE
+        val firsts = endpointLetters(path.startX, path.startY, keys)
+        val lasts = endpointLetters(path.endX, path.endY, keys)
+        if (firsts.isEmpty() || lasts.isEmpty()) return Candidates.NONE
+
+        val decoder = GestureDecoder(keys)
+
+        // Sift before scoring. Each survivor of the cheap filters gets a floor
+        // under its cost, and a floor under the cost is a *ceiling* on the
+        // score — which is enough to tell most candidates apart from the winner
+        // without doing either of the expensive terms.
+        val shortlist = mutableListOf<Pending>()
+        var bestPossible = 0f
+
+        firsts.forEach { first ->
+            val bucket = first.toString()
+
+            personal.completions(bucket).forEach { word ->
+                boundGesture(decoder, path, word, lasts)?.let { bound ->
+                    val pending = Pending(word, PERSONAL_WEIGHT, null, bound)
+                    if (pending.ceiling > bestPossible) bestPossible = pending.ceiling
+                    shortlist += pending
+                }
+            }
+
+            lexicons.forEach { lexicon ->
+                for (index in lexicon.completions(bucket)) {
+                    val word = lexicon.wordAt(index)
+                    val bound = boundGesture(decoder, path, word, lasts) ?: continue
+                    val pending = Pending(word, lexicon.weightAt(index), lexicon.language, bound)
+                    if (pending.ceiling > bestPossible) bestPossible = pending.ceiling
+                    shortlist += pending
+                }
+            }
+        }
+
+        val candidates = mutableListOf<Candidate>()
+        // What the skipped candidates would have been worth at their most
+        // flattering. Added to the divisor rather than dropped, so the pruning
+        // can only ever *understate* how sure the keyboard is — an optimisation
+        // that quietly inflated confidence would be changing the answer, and
+        // D3 rests on that number meaning something.
+        var skipped = 0f
+        val floor = bestPossible * PRUNE_RATIO
+
+        shortlist.forEach { pending ->
+            if (pending.ceiling < floor) {
+                skipped += pending.ceiling
+                return@forEach
+            }
+            val cost = decoder.cost(path, pending.word)
+            if (cost > GestureDecoder.MAX_COST) return@forEach
+            candidates += Candidate(
+                pending.word,
+                gestureScore(pending.weight, cost),
+                pending.language,
+                cost,
+            )
+        }
+
+        // No correction: a swipe has no original spelling to be corrected away
+        // from, so there is nothing for D28's "never replace a word that is
+        // already right" to protect. What to commit is the first suggestion,
+        // and how sure that is, is its confidence — which is why the prior
+        // matters here as much as it does for a typo. Without it a single
+        // hopeless candidate would be the only thing on the table and would
+        // therefore be certain.
+        // The prior has to be on the same scale as the scores, or it stops
+        // meaning anything: the weights are raised to a power here, so it is
+        // too. Left as it is, it would be swamped and every stroke would come
+        // back certain.
+        val prior = exp(GESTURE_FREQUENCY_POWER * ln(UNKNOWN_WORD_PRIOR))
+        return Candidates(rankGesture(candidates, prior + skipped), correction = null)
+    }
+
+    /**
+     * Orders what a stroke could have been: the best guess first, and then the
+     * appeal against it.
+     *
+     * **The two halves are ordered by different questions, and that is the
+     * point.** What gets committed is the best guess overall, so it weighs how
+     * well the shape fits against how common the word is, and frequency
+     * deserves its say there. But the strip is only ever read when that guess
+     * was *wrong* — so ranking the rest by frequency again asks the question
+     * that has just failed, and answers it the same way.
+     *
+     * Observed, on a stroke that spelled `swiping`: the four best fits were
+     * `swiping`, `sweeping`, `swooping` and `stopping`, between 0.25 and 0.28.
+     * The strip offered `song` and `strong`, at 0.51 and 0.56 — twice the
+     * misfit — because they are some three hundred times commoner. The word the
+     * finger had actually drawn was nowhere, beaten by two that plainly did not
+     * match the picture on the screen.
+     *
+     * So the runners-up are ordered by **how well they fit**, ties going to the
+     * commoner word. If the frequency table has already had its turn and lost,
+     * what is left to consult is the finger.
+     *
+     * One more than the strip holds, because the first of these is committed
+     * rather than offered (D39) — asking for three left the last slot empty.
+     */
+    private fun rankGesture(candidates: List<Candidate>, prior: Float): List<Suggestion> {
+        if (candidates.isEmpty()) return emptyList()
+        var mass = prior
+        candidates.forEach { mass += it.weight }
+        if (mass <= 0f) return emptyList()
+
+        val byScore = candidates.sortedByDescending { it.weight }
+        val ordered = listOf(byScore.first()) +
+            byScore.drop(1).sortedWith(compareBy({ it.cost }, { -it.weight }))
+
+        return ordered.asSequence()
+            .map { Suggestion(it.word, it.weight / mass, it.language) }
+            // A finger cannot express capitals, so `song` and `Song` are one
+            // answer to a swipe and spending two slots on them wastes one.
+            // D24's re-case gesture is how the other casing is reached.
+            .distinctBy { it.text.lowercase() }
+            .take(SuggestionSlots.CAPACITY + 1)
+            .toList()
+    }
+
+    /**
+     * A candidate that has passed the cheap filters and been given a floor
+     * under its cost, but has not yet been properly scored.
+     *
+     * [ceiling] is the most it could possibly be worth: the real cost can only
+     * be higher than the bound, so the real score can only be lower than this.
+     */
+    private inner class Pending(
+        val word: String,
+        val weight: Float,
+        val language: Language?,
+        bound: Float,
+    ) {
+        val ceiling: Float = gestureScore(weight, bound)
+    }
+
+    /**
+     * The least tracing [word] could have cost, or null if it is not worth
+     * asking at all.
+     *
+     * Ordered by price. The last letter is one character comparison and throws
+     * away about ninety-five percent of the bucket; the journey length is one
+     * pass over the word and throws away most of the rest; and what survives
+     * both gets a *floor* under its cost rather than the cost itself, which is
+     * a table lookup per letter.
+     */
+    private fun boundGesture(
+        decoder: GestureDecoder,
+        path: GesturePath,
+        word: String,
+        lasts: Set<Char>,
+    ): Float? {
+        val last = word.lastOrNull() ?: return null
+        if (Folding.foldChar(last) !in lasts) return null
+
+        val ideal = decoder.idealLength(word)
+        if (ideal == GestureDecoder.UNSWIPEABLE) return null
+        if (ideal < path.length * GestureDecoder.MIN_LENGTH_RATIO) return null
+        if (ideal > path.length * GestureDecoder.MAX_LENGTH_RATIO) return null
+
+        val bound = decoder.bound(path, word)
+        return if (bound > GestureDecoder.MAX_COST) null else bound
+    }
+
+    /**
+     * The same shape as a typo's score — how common the word is, discounted
+     * exponentially by how implausible the finger's route was — so that a swipe
+     * and a tapped correction produce comparable confidences and one threshold
+     * governs both (D33).
+     */
+    /**
+     * How likely this word is, given the stroke.
+     *
+     * The same shape as a typo's score — how common the word is, discounted
+     * exponentially by how implausible the finger's route was — with one
+     * deliberate difference: **rarity counts for less.** A swipe is a whole
+     * word's worth of geometric evidence, where a typo correction is working
+     * from one or two characters, so the shape has earned the right to overrule
+     * the frequency table further than it may there.
+     *
+     * That is not a thumb on the scale, it is a better fit: taking the square
+     * root of the weight raised top-1 accuracy across the whole corpus, from
+     * 95% to 96% on realistic traces and 93% to 95% on sloppy ones. It also
+     * rescues words the corpus barely contains. `swiping` occurs 236 times in
+     * 675 million words of film subtitles — its share is *smaller than
+     * [UNKNOWN_WORD_PRIOR]*, so the keyboard rated "a word I have never heard
+     * of" as likelier than the word itself, and no quality of trace could bring
+     * it back.
+     */
+    private fun gestureScore(weight: Float, cost: Float): Float =
+        exp(GESTURE_FREQUENCY_POWER * ln(weight) - confidenceDecay * cost)
+
+    /**
+     * The letters a stroke may have started or finished on: the nearest, plus
+     * any close enough to be a genuine near miss.
+     */
+    private fun endpointLetters(x: Float, y: Float, keys: KeyGeometry): Set<Char> {
+        val nearest = keys.nearestLetter(x, y) ?: return emptySet()
+        val letters = LinkedHashSet<Char>()
+        letters += Folding.foldChar(nearest)
+        keys.alternatives(x, y, nearest).entries
+            .filter { it.value <= GestureDecoder.ENDPOINT_REACH }
+            .sortedBy { it.value }
+            .forEach { (char, _) ->
+                if (letters.size < GestureDecoder.MAX_ENDPOINT_LETTERS) letters += Folding.foldChar(char)
+            }
+        return letters
+    }
+
+    /**
+     * Ranks the candidates and trims them to what the strip can show.
+     *
+     * [prior] is the standing chance that none of them is right, added to the
+     * divisor only. A candidate set that is uniformly bad should not produce a
+     * confident answer merely because it is the only set there is.
+     */
+    private fun rank(
+        typed: String,
+        candidates: List<Candidate>,
+        prior: Float = 0f,
+        keepTyped: Boolean = false,
+    ): List<Suggestion> {
         if (candidates.isEmpty()) return emptyList()
 
         // Confidence is the candidate's share of everything that matches: a
         // unigram P(word | what was typed so far). Crude, and honestly crude —
         // D3 wants a calibrated number and this is the most a lookup can say.
-        var mass = 0f
+        var mass = prior
         candidates.forEach { mass += it.weight }
         if (mass <= 0f) return emptyList()
 
@@ -140,26 +431,28 @@ class DictionarySuggestions(
             .sortedByDescending { it.weight }
             .asSequence()
             .map { Suggestion(applyTypedCase(it.word, typed), it.weight / mass, it.language) }
-            // Offering back exactly what is already there wastes a slot.
-            .filter { it.text != typed }
+            // Offering back exactly what is already there wastes a slot —
+            // unless it is about to be replaced, in which case it is the way to
+            // say no.
+            .filter { keepTyped || it.text != typed }
             .distinctBy { it.text }
             .take(SuggestionSlots.CAPACITY)
             .toList()
     }
 
     /**
-     * `letvs` means `let's`, and so does `gehtvs` mean `geht's` (D27).
+     * `gehtvs` means `geht's`, for any stem at all (D27).
      *
-     * The apostrophe is the long-press alternate on `v` (D17), so the way to
-     * miss it is to tap the key instead of holding it — and the letters that
-     * follow are almost always `s`. A word ending in `vs` is otherwise close to
-     * nonexistent, which is what makes the rule safe enough to apply blindly.
+     * Kept alongside [addApostropheForms], which looks contractions up, because
+     * this one is **productive** and a lookup cannot be. Every English noun
+     * takes a possessive `'s` and every German verb takes the clipped `es`, so
+     * `have's` and `geht's` are real and no wordlist will ever list them all.
+     * The seventy-four contractions that did ship are the fixed ones — `don't`,
+     * `I'll` — and this is the open class beside them.
      *
-     * It has to *build* the candidate rather than look it up: the wordlists
-     * carry no contractions at all, because the corpus their frequencies come
-     * from split `don't` into `don` and `t` before counting (see
-     * PROVENANCE.md). So the stem is looked up, and the apostrophe is added to
-     * the spelling the dictionary has.
+     * So the stem is looked up and the apostrophe added to the spelling the
+     * dictionary has. A word ending in `vs` is otherwise close to nonexistent,
+     * which is what makes that safe to do blindly.
      */
     private fun addApostropheS(typed: String, into: MutableList<Candidate>) {
         if (typed.length < STEM_MIN + 2) return
@@ -181,6 +474,99 @@ class DictionarySuggestions(
                 lexicon.language,
             )
         }
+    }
+
+    /**
+     * `letvs` means `let's`, `ivll` means `I'll`, `donvt` means `don't` (D27,
+     * D41).
+     *
+     * The apostrophe is the long-press alternate on `v` (D17), so the way to
+     * miss it is to tap the key instead of holding it. The first version of
+     * this knew one pattern — a word ending `vs` — and had to *build* the
+     * answer, because the corpus the frequencies came from split `don't` into
+     * `don` and `t` before counting and the wordlists carried no contractions
+     * at all. They do now, seventy-four of them, so the rule collapses into
+     * something both simpler and far wider: put an apostrophe where the `v` is
+     * and see whether that is a word.
+     *
+     * Every `v` is tried, not just the last, which is what reaches `ivll` and
+     * `ivm` — the ones worth having, since I-forms are four percent of English
+     * typing.
+     */
+    private fun addApostropheForms(typed: String, into: MutableList<Candidate>): Correction? {
+        if (typed.length < 2) return null
+
+        var best: Candidate? = null
+        var mass = priorFor(typed)
+
+        for (index in typed.indices) {
+            if (typed[index].lowercaseChar() != APOSTROPHE_KEY) continue
+            val swapped = typed.substring(0, index) + '\'' + typed.substring(index + 1)
+
+            personal.completions(Folding.fold(swapped))
+                .firstOrNull { Folding.fold(it) == Folding.fold(swapped) }
+                ?.let { into += Candidate(it, PERSONAL_WEIGHT, language = null) }
+
+            lexicons.forEach { lexicon ->
+                val found = lexicon.indexOf(swapped)
+                if (found < 0) return@forEach
+                val word = lexicon.wordAt(found)
+                // A known slip with a known shape, so it is discounted far less
+                // than an arbitrary substitution would be.
+                val score = lexicon.weightAt(found) * exp(-confidenceDecay * APOSTROPHE_SLIP)
+                mass += score
+                into += Candidate(word, score, lexicon.language)
+                if (score > (best?.weight ?: 0f)) {
+                    best = Candidate(applyTypedCase(word, typed), score, lexicon.language)
+                }
+            }
+        }
+
+        val winner = best ?: return null
+        return Correction(winner.word, typed, winner.weight / mass, winner.language)
+    }
+
+    /**
+     * `i` is `I`, and which `i` is a question only a bilingual keyboard has to
+     * ask (D41).
+     *
+     * A single letter never reached the strip at all — [MIN_PREFIX] wants two
+     * before it will guess — and it was never corrected either, because
+     * [Lexicon.knowsExactly] ignores case on purpose and so judged `i`
+     * perfectly well spelled. Between them that left the second commonest word
+     * in English with no help of any kind.
+     *
+     * Not a rule about capitals but about *which casing the dictionaries
+     * prefer*, which is the honest question here: English has `I` and no
+     * lowercase form, German has a lowercase `i` and no capital, and their
+     * corpus shares settle it at better than two hundred to one. The loser goes
+     * in the strip, because a keyboard that decides between two real words
+     * should show its working.
+     *
+     * Deliberately only for single letters. The same reasoning would capitalise
+     * every German noun on sight — `haus` to `Haus` — which may well be right
+     * and is emphatically a separate decision.
+     */
+    private fun addCasedForms(typed: String, into: MutableList<Candidate>): Correction? {
+        if (typed.length != 1 || !typed[0].isLetter()) return null
+
+        var best: Candidate? = null
+        var mass = priorFor(typed)
+
+        lexicons.forEach { lexicon ->
+            val index = lexicon.indexOf(typed)
+            if (index < 0) return@forEach
+            val word = lexicon.wordAt(index)
+            val score = lexicon.weightAt(index)
+            mass += score
+            into += Candidate(word, score, lexicon.language)
+            if (word != typed && score > (best?.weight ?: 0f)) {
+                best = Candidate(word, score, lexicon.language)
+            }
+        }
+
+        val winner = best ?: return null
+        return Correction(winner.word, typed, winner.weight / mass, winner.language)
     }
 
     /**
@@ -305,8 +691,15 @@ class DictionarySuggestions(
      *
      * Only the first letter, and only upwards: a word stored capitalised stays
      * capitalised, because German nouns are not optional.
+     *
+     * **Except when the word is being shouted**, where the wordlist's casing
+     * has no say at all. `I DONT CARE` came back as `I Don't CARE`, because a
+     * rule about the first letter is the wrong rule for a word that is all
+     * capitals — and correcting inside a shout is exactly when a stray
+     * lowercase run is most obvious.
      */
     private fun applyTypedCase(candidate: String, typed: String): String {
+        if (TextEdits.isShouted(typed)) return candidate.uppercase()
         val first = typed.firstOrNull() ?: return candidate
         if (!first.isUpperCase()) return candidate
         return candidate.replaceFirstChar { it.uppercaseChar() }
@@ -328,6 +721,18 @@ class DictionarySuggestions(
 
         /** A one-letter stem in front of an apostrophe is a typo, not a word. */
         const val STEM_MIN = 2
+
+        /** The key the apostrophe hides behind, as a long-press (D17). */
+        const val APOSTROPHE_KEY = 'v'
+
+        /**
+         * What tapping `v` where an apostrophe was meant is judged to cost.
+         *
+         * Small, because this is not a thumb landing somewhere random — it is
+         * one specific slip with one specific cause, and a word that comes back
+         * from it is almost certainly the word that was wanted.
+         */
+        const val APOSTROPHE_SLIP = 0.2f
 
         /**
          * Shorter than this and the keyboard has no business looking: half the
@@ -363,6 +768,10 @@ class DictionarySuggestions(
          * threshold does, it does relative to this number, so it is the most
          * load-bearing guess in the file — and under D8, which forbids learning
          * from anything but an explicit add, being wrong about it is expensive.
+         *
+         * The figure for a string that *looks* like a word of either language.
+         * One that does not is discounted from here by [WordShape] (D43) — see
+         * [priorFor], which is what any correction actually has to beat.
          */
         const val UNKNOWN_WORD_PRIOR = 1e-6f
 
@@ -378,7 +787,26 @@ class DictionarySuggestions(
          */
         const val FIRST_LETTER_REACH = 0.5f
 
+        /**
+         * How much a word's rarity counts against it when swiping. One would
+         * be the plain corpus share, as tapping uses; a half is its square
+         * root. Measured, not picked — see [gestureScore].
+         */
+        const val GESTURE_FREQUENCY_POWER = 0.5f
+
+        /**
+         * How far below the best possible candidate a word may be and still be
+         * worth scoring properly.
+         *
+         * Ten thousand to one. The pruned ones are not discarded silently —
+         * their most flattering possible score goes into the confidence
+         * divisor — so the effect of being wrong here is that the keyboard
+         * sounds very slightly less sure than it might, never more.
+         */
+        const val PRUNE_RATIO = 1e-4f
+
         /** A ceiling on the scan, however ambiguous the first touch was. */
         const val MAX_SEARCH_PREFIXES = 4
+
     }
 }

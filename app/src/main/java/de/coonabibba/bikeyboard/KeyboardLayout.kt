@@ -21,10 +21,15 @@ data class Key(
      */
     val repeats: Boolean = false,
     /**
-     * Whether dragging up and down this key moves the cursor a line at a time
-     * (D38), the way dragging across the space bar moves it a character at a
-     * time. The layout decides which key, so the view does not have to know a
-     * letter by name.
+     * Whether this key can steer the cursor a line at a time (D38), the way
+     * dragging across the space bar moves it a character at a time. The layout
+     * decides which key, so the view does not have to know a letter by name.
+     *
+     * Reached by *tapping and then pressing again* rather than by a plain drag,
+     * since D39 gave a plain drag off a letter to swipe typing. The two cannot
+     * be separated by direction — `h` to `b` is down and to the left, which is
+     * exactly what steering looks like — so they are separated by what came
+     * before.
      */
     val steersLines: Boolean = false,
 )
@@ -55,8 +60,21 @@ sealed interface KeyAction {
      * setting whose whole purpose is to be turned off in a hurry: the trail
      * says what was just typed, and the moment that matters is the moment
      * somebody is standing behind you.
+     *
+     * Since D40 it appears **only in password fields**, which is the only place
+     * that reasoning holds. Everywhere else the position carries [Personal].
      */
     data object ToggleTrail : KeyAction
+
+    /**
+     * The personal key (D40): everything to do with words this keyboard knows
+     * because it was told.
+     *
+     * Three things, because they are three points on one idea and there is only
+     * one key. A tap opens the quick menu, a hold remembers the word in front
+     * of the cursor, and a double tap opens the screen where both are managed.
+     */
+    data object Personal : KeyAction
 }
 
 enum class Layer { LETTERS, SYMBOLS }
@@ -139,6 +157,13 @@ object Layouts {
      * `h` because it is the middle of the home row, so the gesture is reachable
      * with either thumb without looking, and because it carries no long-press
      * of its own to compete with.
+     *
+     * The tap that arms the gesture types an `h`, which is then taken back when
+     * the drag begins (D39). Only on the drag: a plain double tap still types
+     * both, so `withhold` and `Rohheit` cost nothing. Choosing a letter that
+     * genuinely never doubles would have avoided the retraction, but no letter
+     * on the home row qualifies, and being in the middle of the home row is the
+     * whole reason this one was picked.
      */
     const val LINE_STEERING_KEY = 'h'
 
@@ -146,23 +171,40 @@ object Layouts {
     const val TRAIL_ON_LABEL = "◉"
     const val TRAIL_OFF_LABEL = "○"
 
+    /** The personal key (D40). Purple, because it is the one key that learns. */
+    const val PERSONAL_LABEL = "+"
+
     private fun symbolRow(vararg specs: Pair<String, List<String>>): List<Key> =
         specs.map { (label, alternates) ->
             Key(label = label, action = KeyAction.Text(label), longPress = alternates)
         }
 
-    /** The bottom row is byte-identical across layers apart from the toggle label. */
-    private fun bottomRow(toggleLabel: String): List<Key> = listOf(
+    /**
+     * The bottom row is byte-identical across layers apart from the toggle
+     * label — and, since D40, apart from which of two keys holds the position
+     * next to it.
+     *
+     * That position was the globe, then the trail toggle (D38), and is now the
+     * trail toggle **only in a password field**. Everywhere else it is the
+     * personal key. The two swap rather than share because the argument for
+     * the trail toggle being on a key at all was always specifically about
+     * passwords — the moment somebody is standing behind you — while the
+     * argument for the personal key is about every other field: under D8 the
+     * store is the only way this keyboard learns anything, and the strip could
+     * only offer to add a word when it had a slot going spare.
+     */
+    private fun bottomRow(toggleLabel: String, inPassword: Boolean): List<Key> = listOf(
         Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f),
-        // Where the globe used to be. The system draws its own IME switcher —
-        // in the navigation bar on this phone — so a second one cost a key
-        // position for nothing.
-        Key(TRAIL_ON_LABEL, KeyAction.ToggleTrail, widthWeight = 1f),
+        if (inPassword) {
+            Key(TRAIL_ON_LABEL, KeyAction.ToggleTrail, widthWeight = 1f)
+        } else {
+            Key(PERSONAL_LABEL, KeyAction.Personal, widthWeight = 1f)
+        },
         Key("", KeyAction.Space, widthWeight = 5f),
         Key("↵", KeyAction.Enter, widthWeight = 1.5f),
     )
 
-    val letters = KeyboardLayout(
+    private fun buildLetters(inPassword: Boolean) = KeyboardLayout(
         listOf(
             letterRow("qwertyuiop"),
             letterRow("asdfghjkl"),
@@ -171,7 +213,7 @@ object Layouts {
                 addAll(letterRow("zxcvbnm"))
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("?123"),
+            bottomRow("?123", inPassword),
         ),
     )
 
@@ -180,7 +222,7 @@ object Layouts {
      * long-press here, which keeps the single-toggle-position rule (D16)
      * intact rather than adding a second toggle to reach them.
      */
-    val symbols = KeyboardLayout(
+    private fun buildSymbols(inPassword: Boolean) = KeyboardLayout(
         listOf(
             symbolRow(
                 "1" to listOf("¹"), "2" to listOf("²"), "3" to listOf("³"),
@@ -216,13 +258,24 @@ object Layouts {
                 )
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("ABC"),
+            bottomRow("ABC", inPassword),
         ),
     )
 
-    fun forLayer(layer: Layer): KeyboardLayout = when (layer) {
-        Layer.LETTERS -> letters
-        Layer.SYMBOLS -> symbols
+    /**
+     * The layouts, built once each. Four rather than two since D40, because a
+     * password field carries a different key next to the layer toggle — and a
+     * layout is a handful of immutable objects, so holding both beats
+     * rebuilding one every time focus moves.
+     */
+    val letters = buildLetters(inPassword = false)
+    val symbols = buildSymbols(inPassword = false)
+    private val lettersInPassword = buildLetters(inPassword = true)
+    private val symbolsInPassword = buildSymbols(inPassword = true)
+
+    fun forLayer(layer: Layer, inPassword: Boolean = false): KeyboardLayout = when (layer) {
+        Layer.LETTERS -> if (inPassword) lettersInPassword else letters
+        Layer.SYMBOLS -> if (inPassword) symbolsInPassword else symbols
     }
 
     fun other(layer: Layer): Layer = when (layer) {

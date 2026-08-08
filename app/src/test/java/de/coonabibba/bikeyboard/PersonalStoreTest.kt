@@ -128,4 +128,118 @@ class PersonalStoreTest {
         store.load()
         assertEquals(listOf("Coonabibba", "Fairphone"), store.all())
     }
+
+    // -- the quick menu (D40) -------------------------------------------------
+
+    /**
+     * A file written before D40 is one bare word per line, and must keep
+     * meaning exactly what it meant. This is somebody's own vocabulary, built
+     * up a word at a time; losing it to a format change would be unforgivable
+     * for a feature nobody asked to pay for.
+     */
+    @Test
+    fun `a file from before the quick menu still reads`() {
+        val (store, file) = store()
+        file.parentFile?.mkdirs()
+        file.writeText("Coonabibba\nFairphone\n")
+        store.load()
+        assertEquals(listOf("Coonabibba", "Fairphone"), store.all())
+        assertTrue("nothing was quick before there was a quick menu", store.quick().isEmpty())
+    }
+
+    @Test
+    fun `a tagged word survives a restart and an untagged one stays untagged`() {
+        val (store, file) = store()
+        store.add("john@coonabibba.de")
+        store.add("Fairphone")
+        assertTrue(store.setQuick("john@coonabibba.de", true))
+        store.persist()
+
+        val reopened = PersonalStore(file)
+        reopened.load()
+        assertEquals(listOf("john@coonabibba.de"), reopened.quick())
+        assertTrue(reopened.isQuick("john@coonabibba.de"))
+        assertFalse(reopened.isQuick("Fairphone"))
+        // And it is still an ordinary word for every other purpose.
+        assertEquals(listOf("john@coonabibba.de", "Fairphone"), reopened.all())
+    }
+
+    /** A word the store does not hold cannot be on the menu. */
+    @Test
+    fun `tagging an unknown word does nothing`() {
+        val (store, _) = store()
+        assertFalse(store.setQuick("nobody", true))
+        assertTrue(store.quick().isEmpty())
+    }
+
+    @Test
+    fun `tagging is idempotent and reversible`() {
+        val (store, _) = store()
+        store.add("Fairphone")
+        assertTrue(store.setQuick("Fairphone", true))
+        assertFalse("already quick", store.setQuick("Fairphone", true))
+        assertTrue(store.setQuick("Fairphone", false))
+        assertTrue(store.quick().isEmpty())
+    }
+
+    /** Forgetting a word takes it off the menu with it. */
+    @Test
+    fun `removing a tagged word removes it from the menu`() {
+        val (store, _) = store()
+        store.add("Fairphone")
+        store.setQuick("Fairphone", true)
+        assertTrue(store.remove("Fairphone"))
+        assertTrue(store.quick().isEmpty())
+        assertFalse(store.isQuick("Fairphone"))
+    }
+
+    /** The menu is alphabetical, whatever order the words went in. */
+    @Test
+    fun `the menu is sorted`() {
+        val (store, _) = store()
+        listOf("zebra", "apple", "mango").forEach {
+            store.add(it)
+            store.setQuick(it, true)
+        }
+        assertEquals(listOf("apple", "mango", "zebra"), store.quick())
+    }
+
+    /**
+     * Sorted the way the launcher screen sorts, so a word is in the same place
+     * on both — and so an accented word is where the eye looks for it rather
+     * than after `z`, which is where its code point would put it.
+     */
+    @Test
+    fun `the menu sorts accents and case the way the list does`() {
+        val (store, _) = store()
+        listOf("Zoo", "Ärztin", "apfel", "Öl").forEach {
+            store.add(it)
+            store.setQuick(it, true)
+        }
+        assertEquals(listOf("apfel", "Ärztin", "Öl", "Zoo"), store.quick())
+    }
+
+    /** Nothing is dropped for want of room on screen — the menu scrolls. */
+    @Test
+    fun `every tagged word is on the menu however many there are`() {
+        val (store, _) = store()
+        val many = (1..30).map { "word%02d".format(it) }
+        many.forEach {
+            store.add(it)
+            store.setQuick(it, true)
+        }
+        assertEquals(many, store.quick())
+    }
+
+    /** A word containing the marker text is still just a word. */
+    @Test
+    fun `a word that looks like a marker is not one`() {
+        val (store, file) = store()
+        store.add(PersonalStore.QUICK_MARKER)
+        store.persist()
+        val reopened = PersonalStore(file)
+        reopened.load()
+        assertEquals(listOf(PersonalStore.QUICK_MARKER), reopened.all())
+        assertTrue(reopened.quick().isEmpty())
+    }
 }

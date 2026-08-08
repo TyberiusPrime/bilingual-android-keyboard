@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D38 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D42 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -157,6 +157,9 @@ letter layer is final.
 
 ### D7 — No swipe typing now; do not design it out
 
+**Superseded by D39, which added it. The reasoning below is what made that
+cheap, and is kept for that reason.**
+
 Tap typing only for the foreseeable future. The constraint this places on the
 architecture: the scoring layer must take a *sequence of touch points* and
 return ranked candidates, rather than having the view commit a letter per tap
@@ -166,6 +169,27 @@ dictionaries and the same language-inference model.
 
 This is cheap to honour now and expensive to retrofit, which is the only reason
 it is being decided before it is needed.
+
+**What it turned out to be worth, when D39 came to collect.** The prediction
+was half right, and it is worth being precise about which half, because the
+same reasoning will be applied again to the language model.
+
+Right about the *seam*. A gesture did slot in as a second producer against the
+same lexicons, the same frequency weighting, the same `Candidates` type and so
+the same confidence scale the strip and the auto-replace threshold already read.
+Nothing downstream of the candidate set changed at all.
+
+Wrong about the *shape of the boundary*. D7 assumed the interface would be a
+sequence of touch points and that a swipe would arrive through it. It cannot: a
+tapped word is characters each with a touch behind it, and a stroke is a shape
+with no characters in it whatsoever. There is no honest per-character split of
+a path that crosses six keys it does not mean. Swiping got its own entry point
+next to the existing one rather than reusing it.
+
+The lesson for D10/D12: what a foresighted boundary actually buys is that
+**everything downstream is shared**. Guessing the exact signature years early
+buys nothing, and `List<TypedTouch>` — designed to be the future-proof one —
+was the part that had to be worked around.
 
 ### D8 — Conservative learning — and its conflict with D3
 
@@ -1305,6 +1329,818 @@ field with something focusable above it, this can still dismiss the keyboard.
 Recoverable by tapping the field, and cheaper than the alternative, which is
 reading the whole text back and counting newlines on every step of a drag.
 
+### D39 — Swipe typing, and what it costs `h`
+
+**Supersedes D7's "not now".** A word traced in one stroke, decoded against the
+same two dictionaries and committed on lift.
+
+**The decoder is shape matching and nothing cleverer.** Both the finger's path
+and each candidate word's *ideal* path — the polyline through its key centres —
+are resampled to 32 points spaced evenly by distance, and the cost is the mean
+gap between corresponding points, in key widths. Resampling by distance rather
+than time is what throws away how fast the finger moved and keeps the shape.
+
+Comparing path against path rather than path against *letters* is the one
+decision in the decoder that matters. Swiping `hello` crosses `r`, `t`, `y`,
+`d`, `f`, `g` and `j` on the way, and any scheme that matches touch points
+against candidate letters has to explain away every one of them. Path against
+path does not, because the ideal path travels over those keys too.
+
+**The search is bounded by the two things a stroke says clearly.** A finger
+comes down and lifts deliberately, so the first and last letters are near
+certain. That pair is a slice of about three hundred words across both
+dictionaries — measured, out of seventy thousand. The last letter is one
+character comparison and throws away most of a first-letter bucket; the length
+of the journey is one pass over the word and throws away most of the rest; only
+what survives both is worth the full comparison. Endpoints admit their close
+neighbours too, capped at three, because unlike everywhere else in the search
+that generosity is *quadratic* — three first letters and three last ones is nine
+slices.
+
+**Measured on the shipped wordlists**, the 800 commonest words of the two
+languages:
+
+| trace | top-1 | top-3 |
+|---|---|---|
+| perfect | 97% | 100% |
+| realistic (rounded corners, thumb wander) | 97% | 100% |
+| sloppy | 96% | 100% |
+| endpoints half a key off | 94% | 100% |
+
+About 265µs per stroke, warm. This runs once per word rather than once per
+keystroke, so it has a whole word's worth of typing to hide in.
+
+**Every miss is one of two permanent ambiguities, and the right word is always
+rank two.** A doubled letter is one place on the keyboard — the finger does not
+move for the second `l` of `hello` — so `das` and `dass` are traced along
+literally the same path. Folding does the same to `wurde` and `würde`, since no
+accent can be swiped at all (D5 puts them on a long-press). Nothing separates
+these but how common each is, the commoner wins, and it is right rather more
+often than not. What makes that survivable is that **the runners-up stay in the
+strip**, one tap away, and they displace ordinary completions while they last:
+after swiping `das`, completions of `das` are of no use to anybody and `dass` is
+the only thing worth offering.
+
+**A stroke commits without a trailing space and stays the word in progress.**
+That is what makes everything after it work with no special cases: tapping an
+alternate replaces it exactly the way tapping a suggestion always has, typing
+`s` after swiping `dog` gives `dogs`, and backspace eats it a letter at a time.
+The next stroke puts the space in front of itself. And a half-typed word in
+front of a stroke is never swallowed — it gets that separating space — because
+it is far likelier to be wanted than to be a mistake, and under D14 a
+replacement that cannot be undone is not one to make quietly.
+
+The alternates are tied to the committed word rather than cleared by hand.
+Typing on, backspacing, pressing space, moving the cursor, changing field: every
+one of them changes the word in progress and retires the alternates by doing so.
+One invariant instead of a list of places to remember.
+
+**No swiping where there are no suggestions.** A password box has no dictionary
+for a stroke to be decoded against, so the gesture is not recorded there at all
+rather than recorded and refused. A gesture that visibly draws itself across the
+keys and then does nothing is worse than one that is absent — and the ribbon
+would be a picture of a password.
+
+**Entry is a crossing, not a distance.** A drag off a letter becomes a stroke
+when it reaches a *different letter key*. Distance alone would not do: a tap
+that drifts must stay a tap, and a lazy thumb drifts a surprising way without
+meaning to leave the key. Requiring a real crossing also means the gesture
+cannot fire on the modifiers, none of which are letters, so the space bar,
+shift and backspace keep the drags D20 and D24 gave them. Recording starts at
+touch-down regardless, before anything has been decided, because by the time a
+stroke has proved itself the first leg has already happened — and the first leg
+carries the first letter, which is half of what bounds the search.
+
+**Backspace after a swipe removes the whole word.** A stroke is one act, so
+undoing it is one act. Taking a letter at a time off a word nobody typed a
+letter of is busywork — the word was wrong as a whole, and what happens next is
+always either swiping it again or typing it out. Only while the swiped word is
+still exactly what stands in front of the cursor, which is the same invariant
+that keeps the alternates in the strip; after that, backspace is a backspace.
+
+**The stroke stays on screen until the next press, with both ends ringed.**
+A swipe that produces the wrong word is otherwise impossible to argue with: by
+the time the word appears the evidence for how it was chosen has gone. The two
+rings are not decoration — the first and last letters *bound the entire search*,
+so if a ring is sitting on the wrong key that is the whole explanation. The
+start is hollow and the end filled, so the direction is readable from the still
+picture.
+
+### D39a — What the first week of swiping actually found
+
+Three things, and they are worth separating because only two of them were bugs.
+
+**Batched touch samples were being thrown away.** Android reports touches faster
+than it draws frames, so one `ACTION_MOVE` carries every sample since the last
+one, with all but the newest in the historical arrays. Reading only the current
+position samples the stroke at frame rate. Measured, on otherwise identical
+strokes: 97% top-1 at touch rate, 92% at one report per frame, 85% at one per
+frame through a fast flick. The corners are the first thing to go, and the
+corners are the letters. This is a genuinely nasty bug to notice from the
+outside, because slow careful strokes decode fine either way — it makes the
+keyboard look worst at the words you type fastest, which are the ones you know
+best.
+
+**Three of the four prefilters were too tight**, and a prefilter is the worst
+place to be wrong. An outranked word still sits in the strip one tap away; a
+word cut by a gate is gone before anything scores it, so it is not offered, not
+a runner-up, and indistinguishable from the keyboard not knowing the word at
+all. Measuring the *correct* word's cost against each gate showed hurried
+strokes reaching 1.16 at the 99th percentile against a ceiling of 1.0, and hard
+corner-cutting putting the length ratio past its bound. All four were loosened,
+with `GestureGateTest` now asserting that no gate ever rejects the right word
+and that hurried strokes keep a fifth of the cost ceiling in reserve. Cost:
+decode went from about 340µs to about 570µs, which is nothing once per word.
+
+**And one thing that was not found.** After both fixes the synthetic accuracy is
+96–97% top-1 and 100% top-3, evenly across the two languages, with no gate
+rejecting anything — and that does not match the reported experience of frequent
+wrong words. Ruled out along the way: the keyboard's proportions (the fixture
+now uses the real 52dp rows and 3dp gaps, which changed nothing), and the theory
+that German suffers more from the doubled-letter and umlaut collisions (it has
+17% doubled letters and 8% accents against English's 14% and 0%, and still
+scores 96% against 97%).
+
+What is left is the finger model. The synthetic thumb rounds corners by a
+fillet, wanders on two slow sine waves and is reported at a fixed spacing; a
+real one does none of those things exactly, and the accuracy table is only ever
+as good as that model. This has already been wrong twice — white noise per
+sample is a sawtooth rather than a thumb, and pulling vertices toward the chord
+of their neighbours deletes corners rather than cutting them — and both times it
+made the decoder look far worse than it was, so it is quite capable of being
+wrong in the flattering direction too. **The next move is evidence rather than
+another hypothesis**, which is what the ringed, persistent stroke is for.
+
+**What it costs `h`.** D38 put line steering on a plain vertical drag off `h`,
+and a plain drag off a letter is now a word. The two cannot be separated by
+direction: `h` to `b` is down and to the left, which is exactly what steering
+looks like. So they are separated by what came *before* — **tap `h`, then press
+again and drag**. No stroke ever begins that way, because a stroke begins with a
+finger landing on a key it has not just left.
+
+The arming tap types an `h` nobody wanted, so it is taken back when the drag
+starts. **Only on the drag**: a plain double tap still types both letters, so
+`withhold` and `Rohheit` cost nothing. The alternative considered was hanging
+the gesture on a letter that never doubles, but no letter on the home row
+qualifies and being in the middle of the home row is the whole reason `h` was
+picked. And the retraction asks the field what is actually in front of the
+cursor rather than assuming, because between the tap and the drag the app may
+have done anything.
+
+### D39b — What the phone said next
+
+Two strokes from real use, and they turned out to be two different problems.
+
+**`learning`, decoded as `laughing`.** Both begin `l`, end `g`, are the right
+length, and `laughing` is six times the commoner — so the geometry had to
+overturn that and could not. It never charged `laughing` for the plain fact
+that the finger went up to `e` and out to `r`, which its route passes nowhere
+near.
+
+Comparing the two paths point for point asks the wrong question twice. It
+charges full price for the *route between* two letters, when how a finger chose
+to travel is not evidence about anything. And it couples by position, so a
+loop — which is what a reversal looks like at speed — shifts every later sample
+against its counterpart. Measured: as a loop grows, the cost of the **correct**
+word climbs from 0.00 to 0.79 while the wrong one, already misaligned and with
+nothing left to lose, sits flat around 0.9. It punished the word it was meant
+to find.
+
+Two alignment-free terms replaced it, and they are converses. **Visit** asks
+whether the finger came near each of the word's letters, in order. **Coverage**
+asks whether the word's route explains where the finger actually went. Neither
+survives alone — a short word satisfies the first trivially, a rambling one the
+second — and together they are hard to cheat. Both are root-mean-square rather
+than mean, because a word is wrong if *any* letter went unvisited and averaging
+buried exactly that: `leaving` misses `v` by two key widths, and spread across
+seven letters it vanished.
+
+Letters are measured to the nearest point *on* the stroke rather than the
+nearest sample, which removed a floor of half a key that had nothing to do with
+the typist, and `SAMPLES` rose to 48 because corner fidelity now matters where
+it did not before. On the reported stroke `laughing` costs 1.12 against
+`learning`'s 0.15.
+
+**`swiping`, not offered at all — and that one was not geometry.** The decoder
+had it right: 0.05 against `stopping`'s 0.49 and `selling`'s 1.16, the best fit
+by a wide margin. `swiping` occurs **236 times in 675 million words** of film
+subtitles. Its share of the corpus is *smaller than* [UNKNOWN_WORD_PRIOR], so
+the keyboard rated "a word I have never heard of" as three times likelier than
+the word itself, and no quality of trace could have rescued it. The frequency
+data is film dialogue and the word is from the smartphone era.
+
+So **rarity counts for less when swiping**: the score uses the square root of
+the corpus weight rather than the weight. The justification is not the one word
+it rescues but what a stroke *is* — a whole word's worth of geometric evidence,
+where a typo correction works from one or two characters, so the shape has
+earned the right to overrule the frequency table further than it may there. It
+pays for itself on the corpus as well, lifting top-1 from 95% to 96% on
+realistic traces and 93% to 95% on sloppy ones. The unknown-word prior is
+raised to the same power, or it would be swamped and every stroke would come
+back certain.
+
+`swiping` still does not win, and after a second look that is not a shortfall
+at all — it is **arithmetic**. `swiping` is `s w i p i n g` and `sweeping` is
+`s w e p i n g`, and `w`, `e`, `i` and `p` all sit on the top row at the same
+height: `w→i→p` and `w→e→p` are *the same straight line*, and the tails
+`p→i→n→g` are identical. Same start, same corners, same end, same length. The
+two words are one stroke, exactly, and no geometry will ever separate them —
+they are `das` and `dass` again, in a less obvious costume.
+
+So frequency decides, ten to one, and the loser is second in the strip. Teaching
+the word with the personal key (D40) settles it for good, which is exactly what
+D8 built that key for, and there is a test that says so.
+
+**Corners count for more than straights**, and this is what fixed the stroke
+above — a stroke I had twice mis-read, first as being about `sweeping` and then
+as being about frequency. What actually came back was `seeing`, with `song` and
+`strong` beside it, and the objection from the phone was exact: all three ignore
+the corner at `w`, and `strong` additionally wants a back-and-forth over `r` and
+`t` that the finger never made. In the middle of
+a straight run the finger had to be *somewhere*, and where it was says almost
+nothing about which word this is — any candidate running roughly that way
+explains it. A corner is a deliberate change of direction, and fingers change
+direction at letters, so a word that fails to account for a corner is failing to
+account for the evidence. Coverage therefore weights each point of the stroke by
+how sharply the finger turned there, measured across a window of a few samples
+so the reading is a corner rather than digitiser noise.
+
+Reconstructed from the screenshot and measured, the weighting does exactly what
+was asked of it. `seeing` climbs from 0.66 to 1.08 as corners come to count for
+more, `strong` from 0.82 to 1.00 and `song` from 0.71 to 0.79, while `swiping`
+does not move from 0.05 — because its corners *are* the stroke's corners. All
+three are now out of the strip entirely, and a test holds them there.
+
+It pays on the corpus too: realistic traces 96% to 97%, sloppy 95% to 96%,
+frame-rate sampled 93% to 94%.
+
+What is left over is a three-way tie no geometry can break. `swiping`,
+`sweeping` and `swooping` are `s w i p i n g`, `s w e p i n g` and
+`s w o p i n g`, and `e`, `i`, `o` and `p` all sit on the top row at the same
+height — so all three trace one identical polyline, to within half a percent.
+Frequency orders them, the strip carries all three, and the personal key (D40)
+settles it permanently. That is `das` and `dass` again in a less obvious
+costume, and it is the right place for the argument to end.
+
+**The cost of all this** was decode time: from about 0.3ms to about 3ms per
+stroke. Once per word rather than once per keystroke, so there was room — but a
+phone runs on a battery, and several hundred candidates each getting two
+dynamic programmes is a poor way to discover that most of them start with the
+wrong letters.
+
+So the search sifts before it scores. **There are only twenty-six places a
+letter can be**, so the distance from every key to the stroke is worked out once
+and read off by every candidate. Ignoring the order the letters must come in can
+only make the answer smaller, and coverage is never negative, so that gives a
+genuine *floor* under a candidate's cost for the price of a table lookup per
+letter — and a floor under the cost is a **ceiling on the score**. A candidate
+whose best conceivable score is ten thousand times below the best conceivable
+score going is not scored properly at all.
+
+That took 3ms to 0.8ms with no measured accuracy change whatever. It is not
+quite free of consequence, so the consequence is arranged to fall the right way:
+the skipped candidates' most flattering possible scores go into the confidence
+*divisor* rather than being dropped, which means the pruning can only ever make
+the keyboard sound less sure than it is, never more. An optimisation that
+quietly inflated confidence would be changing the answer, and D3 rests on that
+number meaning something.
+
+Loosening the threshold tenfold was tried and doubles the time for no accuracy
+at all — including on the one coarse-sampling case that sits at 99% rather than
+100% in the top three, which is therefore the model's doing and not the
+pruning's.
+
+### D39d — A key is a rectangle, and it is taller than it is wide
+
+A second `swiping` stroke came back as `stopping`, and reconstructing it from
+the screenshot pixel by pixel found two mistakes in the *unit*, not in the
+model.
+
+The finger came up off `s`, turned inside the **bottom** of the `w` key, and
+set off right. Every letter of `stopping` sat within 0.35 of a key of the
+stroke; every letter of `swiping` did too, except `w` at **0.71**. That single
+number lost the word.
+
+Neither half of it was the typist's fault:
+
+- **The miss was almost entirely vertical**, and every cost here is quoted in
+  key *widths* while a phone's keys are half again as tall as they are wide. A
+  0.44-key-height error was billed as 0.66. Distances are now measured in key
+  *units* — the vertical scaled by the aspect — so one unit is one key in
+  either direction.
+- **The corner was inside the `w` key.** The keyboard's own hit testing would
+  call that a `w` without hesitating; only the decoder disagreed, because it
+  measured to the centre of a key as though a key were a point. A key's own
+  extent is now free.
+
+Together they reverse the answer: `swiping` cost 0.627 against `stopping`'s
+0.584, and now costs 0.251 against 0.281. The corpus agrees — sloppy traces
+95% to 96%, the rest unmoved — and the pruning bound had to learn the same
+free reach, or it would have started refusing candidates the full cost would
+have accepted, which is the one thing a pruning step may never do. That cost
+about half the speed won by the pruning: 0.8ms to 1.7ms, still a fifth of what
+it was before any of it.
+
+**And `swiping` still is not offered, which is now definitely not geometry.**
+The shape ranks it first; frequency puts it fourth. It occurs 236 times against
+`stopping`'s 14,667, `song`'s 86,877 and `sweeping`'s 2,435 — sixty, three
+hundred and ten times over — and after the square root that is still a factor
+of three to seven, where the cost advantage is worth about one and a half. No
+honest weighting of a corpus that has barely heard the word will put it top.
+The personal key settles it in one hold, and that is the mechanism D8 exists
+for rather than a consolation.
+
+### D39e — The strip is the appeal, so order it by the finger
+
+Two bugs in one screenshot, both about what the strip is *for*.
+
+**The last slot was always empty.** A swipe commits its best candidate and
+offers the rest (D39), and the ranking returned exactly three — so after the
+commit took one there were two left and the third slot stood blank. The fourth
+candidate was never worked out at all. It asks for one more than the strip
+holds now.
+
+**And two of the three slots were the same word**, `song` and `Song`. A finger
+cannot express a capital, so those are one answer to a stroke; the runners-up
+are folded case-insensitively, and D24's re-case gesture is how the other
+casing is reached. Tapping keeps them distinct, because there the letters typed
+already say something about the case.
+
+**The third thing was not a bug so much as a wrong question.** The strip was
+ordered the same way the commit is — shape weighed against frequency. But the
+strip is only ever read *when the commit was wrong*, so ranking the rest by
+frequency again asks the question that has just failed and answers it the same
+way. On the observed stroke the four best fits were `swiping`, `sweeping`,
+`swooping` and `stopping`, between 0.25 and 0.28, while the strip offered
+`song` and `strong` at 0.51 and 0.56 — twice the misfit, on the strength of
+being three hundred times commoner. Two of the three slots went to words that
+plainly did not match the picture on the screen.
+
+So the commit still weighs both, because for a first guess frequency deserves
+its say. The runners-up are ordered by **how well they fit**, ties to the
+commoner word. If the frequency table has had its turn and lost, what is left
+to consult is the finger. Corpus top-3 stays at 100% and frame-rate sampling
+improves two points.
+
+**`swiping` is still not in the strip, and the reason has stopped being
+interesting.** It ties `sweeping` and `swooping` exactly — all three trace one
+polyline — and loses the tie-break by twelve occurrences in six hundred and
+seventy-five million; `seeping`, one letter shorter, edges it on a
+root-mean-square over fewer letters. It is a photo finish between words that
+are the same stroke, and no principle decides it. The personal key does, in one
+hold.
+
+### D39c — The address bar is a search bar
+
+`TYPE_TEXT_VARIATION_URI` was refused suggestions along with email addresses and
+search filters, on the grounds that its contents are not prose. On a desktop
+that is true. On a phone it is not: the address bar and the search bar are one
+box, and Firefox's is the one people type most of their questions into.
+Refusing to help there withholds suggestions from a great deal of ordinary
+prose in order to avoid interfering with the occasional hand-typed URL — and an
+address that matters usually arrives by paste, not by typing.
+
+**The obvious hazard turns out to be self-limiting.** A correction only ever
+fires on **space** (D28), and a space in the address bar is precisely the signal
+that this is a search and not a hostname: nobody types a space inside a domain.
+So the destructive half of the feature reaches the text only in the case where
+it is wanted, and nothing has to detect which mode the box is in. That is worth
+more than a mode detector would be, because it cannot be wrong.
+
+Swiping follows suggestions (D39), so it returns here too, and that is the
+larger part of the gain — a search is exactly the kind of throwaway prose a
+swipe is for.
+
+Email and filter fields keep their refusal: those really are not prose, and
+neither doubles as anything else. And a browser that genuinely wants no help
+can still say so with `NO_SUGGESTIONS`, which is checked before any of this and
+is the app's decision rather than a guess made from a variation code.
+
+### D39f — How much of a language a swipe cannot see, and why Dvorak is worse
+
+`scripts/swipe-collisions.py`, run on the shipped wordlists. A word's shape is
+the polyline through its letters' key centres, reduced: consecutive repeats
+collapse, and a vertex lying *on* the line between its neighbours disappears.
+Two words with the same reduced shape cannot be told apart by any decoder,
+however good — only by how common they are.
+
+| | QWERTY | Dvorak |
+|---|---|---|
+| English — typing that collides | 41.6% | 51.8% |
+| English — **irreducible error** | **3.10%** | **4.47%** |
+| German — typing that collides | 42.3% | 50.8% |
+| German — **irreducible error** | **4.91%** | **7.82%** |
+
+The irreducible error is the share of words a perfect decoder must still get
+wrong, because all it can do with a collision is answer with whichever member
+is commoner. About one word in thirty in English, one in twenty in German.
+
+**Dvorak is markedly worse — half again as bad in German — and the reason is
+that it is optimised for exactly the property that destroys a swipe.** Its
+design puts the frequent letters on the home row: all five vowels together on
+the left, the common consonants on the right. Letters sharing a row are
+*collinear*, and a vertex on a straight line leaves no trace in the shape. So
+Dvorak turns `in`/`ihn`/`ihnen` into one stroke, and `ein`/`einen`/`essen`/
+`eben` into another. Minimising finger travel and maximising home-row use is
+the same thing as flattening the shapes, and a swipe is nothing but shape.
+
+The measurement is robust in the ways that could have made it an artifact. It
+is unchanged across key aspect ratios from square to 1.8 — collinearity
+survives scaling — and unchanged whether the rows are a uniform grid or
+stretched to fill the width as this keyboard actually places them. The
+collisions are within-row and doubled-letter, not a detail of placement.
+
+Some things worth knowing beyond the totals:
+
+- **`das`/`dass` alone is 0.61% of German typing**, an eighth of the whole
+  German error. `the`/`there`/`these` is 0.60% of English.
+- **5.35% of English typing cannot be swiped at all** — it is `a` and `I`,
+  words of a single key. German's figure is 0.26%, having no common one-letter
+  words.
+- Case and accent collisions (`wurde`/`würde`) cost German a further 0.45% and
+  English nothing, as it has neither.
+
+Which puts a ceiling on the feature and says where the remaining work is. The
+decoder is at 96–97% top-1 on synthetic traces against a 3–5% floor it cannot
+go below, so **geometry is close to spent**. Getting past it needs context —
+knowing that the word before was `ich` makes `das`/`dass` a decidable question
+rather than a coin toss weighted by frequency. That is D10 and D12, and this
+measurement is the argument for them.
+
+### D41 — `i` is `I`, and `ivll` is `I'll`
+
+Measured first, because the size of it decided the shape. `I` alone is
+**20.7 million occurrences — the second commonest word in English**, after
+`the`. With `I'm`, `I'll`, `I've` and `I'd` the I-forms are **4.01% of English
+typing**.
+
+And the keyboard offered nothing for any of them. Two separate reasons, neither
+deliberate:
+
+- **A single letter never reached the strip.** [MIN_PREFIX] wants two before it
+  will guess, which is right for *completing* — one letter is not evidence of
+  anything and its candidates are most of the alphabet's worth of words — but
+  it also turned away the case question, which needs no completion at all.
+- **And it was never corrected**, because `Lexicon.knowsExactly` ignores case on
+  purpose (D5's reasoning: the typist decides case, `über` versus `uber` is the
+  question it exists to answer) and so judged `i` perfectly well spelled.
+
+**This is not a rule about capitals but about which casing the dictionaries
+prefer**, which is the only honest way to ask it on a bilingual keyboard:
+English has `I` and no lowercase form, German has a lowercase `i` (19,718) and
+no capital. Their corpus shares settle it at better than two hundred to one, so
+`i` corrects to `I` at 0.996 — **and the German `i` stays in the strip**, because
+a keyboard choosing between two real words should show its working. Only single
+letters: the same reasoning would capitalise every German noun on sight, `haus`
+to `Haus`, which may well be right and is emphatically a separate decision.
+
+**The apostrophe rule got much wider and much simpler.** It knew one pattern —
+a word ending `vs` — and had to *build* the answer, because the corpus the
+frequencies came from split `don't` into `don` and `t` before counting and the
+wordlists carried no contractions. They carry seventy-four now, so the rule
+collapses to: put an apostrophe where the `v` is and see whether that is a word.
+Every position, not just the last, which is what reaches `ivll` and `ivm`. It
+brings `donvt`, `youvre`, `wevre`, `ivve` and `ivd` with it, all above 0.99.
+
+**The old rule stays beside it**, and deleting it was a mistake caught by its
+own tests. The lookup only knows the fixed contractions; `'s` is **productive** —
+every English noun takes a possessive and every German verb takes the clipped
+`es`, so `have's` and `geht's` are real and no wordlist will ever list them all.
+One rule for the closed class, one for the open one.
+
+Rejected on the way, and worth recording because both were reasonable:
+
+- **Swipe up on a letter to capitalise it** only works on the top row. Below it,
+  an upward swipe is already the start of a swiped word — `de`, `free`, `great`
+  all begin by going up — and a rule that works on `i` but turns `s` into `se`
+  is worse than no rule.
+- **Tap, press again, swipe up**, the general version, is conflict-free but two
+  touches with a timing constraint, where shift-then-letter is two touches
+  without one. It is not faster than what already exists.
+
+Doing it automatically costs no gesture, no discovery, and nothing to perform
+four percent of the time.
+
+### D42 — Sentences after the first one
+
+Auto-capitalisation was applied **once**, when focus arrived, and never again.
+The only thing that ever turned shift back on afterwards was the double-space
+full stop — and since that gesture only ever writes `.`, while `?` and `!` are
+reachable only by long-press, **every question and every exclamation was
+followed by a lowercase letter.** So was every sentence whose full stop was
+typed from the symbol layer rather than by double-tapping space.
+
+Now the same question is asked after every edit that could have ended a
+sentence. A sentence starts at the very beginning of a field, after a newline,
+and after a sentence mark followed by a space.
+
+Three details worth having decided:
+
+- **Not on the mark itself.** `Hello.` with the cursor tight against the stop
+  is still mid-sentence until a space says otherwise, or `e.g.` and `3.14`
+  would fight it.
+- **Only ever on.** Turning shift *off* would be second-guessing a press the
+  typist made deliberately, and `consumeShift` already spends it on the next
+  letter.
+- **The field is only asked when the edit could plausibly have ended a
+  sentence** — a space, a newline or a mark — which keeps an IPC round trip off
+  every keystroke.
+
+And the same bilingual quote trap as D41's: the mark can hide behind a closing
+quote, and German closes a quotation with `“` where English opens one with it,
+so every quote character counts as one to step over regardless of which side it
+nominally belongs to.
+
+### D40 — The personal key
+
+**The strip could only offer to remember a word when it had a slot going
+spare**, and that is exactly backwards. The moment you most need to add a word
+is when the keyboard is *confident and wrong* — when what you typed is one slip
+from three real words, so all three slots are full of them and there is no room
+left to say "no, the thing I actually typed". A word the keyboard has never
+heard of gets offered readily; a word it thinks it knows better than you cannot
+be added at all.
+
+Under D8 the personal store is the only thing that ever teaches this keyboard
+anything, so the friction of adding a word sets the ceiling on how good it
+becomes. A path that closes precisely when it is needed is not a path.
+
+So the position next to the layer toggle — the globe's, then the trail
+toggle's (D38) — becomes a **purple plus**, in the same purple as the trail and
+the correction flash, because everything in this keyboard that means "the
+keyboard knows something about your words" is that colour and this is the key
+that decides what it knows.
+
+**What gets remembered is whatever is between the spaces**, not what the word
+tokeniser thinks a word is. Those are different questions and the first version
+asked the wrong one. `WordInProgress` stops at the first character that is not
+a letter, because suggestions and corrections are about words — so asking it to
+remember `john@coonabibba.de` produced `de`. The things people deliberately put
+in a personal store are frequently not words by that definition: addresses,
+paths, phone numbers, hyphenated compounds. Whitespace is the delimiter the eye
+uses and it is the right one here.
+
+Framing punctuation is trimmed — a trailing comma or closing bracket belongs to
+the sentence rather than to the thing — and quotes come off **both** ends,
+because `“` closes a German quotation and opens an English one and D2 says both
+are live in the same paragraph. **The full stop is deliberately kept**: German
+abbreviates `z.B.`, `d.h.` and `usw.` with one and a domain is nothing but full
+stops, so trimming would break far more than it fixed. The cost is remembering
+a sentence's own stop when a word is learned after it, which the launcher can
+undo.
+
+**And learning had to be untangled from suggesting.** `learningAllowed` was
+defined as `suggestionsAllowed` plus the no-personalized-learning flag, which
+bundles two things that only look alike: whether the keyboard should volunteer
+completions into a field, and whether the user may deliberately tell it to
+remember something typed there. An email field refuses the first because
+addresses are not prose — and so refused the second, making it impossible to
+remember an email address while standing in the one field an email address is
+typed into. Same for URIs and for search boxes carrying `NO_SUGGESTIONS`.
+
+Under D8 nothing is ever absorbed silently; every write to the store is already
+somebody asking for it. There is no case for second-guessing that request in a
+field whose only sin is not containing sentences. Learning now refuses exactly
+three things, each for a reason of its own: **passwords**, because a secret
+written to a plain file is a secret no longer; **`IME_FLAG_NO_PERSONALIZED_LEARNING`**,
+because the app has said not to and that is not optional; and **anything that is
+not a text field**, which has nothing in it worth a place in a vocabulary.
+
+This is the third time the same mistake has been caught in three decisions —
+D38's inert toggle, D40's unreachable trail setting, and now this — and they
+share a shape: **a capability switched off by a rule that was written for a
+different question.** Worth naming, because the next one will look reasonable
+too.
+
+**One switch over both pictures of what was just typed.** There are now two:
+the keypress trail (D19) and the stroke a swipe leaves on the keyboard (D39).
+The stroke is the franker of the pair — the trail says which five keys were
+pressed, while the stroke draws the whole word's shape across the board and
+then stays there until the next press — so a switch that hid one and not the
+other would not mean anything. Both now follow the same setting.
+
+Recording is untouched by it. Unlike the trail, which D38 stops *writing down*
+rather than merely stops drawing, a stroke's points are not a record kept for
+later: they are how the word is worked out at all, and they are gone the moment
+it is. What settles on screen is what the switch controls.
+
+**And the switch needed somewhere to live.** Moving the toggle key into
+password fields alone left the setting for every *other* field unreachable —
+stuck on, with nothing anywhere to change it. It is a switch in the settings
+screen now, which is where a preference that is not urgent belongs; the key
+remains for the one case that *is* urgent, which is somebody standing behind
+you while you type a password.
+
+**A stroke never appears in a password field regardless**, because swiping is
+switched off there entirely: without suggestions there is no dictionary to
+decode a path against, so the gesture could produce nothing. That is a
+functional limit rather than a policy one, and it is worth saying plainly
+because it means the toggle's effect on strokes is invisible in exactly the
+field the toggle is on.
+
+**The trail toggle keeps the position in password fields, and only there.**
+That was always where its argument lived — the moment somebody is standing
+behind you — and D38's per-field settings already meant the two kinds of field
+answered separately. Now they carry different keys. The two are the same width
+in the same place, so nothing moves under the thumb when focus changes, which
+is D16's rule applied to a swap it did not anticipate.
+
+**Three things on one key**, because they are three points on one idea:
+
+- **Tap** opens the quick menu: the handful of stored strings worth inserting
+  whole rather than completing towards — an email address, a postcode, a name
+  nobody spells right. These are ordinary personal-store words with a flag, not
+  a second list, so a string cannot be on the menu without being a word the
+  keyboard knows.
+- **Hold** remembers the word in front of the cursor. This is the point of the
+  key and the answer to the complaint above: it needs no free slot, no offer,
+  and no particular state — just the word being there.
+- **Double tap** opens the launcher screen, where the stored words are listed,
+  tagged and removed.
+
+The order those are tested in is the design. A second tap inside the window
+always wins, *including the tap that closes the menu the first one opened* —
+which is what makes "tap for the menu, double tap for settings" one motion
+rather than two that fight. And a tap with nothing on the menu opens the
+settings too rather than doing nothing, which is D38's lesson applied before it
+could be relearned: a control that silently does nothing is worse than one that
+is absent, and an empty menu means the settings screen is exactly where you
+need to go.
+
+**The quick menu is modal, and the long-press popup is not.** It opens on a
+*release*, so by the time it is on screen the finger has gone and it has to
+survive until a separate press picks something — where the alternates popup
+lives and dies inside a single touch. That is why it is not the same mechanism
+despite looking like one, and it is drawn as stacked rows rather than
+side-by-side cells because addresses are not characters and a row of them would
+be unreadable at any width a phone has.
+
+**It scrolls, and it is sorted.** Only about four rows fit above the key, and
+the first version simply dropped everything past that — a menu that silently
+loses entries as it grows is worse than no menu, because it is the entries you
+added most recently that vanish. So the rows live in a viewport with an offset
+rather than each having a fixed rectangle: with scrolling there is no fixed
+rectangle for a row to have, and computing the position from the offset in both
+directions is what keeps drawing and hit testing from disagreeing.
+
+Past the touch slop a drag becomes a scroll and the pressed row is *unselected*,
+or letting go at the end of a drag would insert whatever the finger came to rest
+on. And the scrollbar is drawn whenever there is anywhere to scroll to, because
+a full menu and a menu with six more below the fold look identical otherwise —
+nothing else on this keyboard scrolls, so there is no habit to fall back on.
+
+Sorted by the same folded comparison the launcher screen lists everything with,
+so a word is in the same place on both, and `Ärztin` sorts under A where it is
+looked for rather than after Z where its code point puts it.
+
+**The file format had to stay readable.** A quick entry is the word, a tab, and
+a marker; a bare line is an ordinary word, which is every line of every file
+written before this. The store also holds one list of entries rather than a
+list of words plus a set of tags — two fields cannot be swapped together, and a
+reader landing between the two writes would see a word tagged quick that the
+store does not have.
+
+### D43 — The unknown-word prior stops being a constant
+
+`hsnging` was not corrected to `hanging`, and `hanging` was the **only**
+candidate on the table. It scored 0.045 against a threshold of 0.90.
+
+Nothing was wrong with the correction. What it had to beat was wrong.
+
+D3 makes confidence a share of everything on the table, and that table has
+always included `UNKNOWN_WORD_PRIOR` — a standing 1e-6 for "what was typed is a
+real word nobody has told the keyboard about: a name, a codeword, jargon". It is
+the thing that stops the keyboard rewriting `Coonabibba`. But it was a flat
+constant, and a flat constant says `hsnging` is as plausibly somebody's surname
+as `Coonabibba` is. `hanging`'s score, discounted for a full-price substitution,
+came to 4.7e-8 — twenty times smaller than the standing claim that `hsnging` was
+a word all along. No correction of a rare-ish word can ever clear 90% against
+that, however obvious it is.
+
+So the prior is now multiplied by a **character-trigram model of the two
+languages**, built from the wordlists at startup. `hsn` occurs in no German or
+English word; `oon`, `nab` and `bba` all do. `hsnging` now corrects at 0.99.
+
+Four things about it were decided deliberately.
+
+**Built, not shipped.** The wordlists are already being read and parsed at
+startup; counting trigrams over them is one more pass and costs 5ms on the disk
+thread. An asset would need a format, a provenance note, and a way to stay in
+step with the lists it was derived from.
+
+**It can only ever lower the prior, never raise it.** Plausibility is clamped at
+one, so a word-shaped string keeps exactly the protection the flat constant gave
+it and gains none — every change this model can produce is in the direction of
+correcting something that was previously left alone, and no correction that
+works today can be weakened by it. The reason is that *plausible-looking typos
+are the common kind*: `teh` is word-shaped, because German has `stehen`, and
+rewarding it for that would weaken the single most valuable correction in
+English.
+
+**Seven nats of floor, chosen by measurement.** `NameProtectionTest` scores
+fifty-odd names, place names and pieces of jargon against a set of real slips in
+both languages, and sweeps the floor:
+
+| floor | typos fixed | names lost |
+|-------|-------------|------------|
+| 12    | 17          | 4          |
+| 9     | 17          | 3          |
+| **7** | **16**      | **1**      |
+| 6     | 13          | 1          |
+| 5     | 10          | 1          |
+
+Twelve nats correct `Tyberius` to `Tiberius` and `systemd` to `system`. Seven
+protects both and gives up almost nothing. Under D8 that trade is not close:
+a typo left standing costs a backspace, while a name corrected away can only be
+recovered by adding it to the store by hand.
+
+The one casualty at seven is `Jost` → `Just`, which was already at 0.73 before
+any of this — a four-letter name one slip from a word in the commonest hundred.
+Short names are exposed and no setting here changes that; D40's purple plus
+does.
+
+**It declines to have an opinion on a small corpus.** The table has 19,683
+cells. Learn it from a few dozen words and it describes *those words* rather
+than a language: everything ordinary looks implausible and the prior collapses
+for strings it has no business doubting. Below a thousand words it is flat.
+That was found by a test fixture, and it is the right behaviour in production
+too — if a wordlist asset ever fails to load, the alternative is a keyboard
+rewriting text on the strength of nothing.
+
+**Splitting the counts by position does not help, and was measured.** The
+obvious next move is that a trigram only sees the word start for the first two
+positions — by the third character the boundary has slid out of the window, so
+`teh`'s `(t,e,h)` is the same context as `stehen`'s. Bucketing the table by
+distance from the nearer end puts them back apart. Built and swept at two, three
+and four buckets against the nine slips the prior currently blocks:
+
+| | 1 bucket | 2 | 3 | 4 |
+|---|---|---|---|---|
+| `thier` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `freind` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `villeicht` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `untill` | 0.75 | 0.49 | 0.92 | 1.0 |
+
+Nothing moves, and the giveaway is the control: the model scores the *correct*
+words just as badly — `friend` at 0.089, `until` at 0.060. It has no
+discriminating power on this class in any configuration, while names degrade as
+the buckets multiply and thin the data (`Sven` from 0.0065 to 0.0013).
+
+The reason is D2 rather than the window. `freind` is built from `rei`, `ein` and
+`ind`, all extremely common **German**; `villeicht` is German-plausible
+throughout; `thier` looks like `hier` and `Tier`. These sequences are legitimate
+somewhere in the union of the two languages, and where in the word they sit does
+not change that. **A bilingual keyboard's spelling model is structurally weaker
+than a monolingual one**, for the same reason D39f found more swipe collisions
+in German than in English and more again in both together. This is a tax on D2,
+not a bug to be fixed.
+
+Loosening the falloff instead (D34's slider) trades about one for one — from 7
+to 5 buys three of the nine and loses `Tyberius` and `Rhys` — which is far worse
+than the sixteen-for-one the shape model itself got. There is no cheap lever
+left.
+
+**What this is not** is the context model of D10/D12. It knows nothing about the
+previous word; it is a claim about spelling alone, which is precisely why it is
+cheap enough to be exact and safe enough to ship ahead of step 6. The gains left
+on the table — `Wohnzimer`, `Schmeterling`, `Gescichte` all still sit below the
+threshold — are the ones that need to know what sentence they are in.
+
+### D44 — A capital in the middle means a name
+
+Neither of this keyboard's languages puts a capital inside a word. German
+capitalises the first letter of a noun, English the first of a sentence or a
+proper noun; nothing in either puts one in the middle. So anything that does is
+a brand, a product, an identifier or a surname — `iPhone`, `eBay`, `McDonald`,
+`JavaScript`, `GmbH`, `PostgreSQL`, `TyberiusPrime` — and it got there by a
+deliberate shift press in a deliberate place. **It is the strongest evidence the
+keyboard ever gets that the typist knows exactly what they are writing**, and it
+is free: no model, no wordlist, no measurement, just a property of the string.
+
+So it turns auto-correction off outright, in the same way D28's "already a word"
+does. Candidates are still gathered and the strip still fills, because a
+suggestion costs nothing and might be wanted; what stops is replacement.
+
+What it was worth, measured across twenty camel-cased names: **one live bug** —
+`iOS` was being replaced by `is` at 0.91 — and three near misses that a nudge to
+the falloff slider would have let through, `DeepL` → `Deep` at 0.74, `AGit` →
+`Gait`, `macOS` → `Marcos`. Modest, and it costs nothing, because a word with a
+capital in the middle is essentially never in either wordlist and so had nothing
+to gain from correction in the first place.
+
+**A word in capitals throughout is exempt, and that exception carries the
+decision.** Shouting is a styling choice rather than a claim about the word, and
+the naive rule would have caught it: `TEH` → `THE`, `UDN` → `UND`, `ADN` →
+`AND`, `DONT` → `DON'T` and `HELOL` → `HELLO` all correct perfectly well today.
+Five good corrections lost to a rule aimed at `iPhone` would have been a bad
+trade — and acronyms like `USA` and `GPL` are protected by other means already,
+being nowhere near a dictionary word.
+
+Measuring the exception turned up a bug beside it. `I DONT CARE` came back as
+`I Don't CARE`, because `applyTypedCase` only ever restored the *first* letter's
+case — the right rule for `Haus` and the wrong one for a word that is all
+capitals. A correction inside a shout now stays shouted.
+
 ---
 
 ## Architecture
@@ -1316,7 +2152,7 @@ Falls out of the decisions above, particularly D7, D12 and D15.
            │
            ▼
    ┌───────────────┐   spatial likelihood per key, not a hit test (D15)
-   │  TouchModel   │   learns one-thumb drift; later, gesture paths (D7)
+   │  TouchModel   │   learns one-thumb drift; gesture paths done (D39)
    └───────┬───────┘
            │  P(key | touch) distribution per tap
            ▼
@@ -1372,6 +2208,13 @@ the system-bar insets. Unhandled, the system's own hide-keyboard
 chevron, IME-switcher globe and gesture pill are composited over the bottom row
 and take its taps. The input view is wrapped in a container carrying the
 navigation-bar inset as bottom padding.
+
+**Candidates** now has two producers, not one (D39). Taps arrive as characters
+with a touch behind each and are matched by spatial edit distance; strokes
+arrive as a shape with no characters at all and are matched by comparing paths.
+They meet at the candidate set and share everything past it. The diagram's
+single arrow into Candidates is a simplification — but only of the input side,
+which is exactly what D7 predicted would be the part free to differ.
 
 **Scorer** must emit calibrated confidence, not just a ranking (D3). This is a
 distinct engineering task from getting good rankings, it is usually skipped,

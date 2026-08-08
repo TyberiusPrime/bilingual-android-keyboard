@@ -44,9 +44,29 @@ class FieldPolicyTest {
         listOf(
             InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
-            InputType.TYPE_TEXT_VARIATION_URI,
             InputType.TYPE_TEXT_VARIATION_FILTER,
         ).forEach { assertFalse(FieldPolicy.suggestionsAllowed(text(it))) }
+    }
+
+    /**
+     * But a URI field is, most of the time. On a phone the address bar *is* the
+     * search bar, so refusing to help there withholds suggestions from a great
+     * deal of ordinary prose to avoid interfering with the occasional
+     * hand-typed URL — and people paste those.
+     *
+     * The hazard of mangling an address turns out to be self-limiting: a
+     * correction only fires on space (D28), and a space in the address bar is
+     * exactly the signal that this is a search rather than a hostname.
+     */
+    @Test
+    fun `the address bar is a search bar and gets suggestions`() {
+        assertTrue(FieldPolicy.suggestionsAllowed(text(InputType.TYPE_TEXT_VARIATION_URI)))
+        // A browser that genuinely wants no help can still say so.
+        assertFalse(
+            FieldPolicy.suggestionsAllowed(
+                text(InputType.TYPE_TEXT_VARIATION_URI) or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            ),
+        )
     }
 
     @Test
@@ -82,9 +102,54 @@ class FieldPolicyTest {
     }
 
     @Test
-    fun `nothing is learned where nothing may be suggested`() {
+    fun `secrets and non-text fields are never learned from`() {
         assertFalse(FieldPolicy.learningAllowed(text(InputType.TYPE_TEXT_VARIATION_PASSWORD), 0))
+        assertFalse(
+            FieldPolicy.learningAllowed(text(InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD), 0),
+        )
+        assertFalse(
+            FieldPolicy.learningAllowed(text(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD), 0),
+        )
         assertFalse(FieldPolicy.learningAllowed(InputType.TYPE_CLASS_NUMBER, 0))
+        assertFalse(FieldPolicy.learningAllowed(InputType.TYPE_CLASS_PHONE, 0))
+    }
+
+    /**
+     * Learning and suggesting are different questions, and answering the first
+     * with the second made it impossible to remember an email address while
+     * standing in an email field — the one field an email address is typed
+     * into (D40).
+     *
+     * These fields refuse *suggestions* because their contents are not prose
+     * and word-level correction there is noise. That is no reason to refuse a
+     * deliberate request to remember something: under D8 nothing is absorbed
+     * silently, so every write to the store is already someone asking for it.
+     */
+    @Test
+    fun `a field that refuses suggestions may still be learned from on request`() {
+        listOf(
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_FILTER,
+        ).forEach { variation ->
+            assertFalse("suggestions in $variation", FieldPolicy.suggestionsAllowed(text(variation)))
+            assertTrue("learning in $variation", FieldPolicy.learningAllowed(text(variation), 0))
+        }
+        // And the same for the flag that only ever meant "do not suggest".
+        val noSuggestions = text() or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        assertFalse(FieldPolicy.suggestionsAllowed(noSuggestions))
+        assertTrue(FieldPolicy.learningAllowed(noSuggestions, 0))
+    }
+
+    /** The app's own "do not remember this" still wins everywhere. */
+    @Test
+    fun `no-personalized-learning overrides the request even in an email field`() {
+        assertFalse(
+            FieldPolicy.learningAllowed(
+                text(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS),
+                EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING,
+            ),
+        )
     }
 
     /** Numeric fields open on the symbol layer, so the check has to be exact. */

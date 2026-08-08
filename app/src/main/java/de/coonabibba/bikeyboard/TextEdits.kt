@@ -104,6 +104,134 @@ object TextEdits {
      * word — it is on long-press `v` precisely because contractions need it.
      */
     fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
+
+    /**
+     * Whether [word] carries a capital somewhere other than the front, which
+     * makes it a name and not a misspelling (D44).
+     *
+     * Neither of this keyboard's languages puts a capital inside a word.
+     * German capitalises the first letter of a noun and English the first of a
+     * sentence or a proper noun, but nothing in either puts one in the middle —
+     * so anything that does is a brand, a product, an identifier or a surname:
+     * `iPhone`, `eBay`, `McDonald`, `JavaScript`, `GmbH`, `PostgreSQL`. It is a
+     * deliberate keystroke in a deliberate place, and the strongest evidence
+     * the keyboard ever gets that the typist knows exactly what they are
+     * writing.
+     *
+     * **A word in capitals throughout is not this**, and the exception is not
+     * a nicety — shouting is a styling choice rather than a claim about the
+     * word, and `TEH`, `UDN`, `ADN`, `DONT` and `HELOL` are all corrected
+     * perfectly well today. Losing them to a rule aimed at `iPhone` would cost
+     * far more than the rule was worth.
+     */
+    fun hasInternalCapital(word: CharSequence): Boolean {
+        if (word.length < 2) return false
+        var internal = false
+        var lower = false
+        for (index in word.indices) {
+            val char = word[index]
+            if (char.isLowerCase()) lower = true
+            if (index > 0 && char.isUpperCase()) internal = true
+        }
+        return internal && lower
+    }
+
+    /**
+     * Whether [word] is being shouted: at least two characters and not a
+     * lowercase letter among them.
+     *
+     * Digits and apostrophes count as neither, so `DON'T` and `MP3` are as
+     * shouted as `HELLO`.
+     */
+    fun isShouted(word: CharSequence): Boolean =
+        word.length >= 2 && word.any { it.isUpperCase() } && word.none { it.isLowerCase() }
+
+    /**
+     * Whether the cursor is at the start of a sentence, and so whether the next
+     * letter should be a capital (D42).
+     *
+     * True at the very beginning, after a newline, and after a sentence mark
+     * followed by a space. Not immediately after the mark itself: `Hello.` with
+     * the cursor tight against the full stop is still the same sentence until a
+     * space says otherwise, and capitalising there would fight anyone typing
+     * `e.g.` or a decimal.
+     *
+     * Closing quotes and brackets are stepped over, so `He said "Stop." ` opens
+     * a sentence the same as `Stop. ` does.
+     */
+    fun startsSentence(before: CharSequence?): Boolean {
+        if (before.isNullOrEmpty()) return true
+        var index = before.length - 1
+
+        var spaces = 0
+        while (index >= 0 && before[index] == ' ') {
+            index--
+            spaces++
+        }
+        if (index < 0) return true
+        if (before[index] == '\n') return true
+        // A mark with nothing after it has not finished the sentence yet.
+        if (spaces == 0) return false
+
+        while (index >= 0 && before[index] in AFTER_MARK) index--
+        return index >= 0 && before[index] in SENTENCE_MARKS
+    }
+
+    /** What ends a sentence. The two languages agree. */
+    const val SENTENCE_MARKS = ".!?…"
+
+    /**
+     * Quotes and brackets that may sit between the mark and the space.
+     *
+     * Every quote character, whichever side it nominally belongs to: German
+     * closes a quotation with `“` where English opens one with it, and D2 says
+     * both languages are live in the same paragraph. The same trap as the one
+     * [tokenAtCursor] fell into.
+     */
+    private const val AFTER_MARK = "\")]}'\u2018\u2019\u201c\u201d\u00ab\u00bb"
+
+    /**
+     * Everything between the spaces around the cursor, for remembering a word
+     * by hand (D40).
+     *
+     * A *different* question from [wordAtCursor], and the difference is the
+     * whole point. Suggestions and corrections are about words, so they stop at
+     * anything that is not a letter — but the things worth putting in the
+     * personal store on purpose are frequently not words by that definition.
+     * `john@coonabibba.de` is three of them with punctuation in between, and
+     * asking the tokeniser for it returns `de`. So the token is delimited by
+     * whitespace and nothing else, which is the same rule the eye uses.
+     *
+     * Both sides of the cursor, because the finger holding the key is nowhere
+     * near it and there is no reason to assume it sits at the end.
+     *
+     * Punctuation that is plainly framing is trimmed: a trailing comma or
+     * closing bracket is part of the sentence rather than of the thing. **The
+     * full stop is deliberately left alone** — German abbreviates `z.B.`,
+     * `d.h.` and `usw.` with one, and a domain is nothing but full stops, so
+     * trimming would break more than it fixed. The cost is that remembering an
+     * address after the sentence's own full stop keeps it, which is visible in
+     * the launcher and removable there.
+     */
+    fun tokenAtCursor(before: CharSequence?, after: CharSequence?): String {
+        val head = before?.takeLastWhile { !it.isWhitespace() }?.toString().orEmpty()
+        val tail = after?.takeWhile { !it.isWhitespace() }?.toString().orEmpty()
+        return (head + tail)
+            .trimStart(*OPENING)
+            .trimEnd(*CLOSING)
+    }
+
+    private val OPENING = charArrayOf('(', '[', '{', '<', '¿', '¡') + QUOTES
+    private val CLOSING = charArrayOf(',', ';', ':', '!', '?', '…', ')', ']', '}', '>') + QUOTES
+
+    /**
+     * Quotes are trimmed from **both** ends, because on this keyboard they have
+     * no fixed side. German writes `„Fairphone“` and English writes
+     * `“Fairphone”`, so `“` opens one language's quotation and closes the
+     * other's — and D2 says both are in play in the same sentence.
+     */
+    private val QUOTES: CharArray
+        get() = charArrayOf('"', '„', '“', '”', '‚', '‘', '’', '«', '»')
 }
 
 /** A word split at the cursor: [before] it and [after] it. */

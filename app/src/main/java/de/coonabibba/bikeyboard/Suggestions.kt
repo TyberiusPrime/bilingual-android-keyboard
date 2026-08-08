@@ -87,6 +87,27 @@ interface SuggestionSource {
         candidatesFor(word, touches).suggestions
 
     /**
+     * Candidates for a whole word traced in one stroke (D7, D39).
+     *
+     * This is the second producer D7 reserved room for, and it arrives through
+     * its own door rather than through [candidatesFor] because the two have
+     * nothing in common on the way in: a tapped word is a string of characters
+     * with a touch behind each one, and a swipe is a shape with no characters at
+     * all. Trying to squeeze a path into `List<TypedTouch>` was the obvious move
+     * and the wrong one — there is no sensible per-character split of a stroke
+     * that crosses six keys it does not mean.
+     *
+     * What they *do* share is everything downstream: the same lexicons, the same
+     * frequency weighting, the same [Candidates] out, and so the same confidence
+     * scale the strip and the auto-replace threshold both read (D33).
+     *
+     * [keys] is where the letters are, which changes with the layout and with
+     * the screen, so it is passed per call rather than baked into the source.
+     */
+    fun candidatesForGesture(path: GesturePath, keys: KeyGeometry): Candidates =
+        Candidates.NONE
+
+    /**
      * Whether [word] is one this source recognises.
      *
      * Drives the add-word offer (D8): a word nothing has heard of is one worth

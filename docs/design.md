@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D45 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D46 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -22,7 +22,11 @@ below.
 
 - [ ] What is the starting confidence threshold for auto-replace, in numbers?
       Cannot be answered before there is something to measure.
-- [ ] Which concrete model and corpus. D12 sets the shape, not the artefact.
+- [x] **Which concrete model and corpus.** Settled in D46: a bigram store as the
+      measurable baseline, then a ~25M-parameter joint-vocabulary decoder, both
+      interpolated with the unigram weight so neither can score worse than the
+      lookup does today. What is *not* settled is the corpus licence — see D46's
+      blocker, which is now the first task of step 6.
 - [ ] Does the umlaut correction from D5 apply inside English words too
       (`uber` → `über`)? Probably not, but it is a real ambiguity.
 - [ ] Emoji: search, recents, skin tones — entirely unaddressed so far.
@@ -2246,6 +2250,109 @@ rather than the identity it is here, and because ordering there decides what
 gets committed — a change that needs its own accuracy run against D39's corpus,
 not a free ride on this one.
 
+### D46 — The prediction model: counts first, then one multilingual transformer
+
+Answers the open question D12 left standing — *which concrete model and corpus* —
+and reverses half of D10 on purpose.
+
+#### The thing D12 assumed and we do not have
+
+D12's case for one joint model is that *"in `das ist ein total edge case`, the
+English model scoring `edge` has never seen the German context."* That is right
+about models and it quietly assumes **code-switched training data**. Both
+corpora here are monolingual OpenSubtitles. A model trained on their union sees
+German context followed by German, English followed by English, and never once
+sees the switch — so it will put low probability on the first English word after
+German context, degrading at exactly the case this project exists for.
+
+The code-switching problem is therefore a **corpus** problem before it is a
+model problem, and no architecture fixes it. Two things do, and both are cheap:
+
+- **Interpolate with the unigram prior:** `P = λ·P_LM(w|ctx) + (1−λ)·P_unigram(w)`.
+  This makes it arithmetically impossible for the model to score worse than
+  today's lookup, which is the same safety shape D43 uses — `WordShape` may only
+  lower the unknown-word prior, never raise it. At a switch the LM contributes
+  nothing useful and the interpolation falls back to what already works.
+- **Synthesise the switches at data-prep time**, splicing clauses of one
+  language into sentences of the other at clause boundaries. Crude, and it
+  teaches the model that a switch is an ordinary event rather than a shock.
+
+#### Two rules that come before the artefact
+
+**Rank, do not generate.** The model never proposes a word; it scores a
+shortlist the lexicons have already produced. Three things follow, and all of
+them are things this project has decided elsewhere: the vocabulary stays closed,
+so nothing is ever offered whose provenance is not recorded (D13, D22); latency
+is bounded and predictable rather than a beam search; and a word from the
+personal store gets scored in context beside dictionary words, which raises D8's
+ceiling without learning anything.
+
+**The model replaces the unigram weight and nothing else.** Confidence today is
+`weight × exp(−decay × cost) / mass`. Substitute `P(w | context)` for `weight`
+and the channel model, the unknown-word prior, D45's grouping and the threshold
+all stay exactly as they are and stay calibrated. It is a drop-in, which is the
+whole value of it: step 6 gets measured on the same harness that measures step 3,
+against the same corpora, and a regression is visible rather than arguable.
+
+**Context is what the keyboard typed.** Not what the field contains — D21
+refuses to ask, and D23's cursor jump leaves the keyboard unable to vouch for
+what is there. Prediction inherits that posture: it works from the keyboard's
+own recent output in this field, and where the word is unknown it goes quiet
+rather than guessing. Which means the context window is frequently short, and a
+model that needs sixty-four tokens of history to be useful is the wrong model.
+
+#### Sequencing: the baseline first, and why that reverses D10
+
+D10 said "not an n-gram-first approach." That was right for correction and is
+wrong for prediction, for a reason that did not exist when it was written:
+**there is currently no way to tell whether step 6 delivered.** The roadmap
+calls step 6 the point where "the project either delivers or does not", and it
+has nothing to be compared against. Going into a training project with no
+baseline is how one ships a model that is worse than a lookup and cannot tell.
+
+So: a bigram store lands first. It fills D9's empty strip — blank today at every
+word boundary and every word's first keystroke — in days rather than months, it
+is a hash lookup rather than an inference, it is explainable in the way D4 and
+D10 both ask for, and **it is the number the transformer has to beat.**
+
+#### The artefacts
+
+Budget agreed at **~60MB installed**, against 8.6MB today. That is generous
+enough that neither stage has to be crippled, and it is the one number that
+constrains both.
+
+**Stage 6a — bigram store.** Full vocabulary rather than a top-N slice, since
+the budget allows it. Sorted by first word in a CSR-style layout, second-word
+index plus a quantised log probability per entry, memory-mapped rather than
+parsed at startup — the wordlists' own trick. A few million entries at four
+bytes is 15–20MB. Backs off to the existing unigram weight, which is the same
+interpolation the neural stage will use, so the plumbing is written once.
+
+**Stage 6b — the model.** Joint SentencePiece vocabulary over both languages
+(16k, trained on the two corpora together rather than concatenating two
+monolingual vocabularies — that shared vocabulary is the part of D12 that
+survives intact). A decoder of roughly 8 layers at 384 dimensions, ~25M
+parameters, short context. Trained on OpenSubtitles DE+EN interleaved, with the
+switch augmentation above. Quantised to int8 and run through TFLite with
+XNNPACK, which is Apache 2.0 and one-way compatible with GPLv3 in the same way
+the CC BY-SA sources already are. Call it 30MB.
+
+#### The blocker, named
+
+**hermitdave/FrequencyWords ships unigrams only.** Every count in `de.txt` and
+`en.txt` came from a derived list, not from the corpus, and there is no bigram
+equivalent. Both stages therefore need the OpenSubtitles corpus itself, from
+OPUS — a different artefact under different terms from the CC BY-SA 4.0 derived
+lists PROVENANCE currently cites. **That question has to be answered before
+either stage starts**, because under D13 an artefact whose licence was worked
+out afterwards is exactly what the provenance discipline exists to prevent. If
+it cannot be answered, the fallback is a corpus that can be — Tatoeba is CC BY
+and conversational but small; Wikipedia is CC BY-SA and the wrong register for
+phone typing.
+
+The build script sits beside `build-wordlists.py` and records its sources the
+same way, in the same file, at the time it is added.
+
 ---
 
 ## Architecture
@@ -2360,8 +2467,14 @@ scorer's belief; it does not drive anything.
    trustworthy, and the one most likely to be underestimated.
 5. **TouchModel** — probabilistic hit testing, one-thumb drift compensation
    (D15). Measurable against step 2 on typo rate.
-6. **The multilingual model** (D10/D12) — source or train, quantise, integrate
-   behind the scorer interface, measure latency on the actual Fairphone.
+6. **Prediction** (D10/D12/D46), in two stages, because the second needs the
+   first to be measurable against:
+   1. **The bigram store** — settle the corpus licence, build it beside the
+      wordlists, interpolate it with the unigram weight, fill the strip between
+      words. This is the baseline the model must beat.
+   2. **The multilingual model** — train on the mixed corpus with switch
+      augmentation, quantise, integrate behind the same interface, measure
+      latency on the actual Fairphone and quality against 6a.
 7. **Calibration and threshold tuning** (D3) — the point at which auto-replace
    is allowed to turn on at all.
 

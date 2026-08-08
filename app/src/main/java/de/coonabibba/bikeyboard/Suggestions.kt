@@ -31,6 +31,32 @@ data class Suggestion(
 enum class Language { GERMAN, ENGLISH }
 
 /**
+ * What the word being typed comes after, which is all the context prediction
+ * gets (D46).
+ *
+ * Deliberately small. D21 refuses to ask the app what is in front of the cursor
+ * on every keystroke, and D23 says a cursor jump leaves the keyboard unable to
+ * vouch for what is there — so the context is what this keyboard watched itself
+ * type, and [Unknown] whenever that is not enough. A prediction made from a
+ * guess about the preceding word would be a guess squared.
+ */
+sealed interface Preceding {
+
+    /** Nothing to go on. The strip stays empty rather than inventing. */
+    data object Unknown : Preceding
+
+    /**
+     * The beginning of a sentence, which the corpus counts as a context of its
+     * own — and which is where the strip is emptiest, since there is no
+     * previous word to complete from either.
+     */
+    data object SentenceStart : Preceding
+
+    /** A word this keyboard watched being finished. */
+    data class Word(val text: String) : Preceding
+}
+
+/**
  * A replacement the keyboard is prepared to make on its own (D3, D28).
  *
  * [confidence] is what the whole thing turns on, and unlike the strip's
@@ -106,6 +132,24 @@ interface SuggestionSource {
      */
     fun candidatesForGesture(path: GesturePath, keys: KeyGeometry): Candidates =
         Candidates.NONE
+
+    /**
+     * What is likely to come next, when nothing has been typed yet (D9, D46).
+     *
+     * The other half of the strip's job, and the half that was missing: at a
+     * word boundary [candidatesFor] has an empty prefix and nothing to say, so
+     * the three slots sat empty for a third of the typing cycle.
+     *
+     * Separate from [candidatesFor] rather than folded into it, because the two
+     * are asking different questions. That one asks *what else could this word
+     * be*, which is about the letters in front of the cursor; this one asks
+     * *what word comes next*, which is about the ones behind it. They share no
+     * inputs at all.
+     *
+     * A source with no context model returns nothing, which leaves the strip
+     * exactly where it was.
+     */
+    fun predict(preceding: Preceding): List<Suggestion> = emptyList()
 
     /**
      * Whether [word] is one this source recognises.

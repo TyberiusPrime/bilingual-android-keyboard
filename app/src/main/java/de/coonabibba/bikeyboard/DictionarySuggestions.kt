@@ -35,6 +35,14 @@ class DictionarySuggestions(
      * thread reads it.
      */
     @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
+    /**
+     * How often one word follows another, per language (D46).
+     *
+     * Optional, and absent by default: every test fixture and the first moment
+     * of a session run without one, and the only thing that changes is that the
+     * strip goes back to being empty between words.
+     */
+    private val bigrams: Map<Language, BigramStore> = emptyMap(),
 ) : SuggestionSource {
 
     /**
@@ -190,6 +198,94 @@ class DictionarySuggestions(
         val keepTyped = correction != null && candidates.any { it.word == typed }
         return Candidates(rank(typed, candidates, keepTyped = keepTyped), correction)
     }
+
+    /**
+     * What tends to come next (D9, D46), which is what fills the strip between
+     * words.
+     *
+     * **Both languages answer, and they are weighted by how much each one
+     * believes it owns the context.** The two stores hold conditional
+     * probabilities within their own corpus, and those are not comparable
+     * across languages as they stand: `P_de(next | die)` and `P_en(next | die)`
+     * are both perfectly normalised and describe different worlds. What makes
+     * them one distribution is the mixture
+     *
+     *     P(next | previous) = Σ P(language | previous) · P_language(next | previous)
+     *
+     * with `P(language | previous)` taken from the unigram weights already
+     * shipped — the same numbers D22 uses to let the two lists compete on one
+     * scale. So `die`, which is 55 times commoner in German, hands German
+     * almost the whole vote and the strip fills with `die Frau`, `die Tür`;
+     * `in`, which is near-equal, lets both languages answer. That is D2's
+     * per-word language inference in the only form the evidence supports — not
+     * a guess about what language the sentence is in, but a weighting by what
+     * the last word actually was.
+     *
+     * At a sentence start there is no previous word to weight by, so the two
+     * corpora split it evenly, which is what D1 says they are.
+     *
+     * Candidates are merged across languages by D45's rule, since a word both
+     * lists carry is one word here too.
+     */
+    override fun predict(preceding: Preceding): List<Suggestion> {
+        if (bigrams.isEmpty() || preceding == Preceding.Unknown) return emptyList()
+
+        // How much of the vote each language gets, from the context word's own
+        // frequency. Nothing to divide at a sentence start, so it is even.
+        val votes = HashMap<Language, Float>(lexicons.size)
+        var total = 0f
+        lexicons.forEach { lexicon ->
+            val vote = when (preceding) {
+                is Preceding.Word -> {
+                    val index = lexicon.indexOf(preceding.text)
+                    if (index < 0) 0f else lexicon.weightAt(index)
+                }
+                else -> 1f
+            }
+            if (vote > 0f) {
+                votes[lexicon.language] = vote
+                total += vote
+            }
+        }
+        if (total <= 0f) return emptyList()
+
+        val candidates = mutableListOf<Candidate>()
+        lexicons.forEach { lexicon ->
+            val store = bigrams[lexicon.language] ?: return@forEach
+            val vote = (votes[lexicon.language] ?: return@forEach) / total
+            val context = when (preceding) {
+                is Preceding.Word -> lexicon.indexOf(preceding.text)
+                else -> store.sentenceStart
+            }
+            if (context < 0) return@forEach
+            store.forEachFollower(context) { word, probability ->
+                candidates += Candidate(lexicon.wordAt(word), vote * probability, lexicon.language)
+            }
+        }
+        if (candidates.isEmpty()) return emptyList()
+
+        // Already a probability, so unlike everywhere else in this class there
+        // is no mass to divide by — the confidences the strip shows here are
+        // the model's own and sum to at most one.
+        return merge(candidates)
+            .sortedByDescending { it.weight }
+            .take(SuggestionSlots.CAPACITY)
+            .map {
+                val text = if (preceding == Preceding.SentenceStart) capitalised(it.word) else it.word
+                Suggestion(text, it.weight, it.language)
+            }
+    }
+
+    /**
+     * A sentence opens with a capital, so a word offered as its first is shown
+     * with one (D42).
+     *
+     * The strip has to do this itself rather than leave it to the shift state,
+     * because what it shows and what it inserts must be the same string — and
+     * `pickSuggestion` applies the pending shift to whatever it is handed,
+     * which for an already-capitalised word is a no-op.
+     */
+    private fun capitalised(word: String): String = word.replaceFirstChar { it.uppercaseChar() }
 
     /**
      * The one search, and both things the keyboard does with it (D37).

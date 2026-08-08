@@ -44,9 +44,10 @@ below.
       the lever for it.
 - [ ] Is the unknown-word prior right (D28)? Everything the auto-correction
       threshold does, it does relative to that one number, and it was guessed.
-- [ ] **Next-word prediction has no data source.** D9 promises it and the
-      wordlists are unigram, so the strip is blank between words until step 6 or
-      until a bigram asset with compatible licensing turns up.
+- [x] **Next-word prediction has no data source.** Answered by D46: a bigram
+      store counted off the same corpus, shipped and wired into the strip. What
+      is still open is whether context should also rescore *corrections*, which
+      would move every number D43 and D45 measured and so needs its own pass.
 - [ ] **Language inference, as opposed to provenance.** D2 asks for per-word
       inference from sentence context; what exists is a label saying which file
       the word came from (D45 makes that label honest, it does not make it an
@@ -256,16 +257,19 @@ A permanently present strip, so keyboard height never changes while typing. It
 carries below-threshold corrections (which under D3 are offered rather than
 applied) and next-word predictions.
 
-**Only the first half is built, and the second is further off than it looks.**
-`candidatesFor` returns nothing for an empty prefix, and `MIN_PREFIX` wants two
-letters before it will complete, so the three slots are empty at every word
-boundary *and* at every word's first keystroke — roughly a third of the cycle.
-It is not a matter of wiring something up that exists: both shipped wordlists
-are unigram (FrequencyWords 50k), so there is no bigram data in the repo to
-predict from at all. Next-word prediction needs either a new corpus asset or
-step 6's model, and until one of them lands the strip has nothing true to say
-between words. Step 3 delivered half of this decision; the roadmap read as
-though it had delivered all of it.
+**For a long time only the first half was built.** `candidatesFor` returns
+nothing for an empty prefix, and `MIN_PREFIX` wants two letters before it will
+complete, so the three slots sat empty at every word boundary *and* at every
+word's first keystroke — roughly a third of the cycle. That was not a matter of
+wiring up something that existed: both shipped wordlists are unigram
+(FrequencyWords 50k), and there was no bigram data in the repo to predict from
+at all. Step 3 delivered half of this decision while the roadmap read as though
+it had delivered all of it.
+
+**Both halves are built now** (D46): the strip carries next-word predictions
+from a bigram store counted off the same corpus the frequencies came from.
+What remains empty is what should be — a cursor jump, a backspace into the
+previous word, anything the keyboard cannot vouch for.
 
 ### D10 — Small on-device neural model from the start
 
@@ -2364,9 +2368,53 @@ and D21 has been leaving blank.
 Backs off to the existing unigram weight, which is the same interpolation the
 neural stage will use, so the plumbing is written once.
 
-**Not yet built: the Kotlin side.** The asset exists and is checked; nothing
-reads it at runtime, so the strip is still blank between words until the loader
-and the interpolation land.
+**Wired into the strip.** `BigramStore` maps the asset straight out of the APK
+— no allocation, no parse, and the pages for words nobody types never arrive.
+That is why `build.gradle.kts` keeps `.bigrams` uncompressed: `openFd` throws
+for a compressed asset, and eighteen megabytes on the heap is how an input
+method gets killed mid-sentence. It cost 0.9MB of APK, the stores being
+quantised integers and near-incompressible anyway.
+
+The store **refuses rather than guesses**. Its keys are wordlist line indices,
+so a store counted against a different wordlist would predict fluently and
+wrongly; a word-count mismatch, an unknown version or a truncated file all
+produce a store with no opinions, and the strip goes back to being empty
+between words. That is the failure worth having, because the other one looks
+like it is working.
+
+**Which language answers is decided by the last word, not by a mode.** The two
+stores hold conditionals within their own corpus and are not comparable as they
+stand — `P_de(next | die)` and `P_en(next | die)` are both perfectly normalised
+and describe different worlds. What makes them one distribution is the mixture
+
+    P(next | previous) = Σ P(language | previous) · P_language(next | previous)
+
+with `P(language | previous)` taken from the unigram weights D22 already ships.
+`die` is 55 times commoner in German, so German gets almost the whole vote and
+the strip fills with German; `in`, `so` and `was` are near-equal, so both
+languages answer. **This is D2's per-word language inference in the only form
+the evidence supports** — not a guess about what language the sentence is in,
+but a weighting by what the last word actually was. Nothing anywhere holds a
+current language, and the candidates are merged across the two by D45's rule,
+because a word both lists carry is one word here too.
+
+At a sentence start there is no previous word to weight by, so the corpora split
+it evenly — which is what D1 says they are — and the openings are capitalised,
+since what the strip shows and what it inserts must be the same string.
+
+**The context comes from what the keyboard typed**, tracked in `WordInProgress`
+beside the word in progress, so a prediction costs no round trip to the app.
+It inherits D21's refusal wholesale: a cursor jump, a backspace into the
+previous word, a word read back rather than typed, and the context is
+`Unknown` and the strip stays empty. A prediction made from a guess about the
+preceding word would be a guess squared.
+
+**Not done: context in the correction path.** D46 says the model eventually
+replaces the unigram weight everywhere, which would let `P(next | previous)`
+rank completions and rescore corrections. That moves every number D43 and D45
+measured, so it needs its own measurement pass rather than a free ride on this
+one. Prediction is pure gain — it fills slots that were empty; rescoring can
+take slots away.
 
 **Stage 6b — the model.** Joint SentencePiece vocabulary over both languages
 (16k, trained on the two corpora together rather than concatenating two

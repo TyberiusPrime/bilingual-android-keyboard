@@ -843,7 +843,13 @@ class BilingualKeyboardService : InputMethodService() {
         if (!word.known) recoverWordAtCursor()
 
         val current = word.full
-        if (current.isEmpty()) return
+        // Past the end of the word is where a forgotten capital is usually
+        // noticed, and since a swipe commits the space with the word it is the
+        // only moment a swiped word can be re-cased at all (D48).
+        if (current.isEmpty()) {
+            cycleFinishedWord(ic)
+            return
+        }
         val recased = TextCase.cycle(current)
         if (recased == current) return
 
@@ -862,6 +868,53 @@ class BilingualKeyboardService : InputMethodService() {
         // Nothing about this arrived from a key, so the trail no longer
         // describes the text in front of it (D19).
         clearTrail()
+        spaceGesture.otherInput()
+        refreshSuggestions()
+    }
+
+    /**
+     * The same gesture, for a word the cursor has already left (D48).
+     *
+     * Reaches back over whatever finished the word — a space, a full stop, both
+     * — re-cases the word behind it and puts the tail back untouched, so
+     * `hallo. ` becomes `Hallo. ` and the cursor does not move. Repeating the
+     * gesture cycles on, because the text is read afresh each time rather than
+     * remembered.
+     *
+     * The field is asked rather than the keyboard's own memory consulted, for
+     * the reason D23 gives: what is behind a finished word is text this
+     * keyboard may never have typed. One round trip, on a deliberate gesture,
+     * which is the trade D21 refuses only for per-keystroke work.
+     */
+    private fun cycleFinishedWord(ic: InputConnection) {
+        val before = ic.getTextBeforeCursor(WORD_LOOKBEHIND, 0) ?: return
+        val finished = TextEdits.finishedWordBefore(before) ?: return
+        // A word butting against the start of a full read may have more of
+        // itself out of sight, and re-casing half a word is worse than doing
+        // nothing.
+        if (finished.start == 0 && before.length >= WORD_LOOKBEHIND) return
+
+        val recased = TextCase.cycle(finished.word)
+        if (recased == finished.word) return
+
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(finished.span, 0)
+        ic.commitText(recased + finished.tail, 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += recased.length - finished.word.length
+        // Nothing about this arrived from a key (D19).
+        clearTrail()
+        // The word in progress is still empty — only what precedes it changed,
+        // and the strip is predicting from that (D46).
+        word.reset(
+            known = true,
+            preceding = if (finished.tail.any { it in TextEdits.SENTENCE_MARKS }) {
+                Preceding.SentenceStart
+            } else {
+                Preceding.Word(recased)
+            },
+        )
         spaceGesture.otherInput()
         refreshSuggestions()
     }

@@ -106,6 +106,45 @@ object TextEdits {
     fun isWordChar(char: Char): Boolean = char.isLetterOrDigit() || char == '\''
 
     /**
+     * The word that has just been *finished*, and whatever closed it (D48).
+     *
+     * For the moment after a word rather than during it: the cursor sits past a
+     * space, or a full stop, or both, and the word before that is the one the
+     * typist means. Which is most of the time, since a forgotten capital is
+     * something you notice once the word is out — and since swiping a word
+     * commits the space along with it, it is the *only* moment a swiped word
+     * can be re-cased at all.
+     *
+     * [tail] is everything between the word and the cursor, kept because it has
+     * to be put back: `hallo. ` re-cased is `Hallo. `, not `Hallo`.
+     *
+     * Null when there is nothing to act on — when the cursor is still inside a
+     * word (that case is the caller's own tracked word, which it knows better
+     * than the field does), when there is no word behind the tail, and
+     * deliberately **when the tail crosses a newline**. A gesture that silently
+     * edits the line above, out of sight of the cursor, is not one anybody
+     * asked for.
+     */
+    fun finishedWordBefore(before: CharSequence?): FinishedWord? {
+        if (before.isNullOrEmpty()) return null
+        var end = before.length
+        while (end > 0 && !isWordChar(before[end - 1])) {
+            if (before[end - 1] == '\n') return null
+            end--
+        }
+        // Still inside a word: nothing was finished.
+        if (end == before.length) return null
+        var start = end
+        while (start > 0 && isWordChar(before[start - 1])) start--
+        if (start == end) return null
+        return FinishedWord(
+            word = before.substring(start, end),
+            tail = before.substring(end),
+            start = start,
+        )
+    }
+
+    /**
      * Whether [word] carries a capital somewhere other than the front, which
      * makes it a name and not a misspelling (D44).
      *
@@ -237,4 +276,17 @@ object TextEdits {
 /** A word split at the cursor: [before] it and [after] it. */
 data class WordAtCursor(val before: String, val after: String) {
     val text: String get() = before + after
+}
+
+/**
+ * A word the cursor has already moved past, and what sits between (D48).
+ *
+ * [start] is where the word begins within the text that was read, which is what
+ * tells the caller whether the read was long enough to have seen all of it — a
+ * word butting against the start of a truncated window may have more in front
+ * of it that nobody can see.
+ */
+data class FinishedWord(val word: String, val tail: String, val start: Int) {
+    /** How many characters back from the cursor the word and its tail reach. */
+    val span: Int get() = word.length + tail.length
 }

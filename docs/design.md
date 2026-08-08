@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D47 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D48 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -2568,6 +2568,38 @@ tap. A real loss, recorded rather than papered over.
 word read different numbers, and every measurement in D43 and D45 was of the
 second; a test asserts the correction and its confidence are identical with and
 without context. Rescoring corrections in context stays the open item D46 left.
+
+### D48 — Re-casing a word you have already finished
+
+D24 put the re-case cycle on a swipe up from shift, acting on the word the
+cursor is in. Which is the wrong moment: **a forgotten capital is something you
+notice once the word is out**, not while it is still under the thumb. And for a
+swiped word it was not merely the wrong moment but the only one — a swipe
+commits the space along with the word (D39), so by the time the stroke ends
+there is no word in progress left to act on. The gesture simply did nothing.
+
+So when there is no word in progress, the swipe reaches back over whatever
+finished the last one. The tail is put back verbatim, which is the whole trick:
+`hallo. ` becomes `Hallo. `, the cursor does not move, and swiping again cycles
+on to `HALLO. ` because the text is read afresh each time rather than
+remembered.
+
+**Punctuation counts as finishing a word**, not just a space, so the case D6's
+double-space full stop creates is reachable. **A newline does not**: the word
+above is out of sight of the cursor, and a gesture that silently edits a line
+you are not looking at is not one anybody asked for.
+
+**The field is asked** rather than the keyboard's own memory consulted, because
+what sits behind a finished word is frequently text this keyboard never typed
+(D23). One round trip, on a deliberate gesture — which is the trade D21 declines
+only for per-keystroke work. If the read comes back full and the word runs to
+the start of it, the gesture declines: a word may have more of itself out of
+sight, and re-casing half of one is worse than doing nothing.
+
+Swiping is no longer the preferred way to type here — tapping with the
+context-ranked strip (D47) overtook it — but this is the fix that would have
+been needed either way, since the space bar finishes a word exactly as a stroke
+does.
 
 ---
 

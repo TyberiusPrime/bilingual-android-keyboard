@@ -2321,12 +2321,52 @@ Budget agreed at **~60MB installed**, against 8.6MB today. That is generous
 enough that neither stage has to be crippled, and it is the one number that
 constrains both.
 
-**Stage 6a — bigram store.** Full vocabulary rather than a top-N slice, since
-the budget allows it. Sorted by first word in a CSR-style layout, second-word
-index plus a quantised log probability per entry, memory-mapped rather than
-parsed at startup — the wordlists' own trick. A few million entries at four
-bytes is 15–20MB. Backs off to the existing unigram weight, which is the same
-interpolation the neural stage will use, so the plumbing is written once.
+**Stage 6a — bigram store. Built** (`scripts/build-bigrams.py`), and it came in
+where the estimate said: 18.3MB for both languages, taking the APK from 8.6MB
+to 24.3MB and leaving some 35MB of the budget for the model.
+
+Full vocabulary rather than a top-N slice, since the budget allowed it. A row
+per context word plus one for the sentence start, compressed-sparse-row, each
+follower a single 32-bit word — 17 bits of wordlist index above 15 bits of
+quantised conditional log probability. Fixed width because a common context has
+thousands of followers and the app binary-searches the row rather than scanning
+it. Keys are wordlist line indices rather than strings, which is what makes it
+this small; the price is that a store belongs to the wordlist it was counted
+from, so the header carries that file's entry count and SHA-256 and
+`BigramAssetTest` refuses a mismatch.
+
+Counted over 41.6M German and 441M English subtitle lines — 2.7 billion tokens,
+2.4 billion in-vocabulary pairs, 24 million distinct ones.
+
+**The two thresholds differ, and the reason is worth keeping.** The floor is
+absolute, because the provenance argument is about absolute occurrences and does
+not scale with how much corpus there happens to be. Above the floor it is
+size against coverage, and English has eleven times German's tokens, so the same
+number means something eleven times weaker there. Measured:
+
+| threshold | German | English |
+|---|---|---|
+| 5 | 95.4% of pair mass, 6.5MB | 99.2%, 31.1MB |
+| 10 | 92.9%, 3.7MB | 98.3%, 19.5MB |
+| 20 | 90.2%, 2.2MB | 97.1%, 11.8MB |
+
+Shipping German at 5 and English at 20 lands the two within two points of each
+other — closer to parity than any single number gets, and **smaller than a
+uniform threshold of 10** would have been. Under D1 neither language is the
+fallback, and a store that predicted English well and German poorly would have
+been that in all but name.
+
+What it predicts, unprompted: `vielen` → `dank` at 0.80, `thank` → `you` at
+0.93, `guten` → `morgen`/`Tag`/`Abend`, `how` → `do`/`much`/`to`, and a
+sentence-start row led by `ich` and `I` — which is exactly the slot D9 promised
+and D21 has been leaving blank.
+
+Backs off to the existing unigram weight, which is the same interpolation the
+neural stage will use, so the plumbing is written once.
+
+**Not yet built: the Kotlin side.** The asset exists and is checked; nothing
+reads it at runtime, so the strip is still blank between words until the loader
+and the interpolation land.
 
 **Stage 6b — the model.** Joint SentencePiece vocabulary over both languages
 (16k, trained on the two corpora together rather than concatenating two

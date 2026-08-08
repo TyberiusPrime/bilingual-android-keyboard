@@ -95,6 +95,9 @@ class SharedWordsTest {
         val fix = correctionFor("i")
         assertEquals("I", fix?.text)
         assertTrue("i at ${fix?.confidence}", fix!!.confidence >= threshold)
-        assertTrue("the loser should still be offered", stripFor("i").any { it.text == "i" })
+        // The two casings stay separate candidates — which is what D41 needs
+        // and what [keyOf] exists for. Whether the loser reaches the strip is
+        // now a question of ranking against completions; see D47.
+        assertTrue("I" in stripFor("i").map { it.text })
     }
 }

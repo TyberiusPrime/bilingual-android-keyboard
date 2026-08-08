@@ -39,13 +39,20 @@ class CapitalFormsTest {
     }
 
     /**
-     * And the German `i` is still there to be chosen, because this is a
-     * decision between two real words rather than a rule about capitals.
+     * `I` is offered, and so is what a single `i` might be the start of.
+     *
+     * **D41 wanted the German `i` in the strip beside it**, on the grounds that
+     * a keyboard choosing between two real words should show its working. D47
+     * took that slot: one letter now completes, and `ich`, `in` and `ist` are
+     * each some hundreds of times likelier than a standalone German `i`. The
+     * ranking is right and the cost is real — rejecting the capital is now
+     * backspace (D14) rather than a tap. Recorded in D47 rather than papered
+     * over here.
      */
     @Test
-    fun `the lowercase form is still offered`() {
-        assertTrue("i" in strip("i"))
+    fun `the capital is offered, and so are completions`() {
         assertTrue("I" in strip("i"))
+        assertTrue("nothing to complete an i with", strip("i").any { it.length > 1 })
     }
 
     /** A word that is already right is left alone, one letter or not. */

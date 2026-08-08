@@ -93,7 +93,11 @@ interface SuggestionSource {
      * and, since D33 made the correction run per keystroke, twice the work. One
      * call, one scan, two views of the answer.
      */
-    fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates
+    fun candidatesFor(
+        word: CharSequence,
+        touches: List<TypedTouch>,
+        preceding: Preceding = Preceding.Unknown,
+    ): Candidates
 
     /**
      * Candidates for the word currently being typed, best first.
@@ -109,8 +113,11 @@ interface SuggestionSource {
      * about what is within reach. A word the cursor jumped back to has no
      * touches to give, and the caller passes untouched ones.
      */
-    fun suggest(word: CharSequence, touches: List<TypedTouch>): List<Suggestion> =
-        candidatesFor(word, touches).suggestions
+    fun suggest(
+        word: CharSequence,
+        touches: List<TypedTouch>,
+        preceding: Preceding = Preceding.Unknown,
+    ): List<Suggestion> = candidatesFor(word, touches, preceding).suggestions
 
     /**
      * Candidates for a whole word traced in one stroke (D7, D39).
@@ -197,8 +204,11 @@ data class Candidates(
  * the strip is empty for the first moment of a session rather than absent.
  */
 object NoSuggestions : SuggestionSource {
-    override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates =
-        Candidates.NONE
+    override fun candidatesFor(
+        word: CharSequence,
+        touches: List<TypedTouch>,
+        preceding: Preceding,
+    ): Candidates = Candidates.NONE
 }
 
 /**

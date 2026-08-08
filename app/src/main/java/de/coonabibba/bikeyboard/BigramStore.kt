@@ -73,7 +73,7 @@ class BigramStore private constructor(
     fun forEachFollower(context: Int, action: (word: Int, probability: Float) -> Unit) {
         for (slot in rowOf(context)) {
             val packed = entries.get(slot)
-            action(packed ushr FOLLOWER_SHIFT, probabilityOf(packed))
+            action(packed ushr FOLLOWER_SHIFT, decode(packed))
         }
     }
 
@@ -95,10 +95,56 @@ class BigramStore private constructor(
             when {
                 found < word -> low = middle + 1
                 found > word -> high = middle - 1
-                else -> return probabilityOf(entries.get(middle))
+                else -> return decode(entries.get(middle))
             }
         }
         return 0f
+    }
+
+    /**
+     * A walk through one context's followers, in wordlist order.
+     *
+     * For asking about a *run* of words rather than one — which is what
+     * completing a prefix is, since the wordlists are sorted by folded form and
+     * so every completion of `s` is one contiguous range of indices (D47).
+     *
+     * Both sides are sorted by index, so the whole run costs one binary search
+     * and then a linear merge. Asking [probability] per candidate instead is a
+     * binary search each, and for a one-letter prefix that is eight thousand of
+     * them against a row that can hold thousands — measured at 1.4ms on a
+     * laptop, which is most of the per-keystroke budget spent on the commonest
+     * keystroke there is.
+     */
+    inner class Cursor(context: Int, from: Int) {
+        private val end: Int
+        private var slot: Int
+
+        init {
+            val row = rowOf(context)
+            end = row.last + 1
+            // The first follower at or past `from`.
+            var low = row.first
+            var high = row.last
+            while (low <= high) {
+                val middle = (low + high) ushr 1
+                if ((entries.get(middle) ushr FOLLOWER_SHIFT) < from) low = middle + 1
+                else high = middle - 1
+            }
+            slot = low
+        }
+
+        /**
+         * How likely [word] is here, advancing past everything before it.
+         *
+         * Must be called with non-decreasing [word], which is what walking a
+         * completion range gives.
+         */
+        fun probabilityOf(word: Int): Float {
+            while (slot < end && (entries.get(slot) ushr FOLLOWER_SHIFT) < word) slot++
+            if (slot >= end) return 0f
+            val packed = entries.get(slot)
+            return if ((packed ushr FOLLOWER_SHIFT) == word) decode(packed) else 0f
+        }
     }
 
     /**
@@ -108,7 +154,7 @@ class BigramStore private constructor(
      * The floor is where the interpolation with the unigram weight takes over
      * anyway (D46), so the resolution lost at the bottom buys nothing back.
      */
-    private fun probabilityOf(packed: Int): Float =
+    private fun decode(packed: Int): Float =
         Math.exp((packed and QUANT_MASK).toDouble() / QUANT_MAX * LOG_FLOOR).toFloat()
 
     companion object {

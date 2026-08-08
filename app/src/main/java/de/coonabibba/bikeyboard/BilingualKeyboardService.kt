@@ -1238,7 +1238,7 @@ class BilingualKeyboardService : InputMethodService() {
         // to know what else this word could be, and asking separately was two
         // scans per keystroke and two chances to disagree.
         val query = if (suggestionsAllowed && word.known) {
-            source.candidatesFor(word.full, word.fullTouches)
+            source.candidatesFor(word.full, word.fullTouches, word.preceding)
         } else {
             Candidates.NONE
         }

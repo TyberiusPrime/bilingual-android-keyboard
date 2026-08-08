@@ -89,9 +89,14 @@ class DictionarySuggestionsTest {
         assertFalse("hallo" in texts("hallo"))
     }
 
+    /**
+     * One letter *is* enough now (D47) — it was not, until the bigram store
+     * gave a single character something to be evidence with. Nothing at all
+     * still means nothing at all.
+     */
     @Test
-    fun `one letter is not enough to suggest from`() {
-        assertEquals(emptyList<String>(), texts("h"))
+    fun `one letter suggests and nothing does not`() {
+        assertTrue("h offered nothing", texts("h").isNotEmpty())
         assertEquals(emptyList<String>(), texts(""))
     }
 

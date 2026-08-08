@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D46 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D47 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -2414,7 +2414,8 @@ replaces the unigram weight everywhere, which would let `P(next | previous)`
 rank completions and rescore corrections. That moves every number D43 and D45
 measured, so it needs its own measurement pass rather than a free ride on this
 one. Prediction is pure gain — it fills slots that were empty; rescoring can
-take slots away.
+take slots away. *Completions took that measurement pass and got the context;
+corrections still have not — see D47.*
 
 **Stage 6b — the model.** Joint SentencePiece vocabulary over both languages
 (16k, trained on the two corpora together rather than concatenating two
@@ -2487,6 +2488,86 @@ The build script sits beside `build-wordlists.py` and records its sources the
 same way, in the same file, at the time it is added — including, this time, the
 distinction between an artefact that carries a grant and one that rests on not
 being a derivative work.
+
+### D47 — The first two letters
+
+The opening of a word was the part the keyboard had least to say about.
+Correction needs three characters (`MIN_CORRECTION_LENGTH`) and completion
+needed two, so the first keystroke produced nothing at all and the second a
+guess made from the frequency table alone. It is also the part where the word
+*before* says the most, and D46 had just put that in the build.
+
+**So one letter completes, and completions are interpolated with the bigram**,
+by exactly D46's rule and in one place:
+
+    score(w) = λ · P(w | previous word) + (1 − λ) · P(w)
+
+A word the store has never seen after this context keeps its full `(1 − λ)`
+share, so context reorders the strip and can never empty it; with no context at
+all the ranking is what it was before. The bigram side carries the same
+per-language mixture prediction uses, so which language answers is still decided
+by the last word (D2). The blend runs *before* D45's merge, which needs no
+thought either way — it is linear, so adding two copies of a shared word and
+then blending is the same number as blending each and adding.
+
+**What it is worth**, measured on 8,000 held-out subtitle pairs: how often the
+word actually typed next was among the strip's three.
+
+| λ | de, 1 char | de, 2 chars | en, 1 char | en, 2 chars |
+|---|---|---|---|---|
+| 0.0 | 33.0% | 51.9% | 32.9% | 42.7% |
+| 0.35 | 52.0% | 65.6% | 48.5% | 53.7% |
+| 0.65 | 56.6% | 68.6% | 53.8% | 56.5% |
+| **0.8** | **58.4%** | **69.9%** | **55.7%** | **57.5%** |
+| 0.95 | 59.9% | 70.7% | 57.2% | 59.5% |
+| 1.0 | 59.9% | 70.2% | 57.6% | 59.3% |
+
+One letter goes from a third to nearly three fifths. **λ = 1 is worse than
+λ = 0.95**, which is the clearest evidence the interpolation is load bearing
+rather than decorative: throw the frequency table away entirely and every word
+the store has never seen after this context goes with it.
+
+Shipped at 0.8 rather than at the peak. The curve is flat to within a point and
+a half from 0.65 up; the held-out text was inside the counts, which flatters the
+bigram slightly; and a context whose row barely cleared D46's threshold is
+estimated from very little. A fifth of the weight left on the frequency table is
+what that buys. Three characters gains too — 42% to 51% — so the rule applies at
+every length rather than only where it was aimed.
+
+**The cost was latency, and it was real.** `s` matches 3,662 German words and
+4,187 English ones, and the first version asked the bigram store about each of
+them: a binary search apiece, against a row that for a common context holds
+thousands. 1.4ms on a laptop, on the commonest keystroke there is. Two changes
+fixed it, both structural rather than clever.
+
+- **A cursor instead of a search.** Every completion of a prefix is one
+  contiguous run of wordlist indices, because the list is sorted by folded form,
+  and a follower row is sorted the same way. So the two are merged in one walk:
+  one binary search, then a linear scan.
+- **Candidates carry their index.** Putting the non-completion candidates on the
+  same scale meant looking each one up by string, and `Lexicon.indexOf` folds
+  every word it compares — some eight hundred string allocations per keystroke
+  for two dozen candidates.
+
+Together: 1.4ms to 0.10ms on the worst case, and the whole one-letter query now
+measures 0.03–0.31ms with context against 0.02–0.18ms without.
+
+**Only the top twelve per language survive the scan**, and what is dropped goes
+into the confidence divisor rather than being discarded — the same bargain the
+swipe path's pruning makes, and with the same guarantee that the effect is to
+sound less certain rather than more.
+
+**What it cost besides the work.** D41 wanted the German `i` in the strip beside
+the `I` it corrects to, so that a keyboard choosing between two real words shows
+its working. One-letter completion takes that slot: `ich`, `in` and `ist` are
+each some hundreds of times likelier than a standalone German `i`, and the
+ranking is right. Rejecting the capital is now backspace (D14) rather than a
+tap. A real loss, recorded rather than papered over.
+
+**Corrections are still untouched.** Ranking the strip and deciding to replace a
+word read different numbers, and every measurement in D43 and D45 was of the
+second; a test asserts the correction and its confidence are identical with and
+without context. Rescoring corrections in context stays the open item D46 left.
 
 ---
 

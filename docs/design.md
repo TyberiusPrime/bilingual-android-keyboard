@@ -2337,21 +2337,68 @@ switch augmentation above. Quantised to int8 and run through TFLite with
 XNNPACK, which is Apache 2.0 and one-way compatible with GPLv3 in the same way
 the CC BY-SA sources already are. Call it 30MB.
 
-#### The blocker, named
+#### The blocker, checked
 
 **hermitdave/FrequencyWords ships unigrams only.** Every count in `de.txt` and
-`en.txt` came from a derived list, not from the corpus, and there is no bigram
-equivalent. Both stages therefore need the OpenSubtitles corpus itself, from
-OPUS — a different artefact under different terms from the CC BY-SA 4.0 derived
-lists PROVENANCE currently cites. **That question has to be answered before
-either stage starts**, because under D13 an artefact whose licence was worked
-out afterwards is exactly what the provenance discipline exists to prevent. If
-it cannot be answered, the fallback is a corpus that can be — Tatoeba is CC BY
-and conversational but small; Wikipedia is CC BY-SA and the wrong register for
-phone typing.
+`en.txt` came from a derived list, not from the corpus, so both stages need the
+OpenSubtitles corpus itself, from OPUS. Read the terms rather than assumed them,
+and the answer reframes something the project already ships.
+
+**OPUS grants no licence.** Its statement is *"We do not own any of the text
+from which the data has been extracted. We only offer files that we believe we
+are free to redistribute"*, alongside a take-down policy, an attribution request
+(a link to opensubtitles.org from the site and from publications) and a citation
+requirement — Lison and Tiedemann, LREC 2016. That is a posture, not a grant.
+There is no licence chain here to inherit and nothing to relicense as GPLv3.
+
+**So PROVENANCE currently describes the wrong footing for what already ships.**
+hermitdave's CC BY-SA 4.0 covers *his compilation* of counts; it cannot cover
+the subtitles, because he had no rights in them to pass on. The reason shipping
+those counts is defensible is different and stronger: **a frequency table is
+facts about a text rather than its expression**, and no corpus can be
+reconstructed from it. The bet is a good one and it has already been made — it
+is just recorded as a licence chain when it is not one.
+
+**A bigram table stands on exactly that same ground**, and on well-trodden
+ground: Google publishes Books Ngrams up to 5-grams under CC BY 3.0 from
+in-copyright books, and HathiTrust distributes Extracted Features from
+in-copyright volumes, both resting on the non-expressive use that the Google
+Books and HathiTrust rulings supported. One condition falls out of the reasoning
+and is therefore not optional: **the store carries a documented count
+threshold**, pairs seen fewer than a handful of times being dropped. A table
+including singletons begins to leak rare phrasings; a thresholded one provably
+cannot. That is the difference between a statistic and an index, and it is what
+the defence rests on.
+
+**Stage 6b is a different bet, not a continuation of this one.** Trained weights
+are contested where n-gram counts are not, and memorisation is an observed
+phenomenon rather than a theoretical one. Splitting the stages was decided for
+methodological reasons — 6a is the yardstick — and it turns out to matter here
+too, because it means the project can stop between them. Recorded in Risks.
+
+**Fallbacks that carry an actual grant**, if the second bet is unwanted: Google
+Books Ngrams (CC BY 3.0, German included, n up to 5 — and n-grams are exactly
+what 6a needs; the cost is book register, which predicts *der Herr sprach* far
+better than *bin gleich da*); Tatoeba (CC BY 2.0 FR, conversational, ~385k DE-EN
+units, right register and far too small to train on, but usable as an
+interpolation component); Wikipedia (CC BY-SA 4.0, large, wrong register).
+**Leipzig Corpora is ruled out** — CC BY-NC, and a field-of-use restriction is
+the one thing GPLv3 cannot absorb.
+
+**The code-switched data this decision asks for does not exist
+redistributably.** The one real German-English code-switching corpus — Denglisch,
+Osmelak and Wintner 2023 — is drawn from social media with no licence stated in
+either the paper or the repository. That matters less than it appears, because
+its right use is as a **held-out evaluation set**, and measuring against a corpus
+requires no right to redistribute it. It supplies the thing this decision
+otherwise lacks: a way to find out whether the switch augmentation did anything.
+
+None of the above is legal advice; it is a reading of published terms.
 
 The build script sits beside `build-wordlists.py` and records its sources the
-same way, in the same file, at the time it is added.
+same way, in the same file, at the time it is added — including, this time, the
+distinction between an artefact that carries a grant and one that rests on not
+being a derivative work.
 
 ---
 
@@ -2501,6 +2548,13 @@ not be started before editor I/O is solid.
   is where keyboards actually break. Budget accordingly.
 - **No suitable small DE+EN model exists off the shelf**, making step 6 a
   training project rather than an integration one. Mitigated by the D12 hedge.
+- **Step 6b ships weights trained on text nobody granted a licence for**, which
+  is a different and less settled position than the counts everything up to 6a
+  rests on (D46). The mitigation is the split itself: 6a is the bet this project
+  has already made and can defend, 6b is a new one, and the roadmap is arranged
+  so that stopping between them costs nothing already built. If the answer turns
+  out to be no, the fallback is a smaller model on Google Books Ngrams and
+  Tatoeba — worse register, real grant.
 - **Latency on real hardware.** A model that is fine on a laptop may not hold a
   per-keystroke budget on a Fairphone. Measure early, on the device, not in an
   emulator.

@@ -29,6 +29,28 @@ This project is GPLv3 (D13), and every source can be distributed under it:
   One-way means the combined artefact travels as GPLv3 and cannot be taken back
   to CC BY-SA. Attribution is given here and in each file's header.
 
+  **That licence covers hermitdave's compilation, not the subtitles it counts,
+  and this entry used to read as though it covered both.** OpenSubtitles text
+  arrives through [OPUS](https://opus.nlpl.eu/) under no licence at all — OPUS
+  states that it does not own the text and only offers what it believes it is
+  free to redistribute, with a take-down policy and a request for attribution.
+  There is therefore no chain of grants running from the subtitles to this file,
+  and there never was one to inherit.
+
+  What makes shipping these counts defensible is a different argument, and a
+  sounder one: **a frequency table is facts about a text rather than its
+  expression**, and nothing here allows any part of the corpus to be
+  reconstructed. This is the same footing on which Google publishes Books Ngrams
+  from in-copyright books and HathiTrust publishes Extracted Features. Recorded
+  plainly because D13 exists so that this is settled at the time an artefact is
+  added rather than reconstructed later — and reconstructing it later is exactly
+  what happened here.
+
+  Two obligations follow from the OPUS terms and are met: a link to
+  [opensubtitles.org](http://www.opensubtitles.org/), and the citation asked for
+  — P. Lison and J. Tiedemann, *OpenSubtitles2016: Extracting Large Parallel
+  Corpora from Movie and TV Subtitles*, LREC 2016.
+
 Every generated file repeats its own sources in a comment header, so a copy
 that gets separated from this directory still carries its provenance.
 

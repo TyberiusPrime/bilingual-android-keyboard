@@ -115,7 +115,7 @@
             packages = [ tc.jdk tc.android.androidsdk pkgs.git ];
 
             shellHook = ''
-              echo "JDK          $(java -version 2>&1 | head -n1)"
+              echo "JDK          $(java -version 2>&1 | grep -i version | head -n1)"
               echo "Android SDK  ${tc.sdkRoot}"
               echo "Gradle       from ./gradlew (8.14.3, downloaded on first use)"
               echo

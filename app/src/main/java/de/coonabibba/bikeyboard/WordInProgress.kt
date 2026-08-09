@@ -76,6 +76,21 @@ class WordInProgress {
         private set
 
     /**
+     * What the word being typed follows, for next-word prediction (D46).
+     *
+     * Kept here because this is the object that already sees every character
+     * the keyboard commits, which means the context costs no round trip to the
+     * app — the same reason [text] lives here rather than being read back.
+     *
+     * It is [Preceding.Unknown] under exactly the conditions [known] is false,
+     * plus one more: a backspace that ate into the previous word leaves that
+     * word half-deleted, and predicting from what it used to be would be
+     * predicting from text that is no longer there.
+     */
+    var preceding: Preceding = Preceding.Unknown
+        private set
+
+    /**
      * Records text we just committed.
      *
      * A word character extends the word; anything else ends it. The apostrophe
@@ -96,6 +111,17 @@ class WordInProgress {
                 // spatial evidence — which is what [touches] checks for.
                 if (touch != null && text.length == 1) typedTouches += touch
             } else {
+                // The word that just ended is the context for the next one
+                // (D46). A separator arriving with nothing in front of it — a
+                // second space, a comma after a suggestion — leaves the context
+                // standing rather than clearing it.
+                if (builder.isNotEmpty()) preceding = Preceding.Word(builder.toString())
+                // A mark that ends a sentence outranks the word before it: the
+                // corpus counts the opening of a sentence as its own context,
+                // and it is the emptiest slot the strip has.
+                if (char in TextEdits.SENTENCE_MARKS || char == '\n') {
+                    preceding = Preceding.SentenceStart
+                }
                 builder.setLength(0)
                 typedTouches.clear()
                 // Whatever followed the cursor is on the far side of a
@@ -119,6 +145,9 @@ class WordInProgress {
             if (typedTouches.isNotEmpty()) typedTouches.removeAt(typedTouches.size - 1)
         } else {
             known = false
+            // The backspace has gone into whatever was in front, so the word
+            // that was the context is now a different word (D46).
+            preceding = Preceding.Unknown
         }
     }
 
@@ -135,14 +164,29 @@ class WordInProgress {
         typedTouches.clear()
         suffix = ""
         if (!complete) known = false
+        // Whatever is in front of the cursor now is a word the keyboard did not
+        // watch being typed, so there is no context to predict from.
+        preceding = Preceding.Unknown
     }
 
-    /** Starts over: a new field, or a cursor movement we cannot account for. */
-    fun reset(known: Boolean) {
+    /**
+     * Starts over: a new field, or a cursor movement we cannot account for.
+     *
+     * [preceding] defaults to leaving the context alone, because most callers
+     * reset in order to *re-adopt* the word they just committed — accepting a
+     * suggestion, applying a correction — and the text in front of the cursor
+     * has not changed under them. The callers where it has say so.
+     *
+     * Losing track of the word always loses the context with it: if the
+     * keyboard cannot say what is being typed, it certainly cannot say what
+     * came before it.
+     */
+    fun reset(known: Boolean, preceding: Preceding = this.preceding) {
         builder.setLength(0)
         typedTouches.clear()
         suffix = ""
         this.known = known
+        this.preceding = if (known) preceding else Preceding.Unknown
     }
 
     /**
@@ -158,6 +202,10 @@ class WordInProgress {
         builder.append(word.before)
         suffix = word.after
         known = true
+        // The word is known because it was read back; what precedes it was not,
+        // and reading further would be another round trip for a prediction that
+        // is only worth one lookup.
+        preceding = Preceding.Unknown
     }
 
     private fun isWordChar(char: Char): Boolean = TextEdits.isWordChar(char)

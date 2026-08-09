@@ -35,6 +35,22 @@ class DictionarySuggestions(
      * thread reads it.
      */
     @Volatile var confidenceDecay: Float = DEFAULT_CONFIDENCE_DECAY,
+    /**
+     * How often one word follows another, per language (D46).
+     *
+     * Optional, and absent by default: every test fixture and the first moment
+     * of a session run without one, and the only thing that changes is that the
+     * strip goes back to being empty between words.
+     */
+    private val bigrams: Map<Language, BigramStore> = emptyMap(),
+    /**
+     * How much of a candidate's score comes from the word before it (D47).
+     *
+     * A parameter so the sweep that chose it can be re-run against the real
+     * wordlists rather than re-derived by hand; not a setting, because unlike
+     * D34's falloff this one is not about how a particular thumb moves.
+     */
+    private val contextWeight: Float = CONTEXT_WEIGHT,
 ) : SuggestionSource {
 
     /**
@@ -66,20 +82,113 @@ class DictionarySuggestions(
         val language: Language?,
         /** How badly the stroke fitted, for a swipe. Meaningless for a tap. */
         val cost: Float = 0f,
+        /**
+         * Where the word sits in its lexicon, or -1 for one that has no
+         * lexicon — a personal word, or a form built rather than looked up.
+         *
+         * Carried so that asking the bigram store about it is an array index
+         * rather than a search: [Lexicon.indexOf] folds every word it compares,
+         * and doing that for two dozen candidates on every keystroke was the
+         * whole remaining cost of the context lookup (D47).
+         */
+        val index: Int = -1,
     )
 
-    override fun candidatesFor(word: CharSequence, touches: List<TypedTouch>): Candidates {
+    /**
+     * One word, however many lexicons happen to carry it (D45).
+     *
+     * Two thousand nine hundred spellings are in both wordlists — a fifth of
+     * the typing mass of either language — and until this ran they arrived as
+     * two rival candidates. Both went into the confidence divisor and only one
+     * could be the numerator, so a word in both languages was measurably harder
+     * to correct *to* than a word in one: `hnad` reached `hand` at 0.37 where
+     * `wrold` reached `world` at 0.99, the same transposition against the same
+     * falloff.
+     *
+     * Summing is not a thumb on the scale. "The typist meant German `Hand`" and
+     * "the typist meant English `hand`" both end with the same letters on the
+     * screen, so the chance the replacement is right is the chance of either.
+     */
+    private fun merge(candidates: List<Candidate>): List<Candidate> {
+        if (candidates.size < 2) return candidates
+        val merged = LinkedHashMap<String, Candidate>(candidates.size)
+        candidates.forEach { candidate ->
+            val key = keyOf(candidate.word)
+            val existing = merged[key]
+            merged[key] = if (existing == null) candidate else join(existing, candidate)
+        }
+        return if (merged.size == candidates.size) candidates else merged.values.toList()
+    }
+
+    /**
+     * What counts as the same word for merging: the folded spelling, so that
+     * `Hand` and `hand` are one entry.
+     *
+     * **A single letter is keyed by its exact spelling instead**, because for
+     * one letter the casing is not a detail of the word, it is the word: `i`
+     * and `I` are German and English respectively and D41 exists to choose
+     * between them. Folding them together would leave one candidate and nothing
+     * to correct.
+     */
+    private fun keyOf(word: String): String =
+        if (word.length == 1) word else Folding.fold(word)
+
+    /**
+     * Two entries for one word, added up.
+     *
+     * **Which spelling survives** is the only real decision here, and it is
+     * D22's rule — the least capitalised — reached from the other side. That
+     * rule kept one casing per word *within* a list; it says nothing about a
+     * German noun meeting its English twin, which is why `Moment` (commoner in
+     * German) was being handed to people writing English. The typist supplies
+     * the capital, as they already do for `Zeit`.
+     *
+     * Only when the two differ by nothing but case. `weiß` against `Weiss` is
+     * not one spelling of one word, so that stays settled by weight, as before.
+     *
+     * **The language goes neutral**, because it is now the honest answer: a
+     * word both lists carry is not evidence of either, and D4's indicator
+     * exists to explain corrections rather than to pick a side.
+     */
+    private fun join(a: Candidate, b: Candidate): Candidate {
+        val surface = when {
+            !a.word.equals(b.word, ignoreCase = true) -> if (b.weight > a.weight) b.word else a.word
+            b.word.firstOrNull()?.isLowerCase() == true -> b.word
+            else -> a.word
+        }
+        return Candidate(
+            surface,
+            a.weight + b.weight,
+            if (a.language == b.language) a.language else null,
+            minOf(a.cost, b.cost),
+        )
+    }
+
+    override fun candidatesFor(
+        word: CharSequence,
+        touches: List<TypedTouch>,
+        preceding: Preceding,
+    ): Candidates {
         val prefix = Folding.fold(word)
         if (prefix.isEmpty()) return Candidates.NONE
 
         val typed = word.toString()
         val candidates = mutableListOf<Candidate>()
 
-        // **Completing** still wants two letters: one is not evidence of
-        // anything, and the candidates for it are most of the alphabet's worth
-        // of words. But a single letter is no longer turned away at the door,
-        // because it can still be the *wrong case* of a word — and `I` is the
-        // second commonest word in English (D41).
+        // **One letter completes now** (D47). It used to take two, on the
+        // grounds that one letter is not evidence of anything and its
+        // candidates are most of the alphabet's worth of words. Both halves of
+        // that were true and the first has stopped being so: with the word
+        // before it to go on, one letter is frequently decisive — after
+        // `vielen`, a `d` is `dank` and nothing else. The second half is now a
+        // cost to be paid rather than a reason not to, and it is paid in
+        // [completionsFor].
+        //
+        // This is also the stretch of the word where nothing else helps:
+        // correction needs three characters (MIN_CORRECTION_LENGTH) and has
+        // nothing to say before then.
+        val context = contextFor(preceding)
+        var dropped = 0f
         if (prefix.length >= MIN_PREFIX) {
             // The user's own words first, and they mostly win: PERSONAL_WEIGHT
             // puts them above everything except the few hundred commonest words
@@ -87,16 +196,7 @@ class DictionarySuggestions(
             personal.completions(prefix).forEach {
                 candidates += Candidate(it, PERSONAL_WEIGHT, language = null)
             }
-
-            lexicons.forEach { lexicon ->
-                for (index in lexicon.completions(prefix)) {
-                    candidates += Candidate(
-                        lexicon.wordAt(index),
-                        lexicon.weightAt(index),
-                        lexicon.language,
-                    )
-                }
-            }
+            dropped = completionsFor(prefix, context, candidates)
         }
 
         // A capital in the middle says the typist meant every letter of this
@@ -118,8 +218,273 @@ class DictionarySuggestions(
         // the typist's business. `teh` is not, and a slot spent offering it
         // back would be a slot wasted.
         val keepTyped = correction != null && candidates.any { it.word == typed }
-        return Candidates(rank(typed, candidates, keepTyped = keepTyped), correction)
+        return Candidates(rank(typed, candidates, context, dropped, keepTyped), correction)
     }
+
+    /**
+     * Every completion of [prefix], scored by frequency and by what the word
+     * before it makes likely (D47).
+     *
+     * **Interpolated, never replaced** — D46's rule, and the reason this cannot
+     * make the strip worse than it was:
+     *
+     *     score(w) = λ · P(w | previous) + (1 − λ) · P(w)
+     *
+     * A word the bigram store has never seen after this context keeps its full
+     * `(1 − λ)` share of the unigram weight, so it can be pushed down the order
+     * but never out of existence, and with no context at all the ranking is
+     * exactly what it was before. The bigram side carries the same
+     * per-language mixture [predict] uses, so which language answers is still
+     * decided by the last word rather than by a mode (D2).
+     *
+     * **Only the top [KEEP] survive**, by score, and the rest have their weight
+     * added to the divisor rather than being discarded — the same bargain the
+     * swipe path's pruning makes, and with the same guarantee that the effect
+     * is to sound less certain rather than more. That is what makes one letter
+     * affordable: `s` matches 3,662 German words and 4,187 English ones, and
+     * building eight thousand candidates to show three of them is most of a
+     * millisecond spent on the first keystroke of every word.
+     *
+     * Returns the weight of everything left behind.
+     */
+    private fun completionsFor(
+        prefix: String,
+        context: Map<Language, ContextRow>,
+        into: MutableList<Candidate>,
+    ): Float {
+        var dropped = 0f
+        lexicons.forEach { lexicon ->
+            val row = context[lexicon.language]
+            val best = TopCandidates(KEEP)
+            val range = lexicon.completions(prefix)
+            // Every completion of a prefix is one contiguous run of indices,
+            // because the wordlist is sorted by folded form — so the context's
+            // followers can be merged into it in one walk rather than searched
+            // once per candidate. That is the difference between 1.4ms and a
+            // rounding error on the first keystroke of a word (D47).
+            val cursor = row?.store?.Cursor(row.context, range.first)
+            for (index in range) {
+                val unigram = lexicon.weightAt(index)
+                val score = if (cursor == null) {
+                    unigram
+                } else {
+                    contextWeight * row.vote * cursor.probabilityOf(index) +
+                        (1f - contextWeight) * unigram
+                }
+                dropped += best.offer(index, score)
+            }
+            // The *unigram* weight goes into the list, not the score selection
+            // was made on. Everything is put on the blended scale together in
+            // [rank], after D45 has merged the duplicates — interpolating first
+            // would count a shared word's context term twice.
+            best.forEach { index ->
+                into += Candidate(
+                    lexicon.wordAt(index),
+                    lexicon.weightAt(index),
+                    lexicon.language,
+                    index = index,
+                )
+            }
+        }
+        return dropped
+    }
+
+    /**
+     * D46's interpolation, applied to one candidate: `λ·P(w | previous) + (1−λ)·P(w)`.
+     *
+     * **Before merging, not after**, and it makes no difference which — the
+     * blend is linear, so adding two copies of a shared word and then blending
+     * gives the same number as blending each and adding. Doing it first is
+     * simply cheaper, because each copy still knows its own index.
+     *
+     * A candidate with no lexicon behind it — a personal word, a built
+     * apostrophe form — gets no context term and keeps its `(1 − λ)` share.
+     * That is a demotion relative to a word the corpus expects here, which is
+     * the honest ordering: the store has nothing to say for it either way.
+     */
+    private fun blend(candidate: Candidate, context: Map<Language, ContextRow>): Candidate {
+        val row = context[candidate.language]
+        val bigram = if (row == null || candidate.index < 0) {
+            0f
+        } else {
+            row.vote * row.store.probability(row.context, candidate.index)
+        }
+        return Candidate(
+            candidate.word,
+            contextWeight * bigram + (1f - contextWeight) * candidate.weight,
+            candidate.language,
+            candidate.cost,
+        )
+    }
+
+    /**
+     * Which bigram row answers for a language, and how much of the vote it gets.
+     *
+     * The vote is [predict]'s mixture: `P(language | previous word)`, taken from
+     * the unigram weight of the context word in each corpus, so `die` hands
+     * German almost everything and `in` splits it.
+     */
+    private class ContextRow(val store: BigramStore, val context: Int, val vote: Float)
+
+    private fun contextFor(preceding: Preceding): Map<Language, ContextRow> {
+        if (bigrams.isEmpty() || contextWeight <= 0f || preceding == Preceding.Unknown) {
+            return emptyMap()
+        }
+        val votes = HashMap<Language, Float>(lexicons.size)
+        var total = 0f
+        lexicons.forEach { lexicon ->
+            val vote = when (preceding) {
+                is Preceding.Word -> {
+                    val index = lexicon.indexOf(preceding.text)
+                    if (index < 0) 0f else lexicon.weightAt(index)
+                }
+                else -> 1f
+            }
+            if (vote > 0f) {
+                votes[lexicon.language] = vote
+                total += vote
+            }
+        }
+        if (total <= 0f) return emptyMap()
+
+        val rows = HashMap<Language, ContextRow>(lexicons.size)
+        lexicons.forEach { lexicon ->
+            val store = bigrams[lexicon.language] ?: return@forEach
+            val vote = votes[lexicon.language] ?: return@forEach
+            val context = when (preceding) {
+                is Preceding.Word -> lexicon.indexOf(preceding.text)
+                else -> store.sentenceStart
+            }
+            if (context >= 0) rows[lexicon.language] = ContextRow(store, context, vote / total)
+        }
+        return rows
+    }
+
+    /**
+     * The best few of a long list, kept without sorting it.
+     *
+     * Insertion into a handful of slots, because [KEEP] is small enough that a
+     * linear shuffle beats a heap and allocates nothing per candidate. What
+     * falls out is returned rather than dropped, so the caller can put it in
+     * the divisor.
+     */
+    private class TopCandidates(private val capacity: Int) {
+        private val indices = IntArray(capacity)
+        private val scores = FloatArray(capacity)
+        private var size = 0
+
+        /**
+         * Takes [score] into account, returning whatever weight this displaced
+         * — which is [score] itself when the candidate is not good enough to
+         * get in, and the evicted last place when it is.
+         */
+        fun offer(index: Int, score: Float): Float {
+            val full = size == capacity
+            if (full && score <= scores[capacity - 1]) return score
+            val evicted = if (full) scores[capacity - 1] else 0f
+            var slot = if (full) capacity - 1 else size++
+            while (slot > 0 && scores[slot - 1] < score) {
+                indices[slot] = indices[slot - 1]
+                scores[slot] = scores[slot - 1]
+                slot--
+            }
+            indices[slot] = index
+            scores[slot] = score
+            return evicted
+        }
+
+        fun forEach(action: (index: Int) -> Unit) {
+            for (slot in 0 until size) action(indices[slot])
+        }
+    }
+
+    /**
+     * What tends to come next (D9, D46), which is what fills the strip between
+     * words.
+     *
+     * **Both languages answer, and they are weighted by how much each one
+     * believes it owns the context.** The two stores hold conditional
+     * probabilities within their own corpus, and those are not comparable
+     * across languages as they stand: `P_de(next | die)` and `P_en(next | die)`
+     * are both perfectly normalised and describe different worlds. What makes
+     * them one distribution is the mixture
+     *
+     *     P(next | previous) = Σ P(language | previous) · P_language(next | previous)
+     *
+     * with `P(language | previous)` taken from the unigram weights already
+     * shipped — the same numbers D22 uses to let the two lists compete on one
+     * scale. So `die`, which is 55 times commoner in German, hands German
+     * almost the whole vote and the strip fills with `die Frau`, `die Tür`;
+     * `in`, which is near-equal, lets both languages answer. That is D2's
+     * per-word language inference in the only form the evidence supports — not
+     * a guess about what language the sentence is in, but a weighting by what
+     * the last word actually was.
+     *
+     * At a sentence start there is no previous word to weight by, so the two
+     * corpora split it evenly, which is what D1 says they are.
+     *
+     * Candidates are merged across languages by D45's rule, since a word both
+     * lists carry is one word here too.
+     */
+    override fun predict(preceding: Preceding): List<Suggestion> {
+        if (bigrams.isEmpty() || preceding == Preceding.Unknown) return emptyList()
+
+        // How much of the vote each language gets, from the context word's own
+        // frequency. Nothing to divide at a sentence start, so it is even.
+        val votes = HashMap<Language, Float>(lexicons.size)
+        var total = 0f
+        lexicons.forEach { lexicon ->
+            val vote = when (preceding) {
+                is Preceding.Word -> {
+                    val index = lexicon.indexOf(preceding.text)
+                    if (index < 0) 0f else lexicon.weightAt(index)
+                }
+                else -> 1f
+            }
+            if (vote > 0f) {
+                votes[lexicon.language] = vote
+                total += vote
+            }
+        }
+        if (total <= 0f) return emptyList()
+
+        val candidates = mutableListOf<Candidate>()
+        lexicons.forEach { lexicon ->
+            val store = bigrams[lexicon.language] ?: return@forEach
+            val vote = (votes[lexicon.language] ?: return@forEach) / total
+            val context = when (preceding) {
+                is Preceding.Word -> lexicon.indexOf(preceding.text)
+                else -> store.sentenceStart
+            }
+            if (context < 0) return@forEach
+            store.forEachFollower(context) { word, probability ->
+                candidates += Candidate(lexicon.wordAt(word), vote * probability, lexicon.language)
+            }
+        }
+        if (candidates.isEmpty()) return emptyList()
+
+        // Already a probability, so unlike everywhere else in this class there
+        // is no mass to divide by — the confidences the strip shows here are
+        // the model's own and sum to at most one.
+        return merge(candidates)
+            .sortedByDescending { it.weight }
+            .take(SuggestionSlots.CAPACITY)
+            .map {
+                val text = if (preceding == Preceding.SentenceStart) capitalised(it.word) else it.word
+                Suggestion(text, it.weight, it.language)
+            }
+    }
+
+    /**
+     * A sentence opens with a capital, so a word offered as its first is shown
+     * with one (D42).
+     *
+     * The strip has to do this itself rather than leave it to the shift state,
+     * because what it shows and what it inserts must be the same string — and
+     * `pickSuggestion` applies the pending shift to whatever it is handed,
+     * which for an already-capitalised word is a no-op.
+     */
+    private fun capitalised(word: String): String = word.replaceFirstChar { it.uppercaseChar() }
 
     /**
      * The one search, and both things the keyboard does with it (D37).
@@ -147,35 +512,37 @@ class DictionarySuggestions(
         val filling = into.size < SuggestionSlots.CAPACITY
         if (!correcting && !filling) return null
 
-        var best: Candidate? = null
-        var bestScore = 0f
         // The typed word standing as it is, which is what a correction has to
         // beat rather than merely lead.
         var mass = priorFor(typed)
+        // Keyed by folded spelling, so that a word both lists carry arrives
+        // once with its weight added up rather than twice as its own rival
+        // (D45). The mass is unaffected — the same scores, grouped.
+        val nearby = if (correcting) HashMap<String, Candidate>() else null
 
         forEachNearby(typed, touches) { lexicon, index, cost ->
             val score = lexicon.weightAt(index) * exp(-confidenceDecay * cost)
-            if (correcting) {
+            if (nearby != null) {
                 mass += score
-                if (score > bestScore) {
-                    bestScore = score
-                    best = Candidate(lexicon.wordAt(index), score, lexicon.language)
-                }
+                val found = Candidate(lexicon.wordAt(index), score, lexicon.language)
+                val key = keyOf(found.word)
+                val existing = nearby[key]
+                nearby[key] = if (existing == null) found else join(existing, found)
             }
             // Cost zero is the word itself, which is not a correction. It gets
             // here because folding makes `uber` and `über` one lookup — and
             // `über`, at ACCENT, is a correction worth offering.
             if (filling && cost > 0f) {
-                into += Candidate(lexicon.wordAt(index), score, lexicon.language)
+                into += Candidate(lexicon.wordAt(index), score, lexicon.language, index = index)
             }
         }
 
-        val winner = best ?: return null
-        if (!correcting || winner.word.equals(typed, ignoreCase = true)) return null
+        val winner = nearby?.values?.maxByOrNull { it.weight } ?: return null
+        if (winner.word.equals(typed, ignoreCase = true)) return null
         return Correction(
             text = applyTypedCase(winner.word, typed),
             original = typed,
-            confidence = bestScore / mass,
+            confidence = winner.weight / mass,
             language = winner.language,
         )
     }
@@ -415,19 +782,30 @@ class DictionarySuggestions(
     private fun rank(
         typed: String,
         candidates: List<Candidate>,
+        context: Map<Language, ContextRow> = emptyMap(),
         prior: Float = 0f,
         keepTyped: Boolean = false,
     ): List<Suggestion> {
         if (candidates.isEmpty()) return emptyList()
 
-        // Confidence is the candidate's share of everything that matches: a
-        // unigram P(word | what was typed so far). Crude, and honestly crude —
-        // D3 wants a calibrated number and this is the most a lookup can say.
+        // A word both lists carry is one word and takes one slot (D45). Before
+        // this the strip could spend two of its three saying `baby` and `Baby`.
+        // **Merged before the context is applied**, or a shared word would have
+        // its `P(word | previous)` counted once per list.
+        val merged = merge(
+            if (context.isEmpty()) candidates else candidates.map { blend(it, context) },
+        )
+
+        // Confidence is the candidate's share of everything that matches: with
+        // no context, a unigram P(word | what was typed so far); with one, that
+        // interpolated with P(word | previous word) (D46, D47). Crude either
+        // way — D3 wants a calibrated number and this is the most a lookup can
+        // say — but the ordering is no longer blind to the sentence.
         var mass = prior
-        candidates.forEach { mass += it.weight }
+        merged.forEach { mass += it.weight }
         if (mass <= 0f) return emptyList()
 
-        return candidates
+        return merged
             .sortedByDescending { it.weight }
             .asSequence()
             .map { Suggestion(applyTypedCase(it.word, typed), it.weight / mass, it.language) }
@@ -515,7 +893,7 @@ class DictionarySuggestions(
                 // than an arbitrary substitution would be.
                 val score = lexicon.weightAt(found) * exp(-confidenceDecay * APOSTROPHE_SLIP)
                 mass += score
-                into += Candidate(word, score, lexicon.language)
+                into += Candidate(word, score, lexicon.language, index = found)
                 if (score > (best?.weight ?: 0f)) {
                     best = Candidate(applyTypedCase(word, typed), score, lexicon.language)
                 }
@@ -546,6 +924,11 @@ class DictionarySuggestions(
      * Deliberately only for single letters. The same reasoning would capitalise
      * every German noun on sight — `haus` to `Haus` — which may well be right
      * and is emphatically a separate decision.
+     *
+     * **The one place a word in both lists is deliberately left doubled** (D45).
+     * Everywhere else `i` and `I` are one word arriving twice; here the
+     * difference between them is the entire question, and adding them up would
+     * leave nothing to correct.
      */
     private fun addCasedForms(typed: String, into: MutableList<Candidate>): Correction? {
         if (typed.length != 1 || !typed[0].isLetter()) return null
@@ -559,7 +942,7 @@ class DictionarySuggestions(
             val word = lexicon.wordAt(index)
             val score = lexicon.weightAt(index)
             mass += score
-            into += Candidate(word, score, lexicon.language)
+            into += Candidate(word, score, lexicon.language, index = index)
             if (word != typed && score > (best?.weight ?: 0f)) {
                 best = Candidate(word, score, lexicon.language)
             }
@@ -707,10 +1090,44 @@ class DictionarySuggestions(
 
     private companion object {
         /**
-         * One letter is not evidence of anything; two is enough to be
-         * completing rather than guessing.
+         * One letter completes (D47).
+         *
+         * It used to take two, because one letter is not evidence of anything.
+         * With the word before it to go on, it frequently is: after `vielen`, a
+         * `d` is `dank`. And it is the stretch of the word where nothing else
+         * helps — [MIN_CORRECTION_LENGTH] means correction has nothing to say
+         * until the third character.
          */
-        const val MIN_PREFIX = 2
+        const val MIN_PREFIX = 1
+
+        /**
+         * How much of a candidate's score comes from the word before it rather
+         * than from how common it is (D46, D47).
+         *
+         * Zero is the ranking as it was before any of this; one throws the
+         * frequency table away and trusts a bigram count that has never seen
+         * most of the pairs it will be asked about — and measurably loses for
+         * it, which is the clearest evidence that the interpolation is doing
+         * work rather than decorating.
+         *
+         * Swept on 8,000 held-out subtitle pairs; the full table is in D47. The
+         * peak is at 0.95 and this is deliberately below it: the curve is flat
+         * to within a point and a half from 0.65 up, the held-out text was
+         * inside the counts and so flatters the bigram slightly, and a context
+         * whose row barely cleared the threshold is estimated from very little.
+         * A fifth of the weight left on the frequency table is what that buys.
+         */
+        const val CONTEXT_WEIGHT = 0.8f
+
+        /**
+         * How many completions per language survive the scan.
+         *
+         * Four times what the strip can show, so that D45's merging and the
+         * typed-word filter have something to work with, and small enough that
+         * `s` — 3,662 German words and 4,187 English ones — costs an integer
+         * comparison each rather than an allocation.
+         */
+        const val KEEP = 12
 
         /**
          * What a personal word is assumed to be worth, as a share of a corpus.

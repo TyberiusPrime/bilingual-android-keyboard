@@ -57,12 +57,13 @@ class CommonTyposTest {
         }
         println("  $fixed of ${slips.size} corrected")
 
-        // Two thirds, which is where the trigram prior left it. What remains is
-        // the class the prior cannot see — a transposition of a real word is
-        // word-shaped by construction, and in the union of two languages it is
-        // usually word-shaped in the *other* one: `freind` is built from `rei`,
-        // `ein` and `ind`, all common German. Those need context (D10/D12).
-        assertTrue("only $fixed of ${slips.size} corrected", fixed >= 19)
+        // Two thirds, where the trigram prior (D43) left it and D45 added one.
+        // What remains is the class the prior cannot see — a transposition of a
+        // real word is word-shaped by construction, and in the union of two
+        // languages it is usually word-shaped in the *other* one: `freind` is
+        // built from `rei`, `ein` and `ind`, all common German. Those need
+        // context (D10/D12).
+        assertTrue("only $fixed of ${slips.size} corrected", fixed >= 20)
     }
 
     /**

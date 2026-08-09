@@ -1,6 +1,6 @@
 # Design document
 
-**Status: decisions D1–D42 settled; architecture drafted from them. Roadmap
+**Status: decisions D1–D48 settled; architecture drafted from them. Roadmap
 steps 2 and 3 built; editor I/O (step 4) next.** See `docs/android-ime-api.md`
 for what the platform allows and what it withholds.
 
@@ -22,7 +22,11 @@ below.
 
 - [ ] What is the starting confidence threshold for auto-replace, in numbers?
       Cannot be answered before there is something to measure.
-- [ ] Which concrete model and corpus. D12 sets the shape, not the artefact.
+- [x] **Which concrete model and corpus.** Settled in D46: a bigram store as the
+      measurable baseline, then a ~25M-parameter joint-vocabulary decoder, both
+      interpolated with the unigram weight so neither can score worse than the
+      lookup does today. What is *not* settled is the corpus licence — see D46's
+      blocker, which is now the first task of step 6.
 - [ ] Does the umlaut correction from D5 apply inside English words too
       (`uber` → `über`)? Probably not, but it is a real ambiguity.
 - [ ] Emoji: search, recents, skin tones — entirely unaddressed so far.
@@ -40,6 +44,14 @@ below.
       the lever for it.
 - [ ] Is the unknown-word prior right (D28)? Everything the auto-correction
       threshold does, it does relative to that one number, and it was guessed.
+- [x] **Next-word prediction has no data source.** Answered by D46: a bigram
+      store counted off the same corpus, shipped and wired into the strip. What
+      is still open is whether context should also rescore *corrections*, which
+      would move every number D43 and D45 measured and so needs its own pass.
+- [ ] **Language inference, as opposed to provenance.** D2 asks for per-word
+      inference from sentence context; what exists is a label saying which file
+      the word came from (D45 makes that label honest, it does not make it an
+      inference). Nothing reads `EditorInfo.hintLocales` either.
 - [ ] Auto-correction still cannot spell `Straße` from `strasse` (D28), `ß`
       folding one character at a time.
 - [ ] The `'s` contractions are systematically under-weighted (D34): their share
@@ -82,6 +94,15 @@ so far as evidence, and a scoring model where a candidate from either language
 can win at any position. The unit of language identity is the word, not the
 field and not the message.
 
+**None of the inference exists yet, and the decision reads as though it does.**
+What is built is per-candidate *provenance*: `Suggestion.language` records which
+file the word was read from, and no context of any kind is consulted anywhere in
+the path. The second half of the requirement — that a candidate from either
+language can win at any position — is built and is the part that matters so far
+(D22, D45). The first half waits on step 6. Nor is anything read from
+`EditorInfo`: this decision demotes `packageName` and the locale hints to a weak
+prior, which implies used-as-a-prior, and today they are used as nothing at all.
+
 ### D3 — Auto-replace only at high confidence
 
 Silent replacement is permitted, but only above a tuned confidence threshold;
@@ -120,6 +141,12 @@ Deliberately per candidate rather than per keyboard — under D2 the language
 belongs to the word, so a strip showing a German and an English candidate side
 by side, differently tinted, is the honest picture. There is nowhere else it
 could go without inventing a current language for it to describe.
+
+**The neutral wash means "no language claim", not "personal"** (D45). It was
+introduced for the personal store, which belongs to no language; a word both
+wordlists carry belongs to no language either, and for a fifth of typing mass
+the tint used to name whichever corpus happened to weigh the word more. Since
+the indicator is diagnostic, saying *both* is worth more than picking one.
 
 ### D5 — QWERTY letter positions, umlauts on long-press
 
@@ -229,6 +256,20 @@ are now load-bearing rather than nice-to-have:
 A permanently present strip, so keyboard height never changes while typing. It
 carries below-threshold corrections (which under D3 are offered rather than
 applied) and next-word predictions.
+
+**For a long time only the first half was built.** `candidatesFor` returns
+nothing for an empty prefix, and `MIN_PREFIX` wants two letters before it will
+complete, so the three slots sat empty at every word boundary *and* at every
+word's first keystroke — roughly a third of the cycle. That was not a matter of
+wiring up something that existed: both shipped wordlists are unigram
+(FrequencyWords 50k), and there was no bigram data in the repo to predict from
+at all. Step 3 delivered half of this decision while the roadmap read as though
+it had delivered all of it.
+
+**Both halves are built now** (D46): the strip carries next-word predictions
+from a bigram store counted off the same corpus the frequencies came from.
+What remains empty is what should be — a cursor jump, a backspace into the
+previous word, anything the keyboard cannot vouch for.
 
 ### D10 — Small on-device neural model from the start
 
@@ -2141,6 +2182,425 @@ Measuring the exception turned up a bug beside it. `I DONT CARE` came back as
 case — the right rule for `Haus` and the wrong one for a word that is all
 capitals. A correction inside a shout now stays shouted.
 
+### D45 — A word in both dictionaries is one word
+
+Found by reviewing D2's promises against the build rather than by typing.
+
+**2,933 folded spellings are in both wordlists, and they carry 21.1% of the
+German corpus and 21.4% of the English.** `in`, `was`, `so`, `an`, `will`,
+`man`, `hand`, `name`, `problem`, `moment`, `baby`, `kind`. That is not a corner
+of the vocabulary, it is the part where the two languages actually touch — which
+under D1 and D2 is the part this project exists for.
+
+Both copies arrived as separate candidates. Both went into the confidence
+divisor and only one could ever be the numerator, so **a word in both languages
+stood in its own way**, at a discount measured between 27% and 48%. The effect
+was that corrections *toward* a shared word could not reach the threshold at
+all. Same slip, same falloff, the only variable being how many lists hold the
+target:
+
+| target in both | | target in one | |
+|---|---|---|---|
+| `hnad` → `hand` | 0.37 | `wrold` → `world` | 0.99 ✓ |
+| `probelm` → `Problem` | 0.52 | `peopel` → `people` | 1.00 ✓ |
+| `kidn` → `kind` | 0.58 | `hoem` → `home` | 1.00 ✓ |
+| `momnet` → `Moment` | 0.64 | `arbiet` → `Arbeit` | 1.00 ✓ |
+| `nmae` → `name` | 0.73 | | |
+
+**So candidates are grouped by folded spelling and their weights added.** Not a
+thumb on the scale: "the typist meant German `Hand`" and "the typist meant
+English `hand`" put the same letters on the screen, so the chance the
+replacement is right is the chance of either. The divisor is untouched — the
+same scores, grouped — which is why this can only raise confidence in the
+candidate that was already winning, never invent one.
+
+Measured after: `nmae` → `name` 1.00, `momnet` → `moment` 1.00, `probelm` →
+`problem` 1.00, `bayb` → `baby` 1.00, `wasd` → `was` 0.99, `kidn` → `kind` 0.92,
+all now firing. `hnad` → `hand` reaches 0.66 and `alos` → `also` 0.85 and still
+do not, beaten by genuine rivals rather than by themselves. Across the wider
+sets: 19 → 20 of the classic slips, 16 → 17 of D43's typos, and **no name loses
+its protection** — the floor sweep at 7 nats is unchanged at one.
+
+Two things fell out of the same grouping.
+
+**The casing was wrong, and nobody had noticed.** The surviving copy was
+whichever corpus weighed the word more, so anyone writing English was handed
+`Moment` and `Problem` — German spellings of English words. The merged entry
+keeps the **least capitalised** spelling, which is D22's rule arriving from the
+other side: that rule kept one casing per word *within* a list and said nothing
+about a German noun meeting its English twin. The typist supplies the capital,
+exactly as they already do for `Zeit`. Only when the two differ by nothing but
+case — `weiß` against `Weiss` is not one spelling of one word, and stays settled
+by weight.
+
+**The strip stops repeating itself.** `bab` was spending two of its three slots
+on `baby` and `Baby`; `prob`, `mom` and `nam` likewise. One word, one slot.
+
+**The D4 tint goes neutral for a shared word**, which is the honest reading: a
+word both lists carry is not evidence of either language, and the indicator
+exists to explain corrections rather than to pick a side. It shares the neutral
+wash with the personal store, and the two mean the same thing — *this keyboard
+makes no language claim about this word*.
+
+**One place is deliberately left doubled.** D41 turns `i` into `I`, and that
+runs entirely on the two lists disagreeing about the casing of one letter. For a
+single letter the casing is not a detail of the word, it is the word, so
+single letters are keyed by their exact spelling and the two survive separately.
+
+**Not done: the same divisor in the swipe path.** `rankGesture` double-counts a
+shared word in exactly the same way. It is left alone because gesture scores are
+square-rooted before they are summed, so grouping them is an approximation
+rather than the identity it is here, and because ordering there decides what
+gets committed — a change that needs its own accuracy run against D39's corpus,
+not a free ride on this one.
+
+### D46 — The prediction model: counts first, then one multilingual transformer
+
+Answers the open question D12 left standing — *which concrete model and corpus* —
+and reverses half of D10 on purpose.
+
+#### The thing D12 assumed and we do not have
+
+D12's case for one joint model is that *"in `das ist ein total edge case`, the
+English model scoring `edge` has never seen the German context."* That is right
+about models and it quietly assumes **code-switched training data**. Both
+corpora here are monolingual OpenSubtitles. A model trained on their union sees
+German context followed by German, English followed by English, and never once
+sees the switch — so it will put low probability on the first English word after
+German context, degrading at exactly the case this project exists for.
+
+The code-switching problem is therefore a **corpus** problem before it is a
+model problem, and no architecture fixes it. Two things do, and both are cheap:
+
+- **Interpolate with the unigram prior:** `P = λ·P_LM(w|ctx) + (1−λ)·P_unigram(w)`.
+  This makes it arithmetically impossible for the model to score worse than
+  today's lookup, which is the same safety shape D43 uses — `WordShape` may only
+  lower the unknown-word prior, never raise it. At a switch the LM contributes
+  nothing useful and the interpolation falls back to what already works.
+- **Synthesise the switches at data-prep time**, splicing clauses of one
+  language into sentences of the other at clause boundaries. Crude, and it
+  teaches the model that a switch is an ordinary event rather than a shock.
+
+#### Two rules that come before the artefact
+
+**Rank, do not generate.** The model never proposes a word; it scores a
+shortlist the lexicons have already produced. Three things follow, and all of
+them are things this project has decided elsewhere: the vocabulary stays closed,
+so nothing is ever offered whose provenance is not recorded (D13, D22); latency
+is bounded and predictable rather than a beam search; and a word from the
+personal store gets scored in context beside dictionary words, which raises D8's
+ceiling without learning anything.
+
+**The model replaces the unigram weight and nothing else.** Confidence today is
+`weight × exp(−decay × cost) / mass`. Substitute `P(w | context)` for `weight`
+and the channel model, the unknown-word prior, D45's grouping and the threshold
+all stay exactly as they are and stay calibrated. It is a drop-in, which is the
+whole value of it: step 6 gets measured on the same harness that measures step 3,
+against the same corpora, and a regression is visible rather than arguable.
+
+**Context is what the keyboard typed.** Not what the field contains — D21
+refuses to ask, and D23's cursor jump leaves the keyboard unable to vouch for
+what is there. Prediction inherits that posture: it works from the keyboard's
+own recent output in this field, and where the word is unknown it goes quiet
+rather than guessing. Which means the context window is frequently short, and a
+model that needs sixty-four tokens of history to be useful is the wrong model.
+
+#### Sequencing: the baseline first, and why that reverses D10
+
+D10 said "not an n-gram-first approach." That was right for correction and is
+wrong for prediction, for a reason that did not exist when it was written:
+**there is currently no way to tell whether step 6 delivered.** The roadmap
+calls step 6 the point where "the project either delivers or does not", and it
+has nothing to be compared against. Going into a training project with no
+baseline is how one ships a model that is worse than a lookup and cannot tell.
+
+So: a bigram store lands first. It fills D9's empty strip — blank today at every
+word boundary and every word's first keystroke — in days rather than months, it
+is a hash lookup rather than an inference, it is explainable in the way D4 and
+D10 both ask for, and **it is the number the transformer has to beat.**
+
+#### The artefacts
+
+Budget agreed at **~60MB installed**, against 8.6MB today. That is generous
+enough that neither stage has to be crippled, and it is the one number that
+constrains both.
+
+**Stage 6a — bigram store. Built** (`scripts/build-bigrams.py`), and it came in
+where the estimate said: 18.3MB for both languages, taking the APK from 8.6MB
+to 24.3MB and leaving some 35MB of the budget for the model.
+
+Full vocabulary rather than a top-N slice, since the budget allowed it. A row
+per context word plus one for the sentence start, compressed-sparse-row, each
+follower a single 32-bit word — 17 bits of wordlist index above 15 bits of
+quantised conditional log probability. Fixed width because a common context has
+thousands of followers and the app binary-searches the row rather than scanning
+it. Keys are wordlist line indices rather than strings, which is what makes it
+this small; the price is that a store belongs to the wordlist it was counted
+from, so the header carries that file's entry count and SHA-256 and
+`BigramAssetTest` refuses a mismatch.
+
+Counted over 41.6M German and 441M English subtitle lines — 2.7 billion tokens,
+2.4 billion in-vocabulary pairs, 24 million distinct ones.
+
+**The two thresholds differ, and the reason is worth keeping.** The floor is
+absolute, because the provenance argument is about absolute occurrences and does
+not scale with how much corpus there happens to be. Above the floor it is
+size against coverage, and English has eleven times German's tokens, so the same
+number means something eleven times weaker there. Measured:
+
+| threshold | German | English |
+|---|---|---|
+| 5 | 95.4% of pair mass, 6.5MB | 99.2%, 31.1MB |
+| 10 | 92.9%, 3.7MB | 98.3%, 19.5MB |
+| 20 | 90.2%, 2.2MB | 97.1%, 11.8MB |
+
+Shipping German at 5 and English at 20 lands the two within two points of each
+other — closer to parity than any single number gets, and **smaller than a
+uniform threshold of 10** would have been. Under D1 neither language is the
+fallback, and a store that predicted English well and German poorly would have
+been that in all but name.
+
+What it predicts, unprompted: `vielen` → `dank` at 0.80, `thank` → `you` at
+0.93, `guten` → `morgen`/`Tag`/`Abend`, `how` → `do`/`much`/`to`, and a
+sentence-start row led by `ich` and `I` — which is exactly the slot D9 promised
+and D21 has been leaving blank.
+
+Backs off to the existing unigram weight, which is the same interpolation the
+neural stage will use, so the plumbing is written once.
+
+**Wired into the strip.** `BigramStore` maps the asset straight out of the APK
+— no allocation, no parse, and the pages for words nobody types never arrive.
+That is why `build.gradle.kts` keeps `.bigrams` uncompressed: `openFd` throws
+for a compressed asset, and eighteen megabytes on the heap is how an input
+method gets killed mid-sentence. It cost 0.9MB of APK, the stores being
+quantised integers and near-incompressible anyway.
+
+The store **refuses rather than guesses**. Its keys are wordlist line indices,
+so a store counted against a different wordlist would predict fluently and
+wrongly; a word-count mismatch, an unknown version or a truncated file all
+produce a store with no opinions, and the strip goes back to being empty
+between words. That is the failure worth having, because the other one looks
+like it is working.
+
+**Which language answers is decided by the last word, not by a mode.** The two
+stores hold conditionals within their own corpus and are not comparable as they
+stand — `P_de(next | die)` and `P_en(next | die)` are both perfectly normalised
+and describe different worlds. What makes them one distribution is the mixture
+
+    P(next | previous) = Σ P(language | previous) · P_language(next | previous)
+
+with `P(language | previous)` taken from the unigram weights D22 already ships.
+`die` is 55 times commoner in German, so German gets almost the whole vote and
+the strip fills with German; `in`, `so` and `was` are near-equal, so both
+languages answer. **This is D2's per-word language inference in the only form
+the evidence supports** — not a guess about what language the sentence is in,
+but a weighting by what the last word actually was. Nothing anywhere holds a
+current language, and the candidates are merged across the two by D45's rule,
+because a word both lists carry is one word here too.
+
+At a sentence start there is no previous word to weight by, so the corpora split
+it evenly — which is what D1 says they are — and the openings are capitalised,
+since what the strip shows and what it inserts must be the same string.
+
+**The context comes from what the keyboard typed**, tracked in `WordInProgress`
+beside the word in progress, so a prediction costs no round trip to the app.
+It inherits D21's refusal wholesale: a cursor jump, a backspace into the
+previous word, a word read back rather than typed, and the context is
+`Unknown` and the strip stays empty. A prediction made from a guess about the
+preceding word would be a guess squared.
+
+**Not done: context in the correction path.** D46 says the model eventually
+replaces the unigram weight everywhere, which would let `P(next | previous)`
+rank completions and rescore corrections. That moves every number D43 and D45
+measured, so it needs its own measurement pass rather than a free ride on this
+one. Prediction is pure gain — it fills slots that were empty; rescoring can
+take slots away. *Completions took that measurement pass and got the context;
+corrections still have not — see D47.*
+
+**Stage 6b — the model.** Joint SentencePiece vocabulary over both languages
+(16k, trained on the two corpora together rather than concatenating two
+monolingual vocabularies — that shared vocabulary is the part of D12 that
+survives intact). A decoder of roughly 8 layers at 384 dimensions, ~25M
+parameters, short context. Trained on OpenSubtitles DE+EN interleaved, with the
+switch augmentation above. Quantised to int8 and run through TFLite with
+XNNPACK, which is Apache 2.0 and one-way compatible with GPLv3 in the same way
+the CC BY-SA sources already are. Call it 30MB.
+
+#### The blocker, checked
+
+**hermitdave/FrequencyWords ships unigrams only.** Every count in `de.txt` and
+`en.txt` came from a derived list, not from the corpus, so both stages need the
+OpenSubtitles corpus itself, from OPUS. Read the terms rather than assumed them,
+and the answer reframes something the project already ships.
+
+**OPUS grants no licence.** Its statement is *"We do not own any of the text
+from which the data has been extracted. We only offer files that we believe we
+are free to redistribute"*, alongside a take-down policy, an attribution request
+(a link to opensubtitles.org from the site and from publications) and a citation
+requirement — Lison and Tiedemann, LREC 2016. That is a posture, not a grant.
+There is no licence chain here to inherit and nothing to relicense as GPLv3.
+
+**So PROVENANCE currently describes the wrong footing for what already ships.**
+hermitdave's CC BY-SA 4.0 covers *his compilation* of counts; it cannot cover
+the subtitles, because he had no rights in them to pass on. The reason shipping
+those counts is defensible is different and stronger: **a frequency table is
+facts about a text rather than its expression**, and no corpus can be
+reconstructed from it. The bet is a good one and it has already been made — it
+is just recorded as a licence chain when it is not one.
+
+**A bigram table stands on exactly that same ground**, and on well-trodden
+ground: Google publishes Books Ngrams up to 5-grams under CC BY 3.0 from
+in-copyright books, and HathiTrust distributes Extracted Features from
+in-copyright volumes, both resting on the non-expressive use that the Google
+Books and HathiTrust rulings supported. One condition falls out of the reasoning
+and is therefore not optional: **the store carries a documented count
+threshold**, pairs seen fewer than a handful of times being dropped. A table
+including singletons begins to leak rare phrasings; a thresholded one provably
+cannot. That is the difference between a statistic and an index, and it is what
+the defence rests on.
+
+**Stage 6b is a different bet, not a continuation of this one.** Trained weights
+are contested where n-gram counts are not, and memorisation is an observed
+phenomenon rather than a theoretical one. Splitting the stages was decided for
+methodological reasons — 6a is the yardstick — and it turns out to matter here
+too, because it means the project can stop between them. Recorded in Risks.
+
+**Fallbacks that carry an actual grant**, if the second bet is unwanted: Google
+Books Ngrams (CC BY 3.0, German included, n up to 5 — and n-grams are exactly
+what 6a needs; the cost is book register, which predicts *der Herr sprach* far
+better than *bin gleich da*); Tatoeba (CC BY 2.0 FR, conversational, ~385k DE-EN
+units, right register and far too small to train on, but usable as an
+interpolation component); Wikipedia (CC BY-SA 4.0, large, wrong register).
+**Leipzig Corpora is ruled out** — CC BY-NC, and a field-of-use restriction is
+the one thing GPLv3 cannot absorb.
+
+**The code-switched data this decision asks for does not exist
+redistributably.** The one real German-English code-switching corpus — Denglisch,
+Osmelak and Wintner 2023 — is drawn from social media with no licence stated in
+either the paper or the repository. That matters less than it appears, because
+its right use is as a **held-out evaluation set**, and measuring against a corpus
+requires no right to redistribute it. It supplies the thing this decision
+otherwise lacks: a way to find out whether the switch augmentation did anything.
+
+None of the above is legal advice; it is a reading of published terms.
+
+The build script sits beside `build-wordlists.py` and records its sources the
+same way, in the same file, at the time it is added — including, this time, the
+distinction between an artefact that carries a grant and one that rests on not
+being a derivative work.
+
+### D47 — The first two letters
+
+The opening of a word was the part the keyboard had least to say about.
+Correction needs three characters (`MIN_CORRECTION_LENGTH`) and completion
+needed two, so the first keystroke produced nothing at all and the second a
+guess made from the frequency table alone. It is also the part where the word
+*before* says the most, and D46 had just put that in the build.
+
+**So one letter completes, and completions are interpolated with the bigram**,
+by exactly D46's rule and in one place:
+
+    score(w) = λ · P(w | previous word) + (1 − λ) · P(w)
+
+A word the store has never seen after this context keeps its full `(1 − λ)`
+share, so context reorders the strip and can never empty it; with no context at
+all the ranking is what it was before. The bigram side carries the same
+per-language mixture prediction uses, so which language answers is still decided
+by the last word (D2). The blend runs *before* D45's merge, which needs no
+thought either way — it is linear, so adding two copies of a shared word and
+then blending is the same number as blending each and adding.
+
+**What it is worth**, measured on 8,000 held-out subtitle pairs: how often the
+word actually typed next was among the strip's three.
+
+| λ | de, 1 char | de, 2 chars | en, 1 char | en, 2 chars |
+|---|---|---|---|---|
+| 0.0 | 33.0% | 51.9% | 32.9% | 42.7% |
+| 0.35 | 52.0% | 65.6% | 48.5% | 53.7% |
+| 0.65 | 56.6% | 68.6% | 53.8% | 56.5% |
+| **0.8** | **58.4%** | **69.9%** | **55.7%** | **57.5%** |
+| 0.95 | 59.9% | 70.7% | 57.2% | 59.5% |
+| 1.0 | 59.9% | 70.2% | 57.6% | 59.3% |
+
+One letter goes from a third to nearly three fifths. **λ = 1 is worse than
+λ = 0.95**, which is the clearest evidence the interpolation is load bearing
+rather than decorative: throw the frequency table away entirely and every word
+the store has never seen after this context goes with it.
+
+Shipped at 0.8 rather than at the peak. The curve is flat to within a point and
+a half from 0.65 up; the held-out text was inside the counts, which flatters the
+bigram slightly; and a context whose row barely cleared D46's threshold is
+estimated from very little. A fifth of the weight left on the frequency table is
+what that buys. Three characters gains too — 42% to 51% — so the rule applies at
+every length rather than only where it was aimed.
+
+**The cost was latency, and it was real.** `s` matches 3,662 German words and
+4,187 English ones, and the first version asked the bigram store about each of
+them: a binary search apiece, against a row that for a common context holds
+thousands. 1.4ms on a laptop, on the commonest keystroke there is. Two changes
+fixed it, both structural rather than clever.
+
+- **A cursor instead of a search.** Every completion of a prefix is one
+  contiguous run of wordlist indices, because the list is sorted by folded form,
+  and a follower row is sorted the same way. So the two are merged in one walk:
+  one binary search, then a linear scan.
+- **Candidates carry their index.** Putting the non-completion candidates on the
+  same scale meant looking each one up by string, and `Lexicon.indexOf` folds
+  every word it compares — some eight hundred string allocations per keystroke
+  for two dozen candidates.
+
+Together: 1.4ms to 0.10ms on the worst case, and the whole one-letter query now
+measures 0.03–0.31ms with context against 0.02–0.18ms without.
+
+**Only the top twelve per language survive the scan**, and what is dropped goes
+into the confidence divisor rather than being discarded — the same bargain the
+swipe path's pruning makes, and with the same guarantee that the effect is to
+sound less certain rather than more.
+
+**What it cost besides the work.** D41 wanted the German `i` in the strip beside
+the `I` it corrects to, so that a keyboard choosing between two real words shows
+its working. One-letter completion takes that slot: `ich`, `in` and `ist` are
+each some hundreds of times likelier than a standalone German `i`, and the
+ranking is right. Rejecting the capital is now backspace (D14) rather than a
+tap. A real loss, recorded rather than papered over.
+
+**Corrections are still untouched.** Ranking the strip and deciding to replace a
+word read different numbers, and every measurement in D43 and D45 was of the
+second; a test asserts the correction and its confidence are identical with and
+without context. Rescoring corrections in context stays the open item D46 left.
+
+### D48 — Re-casing a word you have already finished
+
+D24 put the re-case cycle on a swipe up from shift, acting on the word the
+cursor is in. Which is the wrong moment: **a forgotten capital is something you
+notice once the word is out**, not while it is still under the thumb. And for a
+swiped word it was not merely the wrong moment but the only one — a swipe
+commits the space along with the word (D39), so by the time the stroke ends
+there is no word in progress left to act on. The gesture simply did nothing.
+
+So when there is no word in progress, the swipe reaches back over whatever
+finished the last one. The tail is put back verbatim, which is the whole trick:
+`hallo. ` becomes `Hallo. `, the cursor does not move, and swiping again cycles
+on to `HALLO. ` because the text is read afresh each time rather than
+remembered.
+
+**Punctuation counts as finishing a word**, not just a space, so the case D6's
+double-space full stop creates is reachable. **A newline does not**: the word
+above is out of sight of the cursor, and a gesture that silently edits a line
+you are not looking at is not one anybody asked for.
+
+**The field is asked** rather than the keyboard's own memory consulted, because
+what sits behind a finished word is frequently text this keyboard never typed
+(D23). One round trip, on a deliberate gesture — which is the trade D21 declines
+only for per-keystroke work. If the read comes back full and the word runs to
+the start of it, the gesture declines: a word may have more of itself out of
+sight, and re-casing half of one is worse than doing nothing.
+
+Swiping is no longer the preferred way to type here — tapping with the
+context-ranked strip (D47) overtook it — but this is the fix that would have
+been needed either way, since the space bar finishes a word exactly as a stroke
+does.
+
 ---
 
 ## Architecture
@@ -2255,8 +2715,14 @@ scorer's belief; it does not drive anything.
    trustworthy, and the one most likely to be underestimated.
 5. **TouchModel** — probabilistic hit testing, one-thumb drift compensation
    (D15). Measurable against step 2 on typo rate.
-6. **The multilingual model** (D10/D12) — source or train, quantise, integrate
-   behind the scorer interface, measure latency on the actual Fairphone.
+6. **Prediction** (D10/D12/D46), in two stages, because the second needs the
+   first to be measurable against:
+   1. **The bigram store** — settle the corpus licence, build it beside the
+      wordlists, interpolate it with the unigram weight, fill the strip between
+      words. This is the baseline the model must beat.
+   2. **The multilingual model** — train on the mixed corpus with switch
+      augmentation, quantise, integrate behind the same interface, measure
+      latency on the actual Fairphone and quality against 6a.
 7. **Calibration and threshold tuning** (D3) — the point at which auto-replace
    is allowed to turn on at all.
 
@@ -2283,6 +2749,13 @@ not be started before editor I/O is solid.
   is where keyboards actually break. Budget accordingly.
 - **No suitable small DE+EN model exists off the shelf**, making step 6 a
   training project rather than an integration one. Mitigated by the D12 hedge.
+- **Step 6b ships weights trained on text nobody granted a licence for**, which
+  is a different and less settled position than the counts everything up to 6a
+  rests on (D46). The mitigation is the split itself: 6a is the bet this project
+  has already made and can defend, 6b is a new one, and the roadmap is arranged
+  so that stopping between them costs nothing already built. If the answer turns
+  out to be no, the fallback is a smaller model on Google Books Ngrams and
+  Tatoeba — worse register, real grant.
 - **Latency on real hardware.** A model that is fine on a laptop may not hold a
   per-keystroke budget on a Fairphone. Measure early, on the device, not in an
   emulator.

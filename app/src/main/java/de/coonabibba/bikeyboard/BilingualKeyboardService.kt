@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -17,6 +18,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import java.io.File
+import java.io.FileInputStream
+import java.io.IOException
+import java.nio.channels.FileChannel
 import java.util.concurrent.Executors
 
 /**
@@ -237,7 +241,16 @@ class BilingualKeyboardService : InputMethodService() {
         // position zero means there is nothing in front of it to be wrong
         // about; -1, which is what the field reports when it does not know
         // where the cursor is, is not that.
-        word.reset(known = info.initialSelStart == 0)
+        // A cursor at zero means the field is empty in front of it, which is
+        // both "we can account for what is there" and "this is the start of a
+        // sentence" — so the strip can predict an opening word before a key has
+        // been pressed (D46). Anywhere else, there is text this keyboard did
+        // not type and no context worth guessing at.
+        val atStart = info.initialSelStart == 0
+        word.reset(
+            known = atStart,
+            preceding = if (atStart) Preceding.SentenceStart else Preceding.Unknown,
+        )
         spaceGesture.otherInput()
         pendingUndo = null
         reverted = null
@@ -830,7 +843,13 @@ class BilingualKeyboardService : InputMethodService() {
         if (!word.known) recoverWordAtCursor()
 
         val current = word.full
-        if (current.isEmpty()) return
+        // Past the end of the word is where a forgotten capital is usually
+        // noticed, and since a swipe commits the space with the word it is the
+        // only moment a swiped word can be re-cased at all (D48).
+        if (current.isEmpty()) {
+            cycleFinishedWord(ic)
+            return
+        }
         val recased = TextCase.cycle(current)
         if (recased == current) return
 
@@ -849,6 +868,53 @@ class BilingualKeyboardService : InputMethodService() {
         // Nothing about this arrived from a key, so the trail no longer
         // describes the text in front of it (D19).
         clearTrail()
+        spaceGesture.otherInput()
+        refreshSuggestions()
+    }
+
+    /**
+     * The same gesture, for a word the cursor has already left (D48).
+     *
+     * Reaches back over whatever finished the word — a space, a full stop, both
+     * — re-cases the word behind it and puts the tail back untouched, so
+     * `hallo. ` becomes `Hallo. ` and the cursor does not move. Repeating the
+     * gesture cycles on, because the text is read afresh each time rather than
+     * remembered.
+     *
+     * The field is asked rather than the keyboard's own memory consulted, for
+     * the reason D23 gives: what is behind a finished word is text this
+     * keyboard may never have typed. One round trip, on a deliberate gesture,
+     * which is the trade D21 refuses only for per-keystroke work.
+     */
+    private fun cycleFinishedWord(ic: InputConnection) {
+        val before = ic.getTextBeforeCursor(WORD_LOOKBEHIND, 0) ?: return
+        val finished = TextEdits.finishedWordBefore(before) ?: return
+        // A word butting against the start of a full read may have more of
+        // itself out of sight, and re-casing half a word is worse than doing
+        // nothing.
+        if (finished.start == 0 && before.length >= WORD_LOOKBEHIND) return
+
+        val recased = TextCase.cycle(finished.word)
+        if (recased == finished.word) return
+
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(finished.span, 0)
+        ic.commitText(recased + finished.tail, 1)
+        ic.endBatchEdit()
+
+        if (expectedCursor >= 0) expectedCursor += recased.length - finished.word.length
+        // Nothing about this arrived from a key (D19).
+        clearTrail()
+        // The word in progress is still empty — only what precedes it changed,
+        // and the strip is predicting from that (D46).
+        word.reset(
+            known = true,
+            preceding = if (finished.tail.any { it in TextEdits.SENTENCE_MARKS }) {
+                Preceding.SentenceStart
+            } else {
+                Preceding.Word(recased)
+            },
+        )
         spaceGesture.otherInput()
         refreshSuggestions()
     }
@@ -990,7 +1056,10 @@ class BilingualKeyboardService : InputMethodService() {
         }
         pendingUndo = null
         reverted = correction.original
-        word.reset(known = true)
+        // The space came back with the word, so the cursor is at a boundary and
+        // what precedes it is the spelling the typist meant all along — not the
+        // one the keyboard had just put there (D46).
+        word.reset(known = true, preceding = Preceding.Word(correction.original))
         clearTrail()
         spaceGesture.otherInput()
         refreshSuggestions()
@@ -1150,12 +1219,15 @@ class BilingualKeyboardService : InputMethodService() {
         // dictionaries are loaded here rather than in onStartInput.
         diskThread.execute {
             personalStore.load()
+            val german = Wordlists.load(assets::open, Wordlists.GERMAN, Language.GERMAN)
+            val english = Wordlists.load(assets::open, Wordlists.ENGLISH, Language.ENGLISH)
             val source = DictionarySuggestions(
-                lexicons = listOf(
-                    Wordlists.load(assets::open, Wordlists.GERMAN, Language.GERMAN),
-                    Wordlists.load(assets::open, Wordlists.ENGLISH, Language.ENGLISH),
-                ),
+                lexicons = listOf(german, english),
                 personal = personalStore,
+                bigrams = mapOf(
+                    Language.GERMAN to mapBigrams(BigramStore.GERMAN, german.size),
+                    Language.ENGLISH to mapBigrams(BigramStore.ENGLISH, english.size),
+                ),
             )
             suggestionSource = source
             mainHandler.post {
@@ -1163,6 +1235,36 @@ class BilingualKeyboardService : InputMethodService() {
                 refreshSuggestions()
             }
         }
+    }
+
+    /**
+     * Maps a bigram store straight out of the APK (D46).
+     *
+     * **Mapped, not read.** The two stores are eighteen megabytes against the
+     * wordlists' one, and an input method holding that on the heap is one the
+     * system kills mid-sentence. Mapping costs no allocation and no parse; the
+     * pages arrive as they are touched, and the ones for words nobody types
+     * never arrive at all.
+     *
+     * This is why `build.gradle.kts` keeps `.bigrams` uncompressed in the APK:
+     * `openFd` throws for a compressed asset, which is the loud failure worth
+     * having. Any failure at all leaves the strip as it was yesterday rather
+     * than taking the keyboard down — prediction is the one feature here that
+     * is pure gain, so it must also be pure to lose.
+     */
+    private fun mapBigrams(path: String, words: Int): BigramStore = try {
+        assets.openFd(path).use { descriptor ->
+            FileInputStream(descriptor.fileDescriptor).use { stream ->
+                stream.channel.map(
+                    FileChannel.MapMode.READ_ONLY,
+                    descriptor.startOffset,
+                    descriptor.length,
+                ).let { BigramStore.read(it, words) }
+            }
+        }
+    } catch (error: IOException) {
+        Log.w(TAG, "no bigram store at $path; predictions are off", error)
+        BigramStore.NONE
     }
 
     override fun onDestroy() {
@@ -1189,7 +1291,7 @@ class BilingualKeyboardService : InputMethodService() {
         // to know what else this word could be, and asking separately was two
         // scans per keystroke and two chances to disagree.
         val query = if (suggestionsAllowed && word.known) {
-            source.candidatesFor(word.full, word.fullTouches)
+            source.candidatesFor(word.full, word.fullTouches, word.preceding)
         } else {
             Candidates.NONE
         }
@@ -1224,7 +1326,15 @@ class BilingualKeyboardService : InputMethodService() {
             return
         }
 
-        val candidates = StripEntry.mark(query.suggestions, pendingCorrection)
+        // Between words there is no prefix to complete, so the strip asks the
+        // other question instead: not what else this word could be, but what
+        // word comes next (D9, D46). This is the slot that has been empty since
+        // the strip was built — after every space, and at every sentence start.
+        val shown = query.suggestions.ifEmpty {
+            if (word.full.isEmpty()) source.predict(word.preceding) else emptyList()
+        }
+
+        val candidates = StripEntry.mark(shown, pendingCorrection)
         val offer = addWordOffer(source, candidates)
 
         // The add-word offer keeps the rightmost slot to itself, in the same
@@ -1318,7 +1428,11 @@ class BilingualKeyboardService : InputMethodService() {
         // A word that arrived from the strip was not typed on the keys, so
         // there is nothing for the trail to colour (D19).
         clearTrail()
-        word.reset(known = true)
+        // A spaced pick finishes the word without any separator passing through
+        // [WordInProgress.insert], so the context has to be handed over here or
+        // the next prediction would still be working from the word before this
+        // one (D46).
+        word.reset(known = true, preceding = if (spaced) Preceding.Word(text) else word.preceding)
         // Joined on, the word is still in progress: what comes next is more of
         // it, and the strip should be completing `Haus` + `tür` as one.
         if (!spaced) word.insert(text)
@@ -1365,6 +1479,8 @@ class BilingualKeyboardService : InputMethodService() {
     }
 
     private companion object {
+        const val TAG = "BiKeyboard"
+
         /**
          * Deeper than the five steps the trail actually colours, so that
          * backspacing past the visible gradient keeps revealing older presses

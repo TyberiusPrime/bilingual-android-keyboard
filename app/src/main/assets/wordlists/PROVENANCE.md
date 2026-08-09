@@ -16,6 +16,7 @@ byte-identical output.
 | English vocabulary and casing | [SCOWL](http://wordlist.aspell.net/), via Debian `wamerican` | `2020.12.07-4` | SCOWL licence (permissive, BSD-style) |
 | Word frequencies, both languages | [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords), `content/2018/{de,en}/{de,en}_50k.txt` | 2018 lists, from OpenSubtitles 2018 | CC BY-SA 4.0 (content); MIT (the generator code, not used here) |
 | English apostrophe-suffix frequencies | the same, `content/2018/en/en_full.txt` | 2018 list, from OpenSubtitles 2018 | CC BY-SA 4.0 |
+| Bigram counts, both languages | [OPUS OpenSubtitles](https://opus.nlpl.eu/), `v2018/mono/{de,en}.txt.gz` | v2018 | **No licence granted** — see below |
 
 ## Licence compatibility
 
@@ -28,6 +29,71 @@ This project is GPLv3 (D13), and every source can be distributed under it:
   declared [one-way compatible with GPLv3](https://creativecommons.org/compatiblelicenses/).
   One-way means the combined artefact travels as GPLv3 and cannot be taken back
   to CC BY-SA. Attribution is given here and in each file's header.
+
+  **That licence covers hermitdave's compilation, not the subtitles it counts,
+  and this entry used to read as though it covered both.** OpenSubtitles text
+  arrives through [OPUS](https://opus.nlpl.eu/) under no licence at all — OPUS
+  states that it does not own the text and only offers what it believes it is
+  free to redistribute, with a take-down policy and a request for attribution.
+  There is therefore no chain of grants running from the subtitles to this file,
+  and there never was one to inherit.
+
+  What makes shipping these counts defensible is a different argument, and a
+  sounder one: **a frequency table is facts about a text rather than its
+  expression**, and nothing here allows any part of the corpus to be
+  reconstructed. This is the same footing on which Google publishes Books Ngrams
+  from in-copyright books and HathiTrust publishes Extracted Features. Recorded
+  plainly because D13 exists so that this is settled at the time an artefact is
+  added rather than reconstructed later — and reconstructing it later is exactly
+  what happened here.
+
+  Two obligations follow from the OPUS terms and are met: a link to
+  [opensubtitles.org](http://www.opensubtitles.org/), and the citation asked for
+  — P. Lison and J. Tiedemann, *OpenSubtitles2016: Extracting Large Parallel
+  Corpora from Movie and TV Subtitles*, LREC 2016.
+
+- **The bigram stores** (`de.bigrams`, `en.bigrams`) are counted directly from
+  that corpus by [`scripts/build-bigrams.py`](../../../../../scripts/build-bigrams.py)
+  and stand on exactly the argument above: they are facts about the text, not
+  the text. The corpus is streamed and never redistributed; what ships is how
+  often one word follows another.
+
+  Three properties keep that true, and they are constraints rather than tuning
+  knobs — D46 spells out why:
+
+  - **The vocabulary is closed.** Only words already in `de.txt` and `en.txt`
+    are counted, so no name, address, handle or rare word from the corpus can
+    enter through this door.
+  - **Nothing rare survives.** Pairs seen fewer than the recorded threshold
+    times are dropped, so no phrasing that occurred once anywhere is
+    recoverable. The threshold is in the file header and in the table below.
+  - **No span longer than two.** Order beyond the adjacent pair is discarded,
+    so no three-word sequence from any subtitle exists in the output.
+
+  A store is only valid against the wordlist it was counted from — its keys are
+  line indices into that file — so the header carries the wordlist's entry count
+  and SHA-256, and `BigramAssetTest` checks both.
+
+  What was counted, and what shipped:
+
+  | | German | English |
+  |---|---|---|
+  | Corpus lines | 41,612,280 | 441,450,449 |
+  | Corpus tokens | 225,239,281 | 2,465,092,570 |
+  | In-vocabulary pairs | 189,717,283 | 2,231,802,122 |
+  | Distinct pairs seen | 7,007,298 | 17,294,874 |
+  | Threshold shipped | 5 | 20 |
+  | Entries shipped | 1,600,269 | 2,919,120 |
+  | Pair mass retained | 95.4% | 97.1% |
+  | Size | 6.5MB | 11.8MB |
+
+  **The thresholds differ on purpose.** The floor is absolute — a phrasing said
+  fewer than a handful of times anywhere must not survive, and that does not
+  scale with corpus size. Above the floor it is a size-against-coverage knob,
+  and English has eleven times German's tokens, so the same number is eleven
+  times weaker there. At 5 and 20 the two land within two points of each other
+  on retained mass, which no single number achieves, and the pair costs less
+  than English alone would at the German setting.
 
 Every generated file repeats its own sources in a comment header, so a copy
 that gets separated from this directory still carries its provenance.

@@ -84,6 +84,14 @@ android {
         }
     }
 
+    androidResources {
+        // The bigram stores are memory-mapped straight out of the APK (D46),
+        // and a compressed asset cannot be — `AssetManager.openFd` throws for
+        // one. Storing them flat costs a few megabytes of download and saves
+        // eighteen of heap in a process the system is quick to kill.
+        noCompress += "bigrams"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

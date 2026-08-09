@@ -41,3 +41,11 @@ google-services.json
 # Python bytecode from scripts/
 __pycache__/
 *.pyc
+
+# Nix build symlinks, and direnv's cache of the dev shell
+result
+result-*
+.direnv/
+
+# Where the nix apps drop the named APK, as CI does
+artifacts/

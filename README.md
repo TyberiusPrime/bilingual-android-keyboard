@@ -68,6 +68,26 @@ via `local.properties` (`sdk.dir=/path/to/android-sdk`) or `ANDROID_HOME`.
 
 The APK lands in `app/build/outputs/apk/debug/`.
 
+### With Nix
+
+`flake.nix` pins what the workflows pin — temurin JDK 17, an Android SDK with
+platform 35 and build-tools 35, and the Gradle the wrapper names — so there is
+nothing to install and nothing to point at:
+
+```sh
+nix run .#ci                # tests, lint, assembleDebug: the Android workflow
+nix run .#test              # or one step at a time
+nix run .#lint
+nix run .#release -- 0.2.0  # the release workflow's build, signed and verified
+nix develop                 # the same toolchain, with ./gradlew in your hands
+```
+
+`nix run .#ci` copies the APK to `artifacts/` under the same name CI gives it,
+so the install instructions above work unchanged on a locally built one. The
+release app derives its `versionCode` from the version the same way the
+workflow does, and signs with the committed debug key unless the four
+`RELEASE_*` variables are set — again as the workflow does.
+
 ## Licence
 
 GPLv3. Relicensed from MIT early in the project (decision D13) so that

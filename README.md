@@ -1,17 +1,71 @@
 # bilingual-android-keyboard
 
-An Android keyboard that is aware of two languages at once, instead of making
-you switch between them.
+A very personal Android keyboard that is aware of two languages (English and
+German) at once, instead of making you switch between them.
 
-**Status: it types, it suggests, and it corrects.** German and English wordlists
-are queried together on every keystroke, so a suggestion from either language
-can win a slot mid-sentence without anything switching. On space, a word is
-replaced outright when the keyboard is sure — and it is only sure when *where
-your thumb landed* says the letters were a slip rather than a decision. Backspace
-puts it back. The design is being worked out in
-[`docs/design.md`](docs/design.md).
+**Status: it types, it swipes, it suggests, and it corrects.** - It is my daily driver.
+
+Notes: Space may correct your input, shown by animation and optional vibration.
+
+Tap space twice for a full stop.
+
+The plus key allows quick insertion of learned words. Press long to learn the last word.
+Move the cursor by dragging from space. 
+
+Tap-and-a-half on h allows line wise scrolling.
+
+Holding a suggested word enters it without space! No more trouble with Haustür, Haustier...
+
+Swipe left on backspace to delete a word.
+
+Swipe up on shift to toggle casing of last word (tristate, lower, Upper, UPPER).
+
+'vs' at the end of a word leads to "'s" suggestion.
+
+# Warning
+
+This is very much vibe coded house plant software.
+I have no intention on getting this into any app store or the like.
+Audit and build at your own risk.
+
+
+# What this fixes for me
+
+- constant language annoyance (especially since the umlauts & letters change when
+switching german & english on most android keyboards I could find).
+- umlauts replacing 'popup'-numbers when switching to german
+- accidentally pressing '.' when trying to enter a space. That happen to me all the damn time
+- uncertain what was typed because the letters fade immediately. This keyboard has a gradient
+over the last few letters!. Can be manually enabled in password fields
+- suggestions in url fields (firefox, that's also a search bar so stop turning off autocomplete!...)
+- emails and other 'long inputs'. I have multiple, complicated addresses, and I don't enjoy
+keyboards that half complete them, but then leave off the top level domain or such. Just
+let me teach you the right ones, mkay?
+- possessions ('s), a 'treat this completion as the stem' function (no space, so 
+you can enter plural/case ending yourself).
+- haptics only on correction
+- correction only when it's very certain about the intented word.
+- layer key always in the same place (unlike some other keyboards I tried).
+- cursor movement trigger by distance, not time, so swiping on space feels good!
+
+# Cool stuff
+
+- sub-letter Position aware correction 
+- no automatic learning
+- see your swipe! See your last few registered key presses!
+- timings adjustable to your liking.
+- purple in suggention bar means: 'space will correct to this'.
+
 
 ## What is here
+
+The design decisions [`docs/design.md`](docs/design.md).
+
+It's a bit of a big vibed mess though. That's claude for you.
+
+But hey, I got this thing together with only a single crashing
+version.
+
 
 | Path | |
 |---|---|
@@ -33,22 +87,8 @@ puts it back. The design is being worked out in
 ## Getting a build onto the phone
 
 Every pull request builds a debug APK and posts a download link as a PR
-comment. GitHub serves it as a zip; unzip and:
+comment. Side load it however your os requires.
 
-```sh
-scripts/install.sh bilingual-keyboard-<sha>.apk
-```
-
-No uninstall step. Two things used to make one necessary, and both are handled:
-
-- **Signature mismatch.** AGP generates a debug keystore per machine, so every
-  CI runner signed with a different key and Android refused the update.
-  `app/debug.keystore` is committed and shared by every build instead. It signs
-  debug builds only and is not a trust anchor — releases must never use it.
-- **The system keeps running the old keyboard.** Replacing the package kills
-  the process, but `InputMethodManagerService` does not reliably rebind to the
-  new service, so the update looks like it did nothing. The script re-selects
-  the input method to force the rebind.
 
 The debug build uses a `.debug` application ID suffix, so it coexists with a
 locally built copy.
@@ -70,7 +110,6 @@ The APK lands in `app/build/outputs/apk/debug/`.
 
 ## Licence
 
-GPLv3. Relicensed from MIT early in the project (decision D13) so that
-AOSP-lineage keyboard source and GPL wordlists — the good German ones in
-particular — are usable. Dictionary and model files carry their own provenance
-and licence notes.
+GPLv3, so that AOSP-lineage keyboard source and GPL wordlists — the good German
+ones in particular — are usable. Dictionary and model files carry their [own
+provenance and licence notes](app/src/main/assets/wordlists/PROVENANCE.md).

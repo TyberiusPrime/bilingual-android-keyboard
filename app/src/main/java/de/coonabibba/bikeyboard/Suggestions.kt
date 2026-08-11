@@ -233,8 +233,21 @@ enum class PickStyle {
  */
 sealed interface StripEntry {
 
-    /** What the strip draws. */
-    val label: String
+    /**
+     * The word itself — the part of the label that may be cut short when the
+     * slot is too narrow for it, and the part that is cut from the *front*
+     * (D50).
+     */
+    val body: String
+
+    /**
+     * What goes in front of [body] and is never elided, because it says what
+     * kind of entry this is rather than what the entry contains.
+     */
+    val marker: String get() = ""
+
+    /** What the strip draws, when it all fits. */
+    val label: String get() = marker + body
 
     /**
      * A candidate. Tapping it replaces the word in progress.
@@ -245,7 +258,7 @@ sealed interface StripEntry {
      * comparing a separate number against a separate threshold (D33).
      */
     data class Word(val suggestion: Suggestion, val replaces: Boolean = false) : StripEntry {
-        override val label: String get() = suggestion.text
+        override val body: String get() = suggestion.text
     }
 
     /**
@@ -254,7 +267,10 @@ sealed interface StripEntry {
      * already typed; what is missing is the keyboard knowing it.
      */
     data class AddWord(val word: String) : StripEntry {
-        override val label: String get() = "+ $word"
+        // The plus is the whole point of the slot, so it survives an elision
+        // that eats the address behind it (D50).
+        override val marker: String get() = "+ "
+        override val body: String get() = word
     }
 
     companion object {

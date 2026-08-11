@@ -181,12 +181,17 @@ class SuggestionStripView @JvmOverloads constructor(
             }
 
             val room = right - left - 2f * SLOT_PADDING_DP * density
-            val label = TextUtils.ellipsize(
-                entry.label,
+            // From the front, not the end (D50). The head of a long candidate
+            // is what you have already typed, so it is the half you can supply
+            // yourself; the tail is the part the keyboard is telling you about.
+            val marker = entry.marker
+            val body = TextUtils.ellipsize(
+                entry.body,
                 textPaint,
-                room,
-                TextUtils.TruncateAt.END,
+                room - textPaint.measureText(marker),
+                TextUtils.TruncateAt.START,
             )
+            val label = if (marker.isEmpty()) body else TextUtils.concat(marker, body)
             canvas.drawText(label, 0, label.length, (left + right) / 2f, baseline, textPaint)
         }
     }

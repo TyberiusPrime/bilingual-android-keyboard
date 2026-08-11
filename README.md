@@ -88,6 +88,30 @@ release app derives its `versionCode` from the version the same way the
 workflow does, and signs with the committed debug key unless the four
 `RELEASE_*` variables are set — again as the workflow does.
 
+## Changelog
+
+Newest first. Nothing is tagged yet, so everything is unreleased; the reasoning
+behind each entry is in [`docs/design.md`](docs/design.md) under the decision it
+names.
+
+### Unreleased
+
+- **The enter key does what the field actually asked for, and says so** (D49).
+  In a chat box — Telegram, and anything else built on a multi-line `EditText`
+  — pressing it submitted the field and hid the keyboard instead of starting a
+  new line, because the field's `IME_ACTION_DONE` was read and its
+  `IME_FLAG_NO_ENTER_ACTION` was not. The flag wins now. Where the key really
+  does perform an action it wears that action's glyph (`→`, `✓`, `⇥`, `⇤`)
+  rather than a `↵` it is not going to honour, and where a field will neither
+  take a newline nor perform an action the key is left off and the space bar
+  takes its width. It stays on ordinary single-line fields: there it is the
+  only way to submit a search, a login or a web form.
+- **A suggestion too long for its slot loses its front, not its end** (D50).
+  `…digkeitsbegrenzung` rather than `Geschwindigkeitsbe…`: the front is what
+  you already typed and can see, the tail is what the keyboard is telling you.
+  The `+` on the add-word offer is exempt — it says what the slot does, so it
+  cannot be the thing that gets cut.
+
 ## Licence
 
 GPLv3. Relicensed from MIT early in the project (decision D13) so that

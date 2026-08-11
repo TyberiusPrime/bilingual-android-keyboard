@@ -92,6 +92,13 @@ class BilingualKeyboardService : InputMethodService() {
     /** Whether this field has lines to move between at all — see [moveCursorByLine]. */
     private var lineSteeringAllowed = false
 
+    /**
+     * What the enter key is in this field: a newline, one of the editor
+     * actions, or nothing at all (D49). Decided when focus arrives, because it
+     * changes both what the key does and whether it is drawn.
+     */
+    private var enterKey: EnterKey? = EnterKey.Newline
+
     private var autoCorrectEnabled = KeyboardPrefs.DEFAULT_AUTO_CORRECT
     private var autoCorrectConfidence = KeyboardPrefs.DEFAULT_AUTO_CORRECT_CONFIDENCE / 100f
 
@@ -107,7 +114,7 @@ class BilingualKeyboardService : InputMethodService() {
         shiftTaps = DoubleTap(KeyboardPrefs.timing(this, KeyboardPrefs.DOUBLE_TAP_MS))
 
         keyboardView = KeyboardView(this).apply {
-            layout = Layouts.forLayer(layer)
+            layout = Layouts.forLayer(layer, enter = enterKey)
             onKey = ::handleKey
             onAlternate = ::handleAlternate
             onRepeat = ::handleRepeat
@@ -211,7 +218,8 @@ class BilingualKeyboardService : InputMethodService() {
         shifted = autoCapitalise
         capsLock = false
         shiftTaps.reset()
-        keyboardView.layout = Layouts.forLayer(layer, inPassword = isPassword)
+        enterKey = FieldPolicy.enterKey(info.inputType, info.imeOptions)
+        keyboardView.layout = Layouts.forLayer(layer, inPassword = isPassword, enter = enterKey)
         // A menu left open across a change of field would be offering to type
         // somebody's address into whatever has the focus now.
         keyboardView.dismissQuickMenu()
@@ -299,15 +307,19 @@ class BilingualKeyboardService : InputMethodService() {
                 }
             }
 
+            // Whatever the field said it was when focus arrived (D49). The
+            // decision is not retaken here: the key is drawn from it, and a key
+            // that does one thing and says another is the bug this replaced.
             KeyAction.Enter -> {
-                val action1 = currentInputEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
-                if (action1 != null && action1 != EditorInfo.IME_ACTION_NONE &&
-                    action1 != EditorInfo.IME_ACTION_UNSPECIFIED
-                ) {
-                    ic.performEditorAction(action1)
-                } else {
-                    ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-                    ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                when (val enter = enterKey) {
+                    is EnterKey.Action -> ic.performEditorAction(enter.id)
+                    // A key event rather than a committed "\n": a multi-line
+                    // field takes either, and a field listening for the key
+                    // press — a web form, a custom editor — hears only this.
+                    else -> {
+                        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+                        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                    }
                 }
                 spaceGesture.otherInput()
             }
@@ -333,7 +345,8 @@ class BilingualKeyboardService : InputMethodService() {
 
             KeyAction.ToggleLayer -> {
                 layer = Layouts.other(layer)
-                keyboardView.layout = Layouts.forLayer(layer, inPassword = passwordField)
+                keyboardView.layout =
+                    Layouts.forLayer(layer, inPassword = passwordField, enter = enterKey)
             }
 
             KeyAction.ToggleTrail -> {

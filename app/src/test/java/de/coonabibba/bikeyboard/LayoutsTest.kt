@@ -341,6 +341,76 @@ class LayoutsTest {
         }
     }
 
+    // -- the enter key, which belongs to the field rather than to us (D49) ----
+
+    private fun enterKeyOf(layout: KeyboardLayout): Key? =
+        layout.rows.flatten().singleOrNull { it.action == KeyAction.Enter }
+
+    /**
+     * The key says what it is about to do, because on a single-line field it is
+     * not going to add a line and a newline glyph there is a lie.
+     */
+    @Test
+    fun `the enter key wears the label the field gave it`() {
+        Layer.entries.forEach { layer ->
+            assertEquals(
+                "layer $layer",
+                EnterKey.Newline.label,
+                enterKeyOf(Layouts.forLayer(layer, enter = EnterKey.Newline))?.label,
+            )
+            val send = EnterKey.Action(id = 4, label = "→")
+            assertEquals(
+                "layer $layer",
+                "→",
+                enterKeyOf(Layouts.forLayer(layer, enter = send))?.label,
+            )
+        }
+    }
+
+    /**
+     * A field that will neither take a newline nor perform an action leaves the
+     * key with nothing to do, and a key that does nothing is worse than a gap.
+     * The width goes to the space bar rather than to a hole in the row.
+     */
+    @Test
+    fun `a field with no use for the enter key gets none, and the space bar takes the room`() {
+        Layer.entries.forEach { layer ->
+            val withKey = Layouts.forLayer(layer, enter = EnterKey.Newline)
+            val without = Layouts.forLayer(layer, enter = null)
+            assertEquals("layer $layer", null, enterKeyOf(without))
+
+            val before = rowContainingSpace(withKey)
+            val after = rowContainingSpace(without)
+            assertEquals("layer $layer lost a key other than enter", before.size - 1, after.size)
+            assertEquals(
+                "layer $layer changed width",
+                before.sumOf { it.widthWeight.toDouble() },
+                after.sumOf { it.widthWeight.toDouble() },
+                1e-6,
+            )
+            // D6 still holds: what the space bar now borders is the row's edge.
+            val spaceIndex = after.indexOfFirst { it.action == KeyAction.Space }
+            assertEquals("something followed the space bar", after.size - 1, spaceIndex)
+        }
+    }
+
+    /**
+     * Everything else about the board is the field's business no more than the
+     * enter key is ours: the rest of the row must not move when it changes.
+     */
+    @Test
+    fun `nothing but the enter key changes with the field`() {
+        Layer.entries.forEach { layer ->
+            val newline = Layouts.forLayer(layer, enter = EnterKey.Newline).rows.flatten()
+            val action = Layouts.forLayer(layer, enter = EnterKey.Action(id = 3, label = "→"))
+                .rows.flatten()
+            assertEquals("layer $layer has a different shape", newline.size, action.size)
+            val differences = newline.indices.filter { newline[it] != action[it] }
+            assertEquals("layer $layer differs in $differences", 1, differences.size)
+            assertEquals(KeyAction.Enter, newline[differences.single()].action)
+        }
+    }
+
     private companion object {
         const val MAX_ALTERNATES = 6
     }

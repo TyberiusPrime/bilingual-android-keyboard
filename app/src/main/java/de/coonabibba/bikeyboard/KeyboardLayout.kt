@@ -192,19 +192,28 @@ object Layouts {
      * argument for the personal key is about every other field: under D8 the
      * store is the only way this keyboard learns anything, and the strip could
      * only offer to add a word when it had a slot going spare.
+     *
+     * [enter] is what the field being typed into makes of the enter key (D49),
+     * and `null` is a field that makes nothing of it: the key is left off and
+     * its width goes to the space bar, since a key that does nothing is worse
+     * than a gap and much worse than more space bar.
      */
-    private fun bottomRow(toggleLabel: String, inPassword: Boolean): List<Key> = listOf(
+    private fun bottomRow(
+        toggleLabel: String,
+        inPassword: Boolean,
+        enter: EnterKey?,
+    ): List<Key> = listOfNotNull(
         Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f),
         if (inPassword) {
             Key(TRAIL_ON_LABEL, KeyAction.ToggleTrail, widthWeight = 1f)
         } else {
             Key(PERSONAL_LABEL, KeyAction.Personal, widthWeight = 1f)
         },
-        Key("", KeyAction.Space, widthWeight = 5f),
-        Key("↵", KeyAction.Enter, widthWeight = 1.5f),
+        Key("", KeyAction.Space, widthWeight = if (enter == null) 6.5f else 5f),
+        enter?.let { Key(it.label, KeyAction.Enter, widthWeight = 1.5f) },
     )
 
-    private fun buildLetters(inPassword: Boolean) = KeyboardLayout(
+    private fun buildLetters(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
         listOf(
             letterRow("qwertyuiop"),
             letterRow("asdfghjkl"),
@@ -213,7 +222,7 @@ object Layouts {
                 addAll(letterRow("zxcvbnm"))
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("?123", inPassword),
+            bottomRow("?123", inPassword, enter),
         ),
     )
 
@@ -222,7 +231,7 @@ object Layouts {
      * long-press here, which keeps the single-toggle-position rule (D16)
      * intact rather than adding a second toggle to reach them.
      */
-    private fun buildSymbols(inPassword: Boolean) = KeyboardLayout(
+    private fun buildSymbols(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
         listOf(
             symbolRow(
                 "1" to listOf("¹"), "2" to listOf("²"), "3" to listOf("³"),
@@ -258,24 +267,34 @@ object Layouts {
                 )
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("ABC", inPassword),
+            bottomRow("ABC", inPassword, enter),
         ),
     )
 
     /**
-     * The layouts, built once each. Four rather than two since D40, because a
-     * password field carries a different key next to the layer toggle — and a
-     * layout is a handful of immutable objects, so holding both beats
-     * rebuilding one every time focus moves.
+     * The layouts, built once each and kept.
+     *
+     * Two, then four with D40's password variant, and now one per distinct
+     * enter key on top of that (D49) — which is still a handful, since a field
+     * either takes a newline, performs one of five actions, or wants no such
+     * key at all. A layout is a few dozen immutable objects and focus moves
+     * far more often than a new combination turns up, so they are memoised
+     * rather than rebuilt.
      */
-    val letters = buildLetters(inPassword = false)
-    val symbols = buildSymbols(inPassword = false)
-    private val lettersInPassword = buildLetters(inPassword = true)
-    private val symbolsInPassword = buildSymbols(inPassword = true)
+    private val cache = HashMap<Triple<Layer, Boolean, EnterKey?>, KeyboardLayout>()
 
-    fun forLayer(layer: Layer, inPassword: Boolean = false): KeyboardLayout = when (layer) {
-        Layer.LETTERS -> if (inPassword) lettersInPassword else letters
-        Layer.SYMBOLS -> if (inPassword) symbolsInPassword else symbols
+    val letters = forLayer(Layer.LETTERS)
+    val symbols = forLayer(Layer.SYMBOLS)
+
+    fun forLayer(
+        layer: Layer,
+        inPassword: Boolean = false,
+        enter: EnterKey? = EnterKey.Newline,
+    ): KeyboardLayout = cache.getOrPut(Triple(layer, inPassword, enter)) {
+        when (layer) {
+            Layer.LETTERS -> buildLetters(inPassword, enter)
+            Layer.SYMBOLS -> buildSymbols(inPassword, enter)
+        }
     }
 
     fun other(layer: Layer): Layer = when (layer) {

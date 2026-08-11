@@ -2,7 +2,9 @@ package de.coonabibba.bikeyboard
 
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -202,4 +204,108 @@ class FieldPolicyTest {
             ),
         )
     }
+
+    // -- what the enter key is in this field (D49) ----------------------------
+
+    private val multiLine = text(InputType.TYPE_TEXT_FLAG_MULTI_LINE)
+
+    /**
+     * The bug this was written for. A multi-line `EditText` — every chat box
+     * there is, Telegram's included — is handed to the IME as
+     * `IME_ACTION_DONE` *plus* `IME_FLAG_NO_ENTER_ACTION`, because the action
+     * belongs to the action button and the enter key belongs to the text.
+     * Reading the action and ignoring the flag submitted the field and took the
+     * keyboard away instead of starting a new line.
+     */
+    @Test
+    fun `a multi-line field that forbids the action gets a newline`() {
+        assertEquals(
+            EnterKey.Newline,
+            FieldPolicy.enterKey(
+                multiLine,
+                EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_ENTER_ACTION,
+            ),
+        )
+    }
+
+    @Test
+    fun `a multi-line field with no action of its own gets a newline`() {
+        assertEquals(EnterKey.Newline, FieldPolicy.enterKey(multiLine, 0))
+        assertEquals(
+            EnterKey.Newline,
+            FieldPolicy.enterKey(multiLine, EditorInfo.IME_ACTION_NONE),
+        )
+    }
+
+    /**
+     * The single-line case the enter key still exists for: it is the only way
+     * to submit a search, a login or a web form from this keyboard.
+     */
+    @Test
+    fun `a field with an action performs it`() {
+        val search = FieldPolicy.enterKey(text(), EditorInfo.IME_ACTION_SEARCH)
+        assertEquals(EnterKey.Action(EditorInfo.IME_ACTION_SEARCH, "→"), search)
+        // Multi-line and *not* refusing the action — an email subject, a long
+        // message — means the action really was meant for the enter key.
+        assertEquals(
+            EnterKey.Action(EditorInfo.IME_ACTION_SEND, "→"),
+            FieldPolicy.enterKey(multiLine, EditorInfo.IME_ACTION_SEND),
+        )
+        // Not a text field, but still something to submit.
+        assertEquals(
+            EnterKey.Action(EditorInfo.IME_ACTION_DONE, "✓"),
+            FieldPolicy.enterKey(InputType.TYPE_CLASS_PHONE, EditorInfo.IME_ACTION_DONE),
+        )
+    }
+
+    /** The key says what it will do, so the glyphs have to differ where the acts do. */
+    @Test
+    fun `leaving, finishing and moving on look different`() {
+        fun label(action: Int) = (FieldPolicy.enterKey(text(), action) as EnterKey.Action).label
+        assertEquals("✓", label(EditorInfo.IME_ACTION_DONE))
+        assertEquals("⇥", label(EditorInfo.IME_ACTION_NEXT))
+        assertEquals("⇤", label(EditorInfo.IME_ACTION_PREVIOUS))
+        // Go, search and send are one act: hand the text over and expect the
+        // screen to change.
+        listOf(
+            EditorInfo.IME_ACTION_GO,
+            EditorInfo.IME_ACTION_SEARCH,
+            EditorInfo.IME_ACTION_SEND,
+        ).forEach { assertEquals("→", label(it)) }
+        assertTrue(EnterKey.Newline.label.isNotEmpty())
+    }
+
+    /**
+     * Nothing to insert and nothing to perform. A newline in a single-line
+     * field is not a newline — it is a DPAD event the field cannot consume,
+     * which is D38's trap and takes the keyboard with it.
+     */
+    @Test
+    fun `a single-line field with nothing for the key to do gets no key`() {
+        assertNull(FieldPolicy.enterKey(text(), 0))
+        assertNull(FieldPolicy.enterKey(text(), EditorInfo.IME_ACTION_NONE))
+        assertNull(
+            FieldPolicy.enterKey(
+                text(),
+                EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_ENTER_ACTION,
+            ),
+        )
+        assertNull(FieldPolicy.enterKey(InputType.TYPE_CLASS_NUMBER, 0))
+    }
+
+    /**
+     * A password field is single-line and carries an action, so it keeps its
+     * key — being unable to submit a login is not an improvement.
+     */
+    @Test
+    fun `a password field can still be submitted`() {
+        assertEquals(
+            EnterKey.Action(EditorInfo.IME_ACTION_GO, "→"),
+            FieldPolicy.enterKey(
+                text(InputType.TYPE_TEXT_VARIATION_PASSWORD),
+                EditorInfo.IME_ACTION_GO,
+            ),
+        )
+    }
+
 }

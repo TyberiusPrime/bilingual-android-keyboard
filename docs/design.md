@@ -2601,6 +2601,87 @@ context-ranked strip (D47) overtook it — but this is the fix that would have
 been needed either way, since the space bar finishes a word exactly as a stroke
 does.
 
+### D49 — The enter key belongs to the field, and says what it will do
+
+**Enter in a chat box hid the keyboard instead of starting a new line.** In
+Telegram, and in every other app whose message box is an ordinary multi-line
+`EditText`. The key read `imeOptions & IME_MASK_ACTION`, found
+`IME_ACTION_DONE`, and performed it.
+
+The action was really there. What was also there, and was not read, is
+`IME_FLAG_NO_ENTER_ACTION` — which `TextView` sets on **every** multi-line
+field while still filling in `DONE` or `NEXT`, because the two are answers to
+different questions. The action is what the *action button* does. The flag is
+whether the *enter key* is allowed to do it. A multi-line field says: put an
+action on your button if you have one, and put a line break in my text when
+enter is pressed. Reading half of that pair is reading the field wrong, and it
+is a mistake with an unusually bad failure mode, because "submit" in a chat app
+means the half-finished message is sent.
+
+So the field is asked one question when focus arrives — what is the enter key
+here? — and it has three answers:
+
+- **`IME_FLAG_NO_ENTER_ACTION`, and lines to put a break in: a newline.** The
+  flag wins over any action the field also advertises. This is the chat box,
+  and it is the common case that was broken.
+- **A real action: perform it**, and *label the key with it*. `↵` on a search
+  box is a lie: nothing about that keystroke adds a line, and the picture of a
+  line being added is the only thing on the key. So the glyph becomes the act —
+  `→` to hand the text over, `✓` to finish, `⇥` and `⇤` to move between fields.
+  Words would say more and do not fit on a key this size, quite apart from D2
+  leaving no one language to write them in. Go, search and send share `→`
+  because they are one act: give it up and expect the screen to change.
+- **Neither: no key at all**, and its width goes to the space bar.
+
+**The third answer is deliberately narrow, and the instinct behind it was to go
+wider.** The tempting rule is "no enter key on single-line fields" — nothing
+there can hold a line break, and a key that inserts one is the D38 trap: an
+event the field cannot consume does not stop, it becomes focus navigation, the
+focus leaves, and the keyboard goes with it. That is very nearly the reported
+bug from the other end.
+
+It is still the wrong rule, because on a single-line field the enter key is not
+a newline key at all — it is the only way this keyboard can submit a search, a
+login or a web form. Two thirds of those do not even show up as an action:
+Chromium hands over `IME_ACTION_NONE` for a great many single-line inputs and
+the page listens for the key press itself, which is also why the newline branch
+sends `KEYCODE_ENTER` rather than committing a `"\n"` — a field with an editor
+action listener hears the first and not the second. Taking the key away there
+would trade a bug that sends a message early for one that cannot send anything
+at all.
+
+What is left for the third answer is the case with genuinely nothing in it: a
+single-line field that has set `NO_ENTER_ACTION`, forbidding the action, while
+having no line to break. Rare, and the only place where removing the key costs
+nothing.
+
+**The decision is taken once, when focus arrives, and the key is drawn from
+it** — rather than the label coming from one reading of the field and the
+behaviour from another. That is the shape of the original bug and it is now
+unrepresentable: `FieldPolicy.enterKey` returns the label and the action id
+together or returns nothing.
+
+### D50 — A long suggestion loses its front, not its end
+
+A candidate too wide for its slot was cut at the end: `Geschwindigkeitsbe…`.
+Which throws away the only part that is news. **The front of a suggestion is
+what you have already typed** — you are looking at it in the field above, you
+just pressed the keys — and the tail is the keyboard's entire contribution.
+Eliding the tail leaves three slots showing the same prefix back to you.
+
+So the ellipsis moves to the front: `…digkeitsbegrenzung`. Between two long
+candidates sharing a prefix, which is the case that produces long candidates in
+the first place, this is also the only version that tells them apart.
+
+**The plus on the add-word offer is not part of the word and does not go.**
+That slot (D40) says "remember this", and the entries it says it about are
+addresses and paths — the longest things the strip ever holds, so the elision
+lands there more than anywhere. A `…coonabibba.de` where a `+ …coonabibba.de`
+belongs reads as a candidate, and tapping a candidate replaces your text.
+`StripEntry` therefore splits into a marker that cannot be elided and a body
+that can, rather than the view being asked to know which entries begin with
+something special.
+
 ---
 
 ## Architecture

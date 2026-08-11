@@ -154,7 +154,7 @@ class FieldPolicyTest {
         )
     }
 
-    /** Numeric fields open on the symbol layer, so the check has to be exact. */
+    /** Numeric fields open on the number layer (D52), so the check has to be exact. */
     @Test
     fun `numeric fields are recognised and text fields are not`() {
         assertTrue(FieldPolicy.isNumeric(InputType.TYPE_CLASS_NUMBER))

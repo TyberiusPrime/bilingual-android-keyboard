@@ -217,11 +217,104 @@ class LayoutsTest {
         }
     }
 
+    // -- the three layers and the one key that steps through them (D16, D52) --
+
+    /**
+     * What the user asked for in as many words: `?123` once for the symbols,
+     * twice for the numbers, a third time back to where they started.
+     */
     @Test
-    fun `toggling twice returns to the starting layer`() {
+    fun `the layer key steps letters, symbols, numbers, letters`() {
+        assertEquals(Layer.SYMBOLS, Layouts.next(Layer.LETTERS))
+        assertEquals(Layer.NUMBERS, Layouts.next(Layouts.next(Layer.LETTERS)))
+        assertEquals(Layer.LETTERS, Layouts.next(Layouts.next(Layouts.next(Layer.LETTERS))))
+    }
+
+    /** From anywhere, not just from the letters: the ring has no dead end. */
+    @Test
+    fun `stepping through every layer comes back around`() {
         Layer.entries.forEach { layer ->
-            assertEquals(layer, Layouts.other(Layouts.other(layer)))
+            val walked = generateSequence(layer, Layouts::next).take(Layer.entries.size).toList()
+            assertEquals("$layer does not reach every layer", Layer.entries.size, walked.distinct().size)
+            assertEquals("$layer does not come home", layer, Layouts.next(walked.last()))
         }
+    }
+
+    /**
+     * The key names what the next press gives, so the three labels have to be
+     * three different things — a ring whose signposts repeat is a ring you get
+     * lost in.
+     */
+    @Test
+    fun `the layer key says something different on each layer`() {
+        val labels = Layer.entries.map { layer ->
+            Layouts.forLayer(layer).rows.flatten()
+                .first { it.action == KeyAction.ToggleLayer }.label
+        }
+        assertEquals(Layer.entries.size, labels.distinct().size)
+        assertTrue("a layer key with nothing on it", labels.none { it.isEmpty() })
+    }
+
+    // -- the number layer (D52) -----------------------------------------------
+
+    private val numbers = Layouts.forLayer(Layer.NUMBERS).rows.flatten()
+
+    @Test
+    fun `every digit is a key of its own on the number layer`() {
+        val typed = numbers.mapNotNull { (it.action as? KeyAction.Text)?.text }
+        ('0'..'9').forEach { digit ->
+            assertEquals("digit $digit", 1, typed.count { it == digit.toString() })
+        }
+    }
+
+    /** The arithmetic, which is the reason for the layer rather than a bonus. */
+    @Test
+    fun `the calculator symbols are all here`() {
+        val typed = numbers.mapNotNull { (it.action as? KeyAction.Text)?.text }.toSet()
+        listOf("+", "-", "×", "÷", "=", "%", "(", ")").forEach {
+            assertTrue("$it is not on the number layer", it in typed)
+        }
+        // D2: the two languages disagree about which of these splits a number,
+        // so neither can be the one behind a long-press.
+        assertTrue("no decimal point", "." in typed)
+        assertTrue("no decimal comma", "," in typed)
+    }
+
+    /** What a spreadsheet wants is one hold behind what arithmetic looks like. */
+    @Test
+    fun `the ASCII operators are a hold away`() {
+        val byLabel = numbers.associateBy { it.label }
+        assertEquals("*", byLabel.getValue("×").longPress.first())
+        assertEquals("/", byLabel.getValue("÷").longPress.first())
+        // And the minus is the other way round: the hyphen is what a date range
+        // and a phone number want, so it is the tap.
+        assertEquals("−", byLabel.getValue("-").longPress.first())
+    }
+
+    /**
+     * Three rows of seven, so the digits form a block instead of a staircase.
+     * A number layer whose columns do not line up is just the symbol layer with
+     * different characters on it.
+     */
+    @Test
+    fun `the number rows are one grid`() {
+        val rows = Layouts.forLayer(Layer.NUMBERS).rows.dropLast(1)
+        assertEquals(3, rows.size)
+        assertEquals(listOf(7, 7, 7), rows.map { it.size })
+        rows.forEach { row ->
+            row.forEach { assertEquals("${it.label} is not grid-width", 1f, it.widthWeight, 0f) }
+        }
+    }
+
+    @Test
+    fun `the number layer can delete, in the corner it always is`() {
+        val rows = Layouts.forLayer(Layer.NUMBERS).rows
+        // Last key of the last row above the space bar, as on the other two.
+        listOf(Layer.LETTERS, Layer.SYMBOLS, Layer.NUMBERS).forEach { layer ->
+            val above = Layouts.forLayer(layer).rows.dropLast(1).last()
+            assertEquals("$layer", KeyAction.Backspace, above.last().action)
+        }
+        assertTrue(rows.flatten().count { it.action == KeyAction.Backspace } == 1)
     }
 
     // -- the cursor-steering key and the trail toggle (D38) -------------------

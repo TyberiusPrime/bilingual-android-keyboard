@@ -2723,6 +2723,58 @@ space: corrections come from the lexicon scan alone (D28), and the personal
 store is only ever a source of candidates. And a swipe cannot produce one — the
 gesture decoder has no key for a space, so the stroke never matches.
 
+### D52 — A third layer, which is a calculator
+
+The digits were reachable two ways and neither was any good for typing an actual
+number. On the letter layer they are long-presses (D17), which is right for the
+stray `7` in a sentence and wrong for a phone number — ten holds. On the symbol
+layer they are a cramped top row above nine keys of punctuation, at letter
+width, with the arithmetic scattered through the two rows below: `+` next to
+`-`, `%` three keys away, `×` and `÷` only behind a hold on `+`.
+
+So there is a third layer, and it is a **calculator**:
+
+```
+1 2 3   +  -   (  )
+4 5 6   ×  ÷   %  =
+7 8 9   0  .   ,  ⌫
+```
+
+**Three rows of seven equal keys, so the columns line up.** That is the whole
+argument for a layer of its own rather than a rearranged symbol layer: a digit
+here is nearly half as wide again as one on the symbol row, and the ten of them
+form a block the thumb can find without looking.
+
+**Dialpad order, not calculator order.** `1 2 3` on top is what every phone
+shows and what dialling has taught the thumb; `7 8 9` on top belongs to a
+machine with a numeric keypad beside its keyboard, and this is not one. What the
+calculator lends is its *symbols* — the arithmetic gathered in one place — not
+its geometry.
+
+**Both decimal separators, side by side.** D2 has German and English live in the
+same paragraph and they do not agree on which of `.` and `,` splits a number.
+`12.50` and `12,50` are the same price, so neither can be the one behind a hold.
+
+**`×` and `÷` lead; `*` and `/` are one hold behind.** The glyphs are what
+arithmetic looks like written down and are what most things that parse a sum
+will take. The ASCII pair is what a spreadsheet or a shell wants, so it sits
+where every other alternate sits, drawn in the corner (D17). The minus key runs
+the other way — it types the plain hyphen, because a date range, a phone number
+and a hyphenated word all want that one, and the true `−` leads its alternates.
+
+**The layer key is a ring now: letters, symbols, numbers, letters.** Which costs
+one press — getting back to the letters from the symbols is two steps where it
+used to be one. Paid deliberately: the alternative is a second key for the third
+layer, and D16 exists precisely to stop the board growing a switch per
+destination. The label always names what the *next* press gives — `?123`, then
+`123`, then `ABC` — and the `?` falling away between the first two is the
+difference between them, punctuation with digits among it versus digits.
+
+**A numeric field opens here** rather than on the symbol layer, which is the
+same decision the field-policy check was already making, sent somewhere better.
+A PIN pad gets a PIN pad, and neither one has to show a field nine punctuation
+keys it will not accept.
+
 ---
 
 ## Architecture

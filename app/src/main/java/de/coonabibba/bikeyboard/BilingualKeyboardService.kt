@@ -213,7 +213,11 @@ class BilingualKeyboardService : InputMethodService() {
         // A password field must never reach prediction, logging or a learned
         // dictionary. Recorded here so later stages can honour it.
         val isPassword = FieldPolicy.isPassword(info.inputType)
-        layer = if (FieldPolicy.isNumeric(info.inputType)) Layer.SYMBOLS else Layer.LETTERS
+        // A field that takes nothing but numbers opens on the board that is
+        // nothing but numbers (D52). It used to open on the symbol layer, whose
+        // digits are a cramped top row above nine keys of punctuation the field
+        // will not accept.
+        layer = if (FieldPolicy.isNumeric(info.inputType)) Layer.NUMBERS else Layer.LETTERS
         autoCapitalise = !isPassword && shouldAutoCapitalise(info)
         shifted = autoCapitalise
         capsLock = false
@@ -344,7 +348,7 @@ class BilingualKeyboardService : InputMethodService() {
             }
 
             KeyAction.ToggleLayer -> {
-                layer = Layouts.other(layer)
+                layer = Layouts.next(layer)
                 keyboardView.layout =
                     Layouts.forLayer(layer, inPassword = passwordField, enter = enterKey)
             }

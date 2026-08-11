@@ -44,9 +44,9 @@ sealed interface KeyAction {
     data object Space : KeyAction
 
     /**
-     * Switch between the letter and symbol layers.
+     * Step to the next layer: letters, symbols, numbers, letters again (D52).
      *
-     * Deliberately a toggle rather than "switch to layer X": there is exactly
+     * Deliberately a step rather than "switch to layer X": there is exactly
      * one layer-toggle key, in exactly one position, and encoding it this way
      * makes a second toggle elsewhere unrepresentable rather than merely
      * discouraged. See D16.
@@ -77,7 +77,15 @@ sealed interface KeyAction {
     data object Personal : KeyAction
 }
 
-enum class Layer { LETTERS, SYMBOLS }
+/**
+ * The three boards, in the order the layer key steps through them (D52).
+ *
+ * [NUMBERS] is a calculator rather than a third page of symbols: ten digits in
+ * a dialpad block, the arithmetic beside them, and both decimal separators,
+ * because D2 has German and English live in the same paragraph and they do not
+ * agree on which of `.` and `,` splits a number.
+ */
+enum class Layer { LETTERS, SYMBOLS, NUMBERS }
 
 data class KeyboardLayout(val rows: List<List<Key>>)
 
@@ -174,6 +182,19 @@ object Layouts {
     /** The personal key (D40). Purple, because it is the one key that learns. */
     const val PERSONAL_LABEL = "+"
 
+    /**
+     * What the layer key says, on each of the three layers (D52).
+     *
+     * Always the name of what the *next* press gives, never of where you are —
+     * a key labelled with the room you are standing in tells you nothing you
+     * cannot see. The `?` falls away between the first and the second because
+     * that is the difference between the two: `?123` is punctuation with digits
+     * among it, `123` is digits.
+     */
+    const val TO_SYMBOLS_LABEL = "?123"
+    const val TO_NUMBERS_LABEL = "123"
+    const val TO_LETTERS_LABEL = "ABC"
+
     private fun symbolRow(vararg specs: Pair<String, List<String>>): List<Key> =
         specs.map { (label, alternates) ->
             Key(label = label, action = KeyAction.Text(label), longPress = alternates)
@@ -222,7 +243,7 @@ object Layouts {
                 addAll(letterRow("zxcvbnm"))
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("?123", inPassword, enter),
+            bottomRow(TO_SYMBOLS_LABEL, inPassword, enter),
         ),
     )
 
@@ -267,7 +288,83 @@ object Layouts {
                 )
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("ABC", inPassword, enter),
+            bottomRow(TO_NUMBERS_LABEL, inPassword, enter),
+        ),
+    )
+
+    /**
+     * The number layer (D52): a calculator, not a third page of symbols.
+     *
+     * **Seven equal keys in each of the three rows, so the columns line up.**
+     * That is the whole reason this is worth having as a layer of its own: a
+     * digit here is nearly half as wide again as one hiding on the symbol
+     * layer's top row, and the block of them sits under the thumb in the shape
+     * everybody already knows.
+     *
+     * ```
+     * 1 2 3   +  -   (  )
+     * 4 5 6   ×  ÷   %  =
+     * 7 8 9   0  .   ,  ⌫
+     * ```
+     *
+     * **Dialpad order, not calculator order.** `1 2 3` on top is what every
+     * phone in the world shows and what the thumb has learned from dialling;
+     * `7 8 9` on top belongs to a machine with a numeric keypad, and this is
+     * not one. What the calculator lends is the *symbols* — the arithmetic in
+     * one place instead of scattered through the punctuation.
+     *
+     * **Both decimal separators, side by side** (D2). `12.50` and `12,50` are
+     * the same price in the two languages this keyboard is for, and neither is
+     * the odd one out here.
+     *
+     * **`×` and `÷` lead, with `*` and `/` a hold away.** The glyphs are what
+     * arithmetic looks like written down, and are what most things that parse
+     * a sum will take; the ASCII pair is what a spreadsheet or a shell wants,
+     * so it is one hold behind and drawn in the corner like every other
+     * alternate (D17). The minus key is the other way round: it types the
+     * ASCII hyphen, because a phone number, a date range and a hyphenated word
+     * all want that one, and the true `−` leads its alternates.
+     *
+     * Backspace keeps the corner it has on the other two layers rather than the
+     * width — a grid with one key in it wider than the rest is not a grid.
+     */
+    private fun buildNumbers(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
+        listOf(
+            symbolRow(
+                "1" to emptyList(),
+                "2" to emptyList(),
+                "3" to emptyList(),
+                "+" to listOf("±"),
+                "-" to listOf("−", "–", "—"),
+                "(" to listOf("[", "{", "<"),
+                ")" to listOf("]", "}", ">"),
+            ),
+            symbolRow(
+                "4" to emptyList(),
+                "5" to emptyList(),
+                "6" to emptyList(),
+                "×" to listOf("*"),
+                "÷" to listOf("/"),
+                "%" to listOf("‰", "°"),
+                "=" to listOf("≈", "≠", "≤", "≥"),
+            ),
+            buildList {
+                addAll(
+                    symbolRow(
+                        "7" to emptyList(),
+                        "8" to emptyList(),
+                        "9" to emptyList(),
+                        "0" to emptyList(),
+                        // A time is the other thing a number layer is used for,
+                        // and 14:30 needs the colon more than it needs an
+                        // ellipsis.
+                        "." to listOf(":", "…"),
+                        "," to emptyList(),
+                    ),
+                )
+                add(Key("⌫", KeyAction.Backspace, repeats = true))
+            },
+            bottomRow(TO_LETTERS_LABEL, inPassword, enter),
         ),
     )
 
@@ -294,11 +391,21 @@ object Layouts {
         when (layer) {
             Layer.LETTERS -> buildLetters(inPassword, enter)
             Layer.SYMBOLS -> buildSymbols(inPassword, enter)
+            Layer.NUMBERS -> buildNumbers(inPassword, enter)
         }
     }
 
-    fun other(layer: Layer): Layer = when (layer) {
+    /**
+     * Where the layer key goes next (D52).
+     *
+     * A ring rather than a pair, which is the cost of the number layer: getting
+     * back to the letters from the symbols is two presses now instead of one.
+     * Paid deliberately — the alternative is a second key for the third layer,
+     * and D16 exists to stop exactly that.
+     */
+    fun next(layer: Layer): Layer = when (layer) {
         Layer.LETTERS -> Layer.SYMBOLS
-        Layer.SYMBOLS -> Layer.LETTERS
+        Layer.SYMBOLS -> Layer.NUMBERS
+        Layer.NUMBERS -> Layer.LETTERS
     }
 }

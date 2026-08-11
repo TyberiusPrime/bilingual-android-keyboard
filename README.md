@@ -20,7 +20,7 @@ puts it back. The design is being worked out in
 | `app/src/main/java/.../KeyboardLayout.kt` | layout definitions |
 | `app/src/main/java/.../SuggestionStripView.kt` | the suggestion strip |
 | `app/src/main/java/.../DictionarySuggestions.kt` | both languages, one ranking |
-| `app/src/main/java/.../SetupActivity.kt` | setup, and the learned-word list |
+| `app/src/main/java/.../SetupActivity.kt` | setup, and the learned words: add, tick, forget |
 | `app/src/main/java/.../TouchModel.kt` | what each tap nearly hit |
 | `app/src/main/java/.../SpatialEditDistance.kt` | distance in slips, not edits |
 | `app/src/main/java/.../SettingsActivity.kt` | sizes, timings, correction, vibration |
@@ -96,6 +96,13 @@ names.
 
 ### Unreleased
 
+- **A field on the launcher screen adds anything to the personal store, spaces
+  and all** (D51). Holding the + key remembers whatever lies between two spaces
+  (D40), which cannot express a phrase — `Anna Maria`, `mit freundlichen
+  Grüßen`, a street with a space in it. Typed into the new field it goes in as
+  it stands, and the Quick tick beside it puts it straight on the menu the +
+  key opens. A pasted line break or tab becomes a space, since an entry is one
+  line of a file.
 - **The enter key does what the field actually asked for, and says so** (D49).
   In a chat box — Telegram, and anything else built on a multi-line `EditText`
   — pressing it submitted the field and hid the keyboard instead of starting a

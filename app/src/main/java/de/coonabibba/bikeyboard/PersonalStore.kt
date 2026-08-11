@@ -12,6 +12,11 @@ import java.io.File
  * the ceiling on how good this keyboard ever gets for this user, so the ask is
  * one press on the personal key at the moment the word is typed (D40).
  *
+ * There is a second door since D51 — a field on the launcher screen — because
+ * the first one can only ever produce a single word: it takes what lies between
+ * two spaces, so a phrase, a full name or an address with a space in it cannot
+ * be asked for while typing one.
+ *
  * It is also the only thing the user can be *wrong* about, so the launcher
  * screen lists what is in here and can take words back out. A store that only
  * grows would eventually be full of half-typed mistakes with no way to say so.
@@ -163,6 +168,27 @@ class PersonalStore(private val file: File) {
     }
 
     companion object {
+
+        /**
+         * [raw] as this file can hold it, or `""` for nothing worth storing
+         * (D51).
+         *
+         * An entry is a line, with a tab in front of the quick marker, so a
+         * newline or a tab *inside* one is not something the format has a place
+         * for — a pasted line break would otherwise come back as two entries,
+         * one of them nonsense. They become spaces instead of truncating what
+         * was typed, and every run of whitespace collapses to one, since two
+         * spaces in a stored phrase are a typo nothing will ever match.
+         *
+         * Interior single spaces are the point and are left alone. This is the
+         * only door they come in by: what the personal key picks up while
+         * typing is whatever lies between two spaces (D40), so it can never
+         * contain one.
+         */
+        fun clean(raw: String): String = raw.trim().replace(WHITESPACE_RUN, " ")
+
+        private val WHITESPACE_RUN = Regex("\\s+")
+
         /**
          * Where the store lives inside the app's files directory. Shared by the
          * keyboard, which writes it, and the launcher screen, which edits it.

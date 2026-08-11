@@ -2682,6 +2682,47 @@ belongs reads as a candidate, and tapping a candidate replaces your text.
 that can, rather than the view being asked to know which entries begin with
 something special.
 
+### D51 — A second door into the personal store, for the things with spaces in
+
+D40 settled what the personal key remembers: **whatever is between the spaces**,
+because the eye's delimiter is the right one for `john@coonabibba.de` and the
+word tokeniser's is not. That is still right, and it has a consequence that only
+shows up once the store is in daily use — **a phrase cannot be asked for at
+all.** `Anna Maria`, `mit freundlichen Grüßen`, a street name with a space in
+it: the gesture is a hold on one key while typing one word, and there is no
+version of it that means "and the last two words as well".
+
+So the launcher screen, which already lists the store and can take things out
+of it, gets a field that puts things in. Typed there, an entry goes in as it
+stands.
+
+**It does not loosen D8.** Nothing is absorbed silently; this is somebody typing
+a thing and pressing Add, which is a request in the same sense a hold on the
+personal key is. Nor does it loosen D40's rule for the key itself, which is
+still the fast path and still stops at the space.
+
+**The quick tick is on the field, not only on the row it produces.** Putting the
+entry on the + key's menu is the usual reason for typing one in — a phrase is
+precisely the thing you want inserted whole rather than completed towards — and
+the list below is alphabetical, so hunting for the entry you added a second ago
+in order to tick a box is a step with nothing in it. Unticked takes nothing off
+the menu, though: that is what the row is for, and a field that quietly undid a
+setting because the box happened to be empty would be a trap.
+
+**What the format cannot carry is turned into a space rather than refused.** An
+entry is a line, and the quick marker sits behind a tab, so a pasted line break
+would come back as two entries with one of them nonsense, and a pasted tab would
+name half the phrase a marker. `PersonalStore.clean` collapses every run of
+whitespace to one space and trims the ends — one door, one rule, and the store's
+own format decides it rather than the screen.
+
+**A phrase behaves as a long word everywhere else, which was checked rather than
+hoped.** It completes from its opening in the strip, since `completions` matches
+a folded prefix and a space folds to itself. It can never be *substituted* on
+space: corrections come from the lexicon scan alone (D28), and the personal
+store is only ever a source of candidates. And a swipe cannot produce one — the
+gesture decoder has no key for a space, so the stroke never matches.
+
 ---
 
 ## Architecture

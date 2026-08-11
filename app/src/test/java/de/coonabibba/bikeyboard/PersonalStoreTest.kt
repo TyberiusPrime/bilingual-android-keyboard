@@ -231,6 +231,63 @@ class PersonalStoreTest {
         assertEquals(many, store.quick())
     }
 
+    // -- entries typed in by hand (D51) ---------------------------------------
+
+    @Test
+    fun `a phrase keeps its spaces, through the file and back`() {
+        val (store, file) = store()
+        val phrase = PersonalStore.clean("  mit freundlichen Grüßen ")
+        assertEquals("mit freundlichen Grüßen", phrase)
+        assertTrue(store.add(phrase))
+        assertTrue(store.setQuick(phrase, true))
+        store.persist()
+
+        val reopened = PersonalStore(file)
+        reopened.load()
+        assertEquals(listOf(phrase), reopened.all())
+        assertEquals(listOf(phrase), reopened.quick())
+        assertTrue(reopened.knows(phrase))
+    }
+
+    /**
+     * An entry is a line and the quick marker is behind a tab, so neither can
+     * appear inside one — a pasted line break would otherwise come back as two
+     * entries, and a pasted tab would name the rest of the phrase as a marker.
+     */
+    @Test
+    fun `what the file cannot hold becomes a space`() {
+        assertEquals("Anna Maria", PersonalStore.clean("Anna\tMaria"))
+        assertEquals("Anna Maria", PersonalStore.clean("Anna\nMaria"))
+        assertEquals("Anna Maria", PersonalStore.clean("Anna \r\n Maria"))
+        assertEquals("Anna Maria", PersonalStore.clean("Anna   Maria"))
+        assertEquals("", PersonalStore.clean("   \t\n "))
+        assertEquals("", PersonalStore.clean(""))
+    }
+
+    /** And a phrase that has been through it survives the round trip whole. */
+    @Test
+    fun `a pasted line break does not split an entry in two`() {
+        val (store, file) = store()
+        store.add(PersonalStore.clean("Anna\nMaria"))
+        store.persist()
+        val reopened = PersonalStore(file)
+        reopened.load()
+        assertEquals(listOf("Anna Maria"), reopened.all())
+    }
+
+    /**
+     * The strip completes towards a phrase from its first word, which is what
+     * makes a stored phrase worth having at all.
+     */
+    @Test
+    fun `a phrase completes from its opening`() {
+        val (store, _) = store()
+        store.add("mit freundlichen Grüßen")
+        assertEquals(listOf("mit freundlichen Grüßen"), store.completions("mit"))
+        assertEquals(listOf("mit freundlichen Grüßen"), store.completions("mit fre"))
+        assertTrue(store.completions("freundlichen").isEmpty())
+    }
+
     /** A word containing the marker text is still just a word. */
     @Test
     fun `a word that looks like a marker is not one`() {

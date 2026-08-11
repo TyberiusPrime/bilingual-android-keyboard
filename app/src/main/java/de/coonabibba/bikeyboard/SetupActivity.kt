@@ -5,12 +5,16 @@ import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -31,6 +35,11 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var learnedHeading: TextView
     private lateinit var learnedList: LinearLayout
+
+    /** The field that adds an entry by hand, its quick tick, and what it says back (D51). */
+    private lateinit var newWord: EditText
+    private lateinit var newWordQuick: CheckBox
+    private lateinit var addMessage: TextView
     private val store by lazy { PersonalStore(File(filesDir, PersonalStore.FILE_NAME)) }
 
     private val pad by lazy { dp(16) }
@@ -71,6 +80,8 @@ class SetupActivity : AppCompatActivity() {
             },
         )
 
+        addAddWordField(content)
+
         learnedHeading = TextView(this).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             typeface = Typeface.DEFAULT_BOLD
@@ -108,6 +119,112 @@ class SetupActivity : AppCompatActivity() {
         status.text = getString(
             if (isEnabled()) R.string.status_enabled else R.string.status_not_enabled,
         )
+        // Whatever the field last said is about an entry that is now simply in
+        // the list below, which says it better.
+        addMessage.visibility = View.GONE
+        showLearnedWords()
+    }
+
+    /**
+     * The other way into the personal store (D51).
+     *
+     * The personal key remembers **whatever is between the spaces** (D40),
+     * which is the right rule for something pressed mid-word and means a phrase
+     * cannot be asked for that way at all — `Anna Maria`, `mit freundlichen
+     * Grüßen`, a street with a space in it. Typed here it goes in as it stands.
+     *
+     * The quick tick sits beside the field rather than only on the row that
+     * appears afterwards, because putting the entry on the + key's menu is the
+     * usual reason for coming here and the list below is alphabetical: finding
+     * the thing you just added, among a hundred others, to tick a box you were
+     * looking at a second ago is not a step worth keeping.
+     */
+    private fun addAddWordField(content: LinearLayout) {
+        content.addView(
+            TextView(this).apply {
+                setText(R.string.add_word_title)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(24), 0, dp(4))
+            },
+        )
+        content.addView(
+            TextView(this).apply {
+                setText(R.string.add_word_explanation)
+                alpha = 0.7f
+                setPadding(0, 0, 0, dp(8))
+            },
+        )
+
+        newWord = EditText(this).apply {
+            setHint(R.string.add_word_hint)
+            // Free text, and the store is not a form: nothing the phone has
+            // filed under a person's name belongs in this box by default.
+            inputType = InputType.TYPE_CLASS_TEXT
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            // One line, so the only line breaks that can reach the store are
+            // pasted ones — which PersonalStore.clean turns into spaces.
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_DONE) addTypedWord()
+                // Not consumed: the keyboard closing after the entry is added
+                // is the right end to the gesture.
+                false
+            }
+        }
+        newWordQuick = CheckBox(this).apply { setText(R.string.action_quick) }
+
+        content.addView(newWord)
+        content.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(
+                    newWordQuick,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+                )
+                addView(
+                    Button(context).apply {
+                        setText(R.string.action_add)
+                        setOnClickListener { addTypedWord() }
+                    },
+                )
+            },
+        )
+
+        addMessage = TextView(this).apply {
+            alpha = 0.7f
+            visibility = View.GONE
+        }
+        content.addView(addMessage)
+    }
+
+    /**
+     * Takes what is in the field, if there is anything the store can hold.
+     *
+     * A word already known is not an error and not a no-op either: the tick is
+     * still applied, since "I want this on the menu" is the other half of what
+     * the field is for and the entry being there already should not swallow it.
+     * An *un*ticked box is not the same request in reverse — it takes nothing
+     * off the menu, because the row in the list below is where that is said.
+     */
+    private fun addTypedWord() {
+        val word = PersonalStore.clean(newWord.text.toString())
+        if (word.isEmpty()) return
+
+        store.load()
+        val added = store.add(word)
+        val ticked = newWordQuick.isChecked && store.setQuick(word, true)
+        if (added || ticked) store.persist()
+
+        newWord.text.clear()
+        newWordQuick.isChecked = false
+        addMessage.text = getString(
+            if (added) R.string.add_word_added else R.string.add_word_known,
+            word,
+        )
+        addMessage.visibility = View.VISIBLE
         showLearnedWords()
     }
 

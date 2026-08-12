@@ -116,6 +116,9 @@ class KeyboardView @JvmOverloads constructor(
     /** The personal key held down: remember the word in front of the cursor. */
     var onPersonalHold: (() -> Unit)? = null
 
+    /** The layer key held down: the number layer, and off it again (D53). */
+    var onLayerHold: (() -> Unit)? = null
+
     /** The personal key tapped twice, or tapped with nothing yet on the menu. */
     var onPersonalSettings: (() -> Unit)? = null
 
@@ -645,10 +648,14 @@ class KeyboardView @JvmOverloads constructor(
             }
 
             // The first alternate is shown small in the corner, so the digits
-            // and umlauts are discoverable without holding every key (D17).
-            placed.key.longPress.firstOrNull()?.let { hint ->
+            // and umlauts are discoverable without holding every key (D17) —
+            // and where a hold changes the board instead of typing anything,
+            // the same corner says so (D53).
+            val corner = placed.key.longPress.firstOrNull()?.let(::shiftAlternate)
+                ?: placed.key.holdHint
+            corner?.let { hint ->
                 canvas.drawText(
-                    shiftAlternate(hint),
+                    hint,
                     placed.bounds.right - 5f * density,
                     placed.bounds.top + 13f * density,
                     hintPaint,
@@ -696,9 +703,10 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun scheduleLongPress(placed: PlacedKey, pointerId: Int) {
         dismissLongPress()
-        // The personal key has no alternates but does have a hold (D40), so it
-        // wants the timer even though there is no popup at the end of it.
-        if (placed.key.longPress.isEmpty() && placed.key.action != KeyAction.Personal) return
+        // The personal key and the layer key have no alternates but do have a
+        // hold (D40, D53), so they want the timer even though there is no popup
+        // at the end of it.
+        if (placed.key.longPress.isEmpty() && !placed.key.action.hasHold()) return
         longPressPointer = pointerId
         handler.postDelayed(longPressRunnable, longPressMs)
     }
@@ -728,6 +736,16 @@ class KeyboardView @JvmOverloads constructor(
             dismissLongPress()
             personalTaps.reset()
             onPersonalHold?.invoke()
+            return
+        }
+
+        // And holding the layer key reaches the number layer (D53), on the same
+        // terms: the board changes under the finger, and the release that
+        // follows must not then also step to the next layer.
+        if (target.key.action == KeyAction.ToggleLayer) {
+            touch.fired = true
+            dismissLongPress()
+            onLayerHold?.invoke()
             return
         }
 

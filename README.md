@@ -96,13 +96,14 @@ names.
 
 ### Unreleased
 
-- **A number layer, two presses of `?123` away** (D52). A calculator: ten digits
-  in a dialpad block of equal, generously wide keys, `+ - × ÷ = % ( )` beside
+- **A number layer, behind a hold on `?123`** (D52, D53). A calculator: ten
+  digits in a block of equal, generously wide keys, `+ - × ÷ = % ( )` beside
   them, and both decimal separators — German and English disagree about which
   of `.` and `,` splits a number, so neither hides behind a hold. `*` and `/`
-  are one hold behind `×` and `÷`. The layer key is a ring now — letters,
-  symbols, numbers, letters — and says what the next press gives: `?123`, then
-  `123`, then `ABC`. A numeric field opens on it, so a PIN pad is a PIN pad.
+  are one hold behind `×` and `÷`. **Tapping** the layer key still swaps
+  letters and symbols one press each way; **holding** it goes to the numbers
+  and holding it again comes back, with `123` in the key's corner to say so. A
+  numeric field opens on it, so a PIN pad is a PIN pad.
 - **A field on the launcher screen adds anything to the personal store, spaces
   and all** (D51). Holding the + key remembers whatever lies between two spaces
   (D40), which cannot express a phrase — `Anna Maria`, `mit freundlichen

@@ -127,6 +127,10 @@ class BilingualKeyboardService : InputMethodService() {
             onPersonalMenu = ::quickWords
             onQuickInsert = ::insertQuickWord
             onPersonalHold = ::learnCurrentWord
+            // Holding the layer key is the way to the numbers and back (D53).
+            // No buzz of its own: the whole board changes under the finger the
+            // instant it fires, which says it louder than the motor could.
+            onLayerHold = { showLayer(Layouts.held(layer)) }
             onPersonalSettings = ::openSetup
             onPress = { haptics?.keyPress(this) }
         }
@@ -347,11 +351,7 @@ class BilingualKeyboardService : InputMethodService() {
                 keyboardView.capsLocked = capsLock
             }
 
-            KeyAction.ToggleLayer -> {
-                layer = Layouts.next(layer)
-                keyboardView.layout =
-                    Layouts.forLayer(layer, inPassword = passwordField, enter = enterKey)
-            }
+            KeyAction.ToggleLayer -> showLayer(Layouts.next(layer))
 
             KeyAction.ToggleTrail -> {
                 showTrail = !showTrail
@@ -536,6 +536,13 @@ class BilingualKeyboardService : InputMethodService() {
      * produces three confident suggestions and no room to say "no, the thing I
      * actually typed".
      */
+    /** Puts [next] on the board, whichever gesture on the layer key asked for it. */
+    private fun showLayer(next: Layer) {
+        layer = next
+        keyboardView.layout =
+            Layouts.forLayer(layer, inPassword = passwordField, enter = enterKey)
+    }
+
     private fun learnCurrentWord() {
         val text = tokenToLearn()
         if (text.isEmpty()) {

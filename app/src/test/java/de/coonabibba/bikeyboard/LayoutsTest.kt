@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -217,42 +218,98 @@ class LayoutsTest {
         }
     }
 
-    // -- the three layers and the one key that steps through them (D16, D52) --
+    // -- the three layers and the one key that reaches them (D16, D52, D53) ---
+
+    private fun toggleKeyOn(layer: Layer): Key =
+        Layouts.forLayer(layer).rows.flatten().first { it.action == KeyAction.ToggleLayer }
 
     /**
-     * What the user asked for in as many words: `?123` once for the symbols,
-     * twice for the numbers, a third time back to where they started.
+     * A tap is the two-way toggle it always was. The numbers are not in this
+     * cycle: a ring of three put the symbols two presses from the letters, and
+     * that is the trip made dozens of times a day.
      */
     @Test
-    fun `the layer key steps letters, symbols, numbers, letters`() {
+    fun `a tap swaps letters and symbols, and leaves the numbers`() {
         assertEquals(Layer.SYMBOLS, Layouts.next(Layer.LETTERS))
-        assertEquals(Layer.NUMBERS, Layouts.next(Layouts.next(Layer.LETTERS)))
-        assertEquals(Layer.LETTERS, Layouts.next(Layouts.next(Layouts.next(Layer.LETTERS))))
+        assertEquals(Layer.LETTERS, Layouts.next(Layer.SYMBOLS))
+        assertEquals(Layer.LETTERS, Layouts.next(Layer.NUMBERS))
     }
 
-    /** From anywhere, not just from the letters: the ring has no dead end. */
+    /** A hold is a switch: it reaches the numbers from anywhere, and leaves them. */
     @Test
-    fun `stepping through every layer comes back around`() {
+    fun `a hold reaches the numbers and gets back out`() {
+        assertEquals(Layer.NUMBERS, Layouts.held(Layer.LETTERS))
+        assertEquals(Layer.NUMBERS, Layouts.held(Layer.SYMBOLS))
+        assertEquals(Layer.LETTERS, Layouts.held(Layer.NUMBERS))
+        // Never inert, wherever it is pressed: a hold that did nothing on the
+        // third layer would be the dead control this project has shipped twice
+        // already (D38, D40).
         Layer.entries.forEach { layer ->
-            val walked = generateSequence(layer, Layouts::next).take(Layer.entries.size).toList()
-            assertEquals("$layer does not reach every layer", Layer.entries.size, walked.distinct().size)
-            assertEquals("$layer does not come home", layer, Layouts.next(walked.last()))
+            assertTrue("the hold does nothing on $layer", Layouts.held(layer) != layer)
+        }
+    }
+
+    /** Every layer is reachable, or one of them may as well not exist. */
+    @Test
+    fun `every layer is one gesture away from the letters`() {
+        assertEquals(
+            Layer.entries.toSet(),
+            setOf(Layer.LETTERS, Layouts.next(Layer.LETTERS), Layouts.held(Layer.LETTERS)),
+        )
+    }
+
+    /** The label names where a tap goes, on every layer, or it is decoration. */
+    @Test
+    fun `the layer key says where a tap leads`() {
+        val expected = mapOf(
+            Layer.LETTERS to Layouts.TO_LETTERS_LABEL,
+            Layer.SYMBOLS to Layouts.TO_SYMBOLS_LABEL,
+            Layer.NUMBERS to Layouts.TO_NUMBERS_LABEL,
+        )
+        Layer.entries.forEach { layer ->
+            assertEquals(
+                "the key on $layer",
+                expected.getValue(Layouts.next(layer)),
+                toggleKeyOn(layer).label,
+            )
         }
     }
 
     /**
-     * The key names what the next press gives, so the three labels have to be
-     * three different things — a ring whose signposts repeat is a ring you get
-     * lost in.
+     * And the corner says where a hold goes, in the same place every other key
+     * on this board advertises its hold (D17) — except where the hold would
+     * only repeat the tap, which is nothing worth advertising.
      */
     @Test
-    fun `the layer key says something different on each layer`() {
-        val labels = Layer.entries.map { layer ->
-            Layouts.forLayer(layer).rows.flatten()
-                .first { it.action == KeyAction.ToggleLayer }.label
+    fun `the layer key advertises the numbers in its corner`() {
+        listOf(Layer.LETTERS, Layer.SYMBOLS).forEach { layer ->
+            assertEquals("the corner on $layer", Layouts.TO_NUMBERS_LABEL, toggleKeyOn(layer).holdHint)
         }
-        assertEquals(Layer.entries.size, labels.distinct().size)
-        assertTrue("a layer key with nothing on it", labels.none { it.isEmpty() })
+        assertEquals(null, toggleKeyOn(Layer.NUMBERS).holdHint)
+    }
+
+    /**
+     * The hold has to survive the trip through the view, which only starts its
+     * timer for a key with something at the end of it.
+     */
+    @Test
+    fun `the keys with a hold are the ones that say they have one`() {
+        assertTrue(KeyAction.ToggleLayer.hasHold())
+        assertTrue(KeyAction.Personal.hasHold())
+        assertFalse(KeyAction.Space.hasHold())
+        assertFalse(KeyAction.Shift.hasHold())
+        assertFalse(KeyAction.Text("a").hasHold())
+    }
+
+    /**
+     * A hold on this key never opens a popup, so a corner hint must not be an
+     * alternate as well — the two would race and the popup would win.
+     */
+    @Test
+    fun `the layer key carries no alternates to open`() {
+        Layer.entries.forEach { layer ->
+            assertEquals("alternates on $layer", emptyList<String>(), toggleKeyOn(layer).longPress)
+        }
     }
 
     // -- the number layer (D52) -----------------------------------------------

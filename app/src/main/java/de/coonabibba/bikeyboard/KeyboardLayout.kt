@@ -32,7 +32,27 @@ data class Key(
      * before.
      */
     val steersLines: Boolean = false,
+    /**
+     * A label drawn small in the key's corner that is **not** something a hold
+     * will type — what holding the key does instead (D53).
+     *
+     * A key with [longPress] alternates already advertises its first one there
+     * (D17), which is the idiom this borrows: the corner of a key is where it
+     * says what else it can do. This is for the keys whose hold changes the
+     * keyboard rather than inserting anything, and which therefore have no
+     * alternate to put there.
+     */
+    val holdHint: String? = null,
 )
+
+/**
+ * Whether holding this key means something of its own, popup or not.
+ *
+ * Two keys do: the personal key remembers a word (D40) and the layer key
+ * reaches the numbers (D53). Both need the hold timer even though neither has a
+ * popup at the end of it.
+ */
+fun KeyAction.hasHold(): Boolean = this == KeyAction.Personal || this == KeyAction.ToggleLayer
 
 sealed interface KeyAction {
     /** Insert [text] at the cursor. */
@@ -44,7 +64,8 @@ sealed interface KeyAction {
     data object Space : KeyAction
 
     /**
-     * Step to the next layer: letters, symbols, numbers, letters again (D52).
+     * The one key that changes the board: tapped it swaps letters and symbols,
+     * held it reaches the number layer and leaves it again (D52, D53).
      *
      * Deliberately a step rather than "switch to layer X": there is exactly
      * one layer-toggle key, in exactly one position, and encoding it this way
@@ -78,7 +99,8 @@ sealed interface KeyAction {
 }
 
 /**
- * The three boards, in the order the layer key steps through them (D52).
+ * The three boards: two under the layer key's tap, the third under its hold
+ * (D52, D53).
  *
  * [NUMBERS] is a calculator rather than a third page of symbols: ten digits in
  * a dialpad block, the arithmetic beside them, and both decimal separators,
@@ -183,13 +205,13 @@ object Layouts {
     const val PERSONAL_LABEL = "+"
 
     /**
-     * What the layer key says, on each of the three layers (D52).
+     * What the layer key says (D52, D53).
      *
-     * Always the name of what the *next* press gives, never of where you are —
-     * a key labelled with the room you are standing in tells you nothing you
-     * cannot see. The `?` falls away between the first and the second because
-     * that is the difference between the two: `?123` is punctuation with digits
-     * among it, `123` is digits.
+     * Always the name of where a press goes, never of where you are — a key
+     * labelled with the room you are standing in tells you nothing you cannot
+     * see. [TO_NUMBERS_LABEL] is the odd one: it is not the key's label but the
+     * hint in its corner, because the numbers are behind a *hold*, and a corner
+     * hint is how every other key on this board says what a hold gives (D17).
      */
     const val TO_SYMBOLS_LABEL = "?123"
     const val TO_NUMBERS_LABEL = "123"
@@ -218,13 +240,18 @@ object Layouts {
      * and `null` is a field that makes nothing of it: the key is left off and
      * its width goes to the space bar, since a key that does nothing is worse
      * than a gap and much worse than more space bar.
+     *
+     * [toggleHint] is what a *hold* on the layer key gives (D53), drawn in its
+     * corner. Null on the layer a hold would only take you where the tap
+     * already goes.
      */
     private fun bottomRow(
         toggleLabel: String,
+        toggleHint: String?,
         inPassword: Boolean,
         enter: EnterKey?,
     ): List<Key> = listOfNotNull(
-        Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f),
+        Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f, holdHint = toggleHint),
         if (inPassword) {
             Key(TRAIL_ON_LABEL, KeyAction.ToggleTrail, widthWeight = 1f)
         } else {
@@ -243,7 +270,7 @@ object Layouts {
                 addAll(letterRow("zxcvbnm"))
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow(TO_SYMBOLS_LABEL, inPassword, enter),
+            bottomRow(TO_SYMBOLS_LABEL, TO_NUMBERS_LABEL, inPassword, enter),
         ),
     )
 
@@ -288,7 +315,7 @@ object Layouts {
                 )
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow(TO_NUMBERS_LABEL, inPassword, enter),
+            bottomRow(TO_LETTERS_LABEL, TO_NUMBERS_LABEL, inPassword, enter),
         ),
     )
 
@@ -364,7 +391,7 @@ object Layouts {
                 )
                 add(Key("⌫", KeyAction.Backspace, repeats = true))
             },
-            bottomRow(TO_LETTERS_LABEL, inPassword, enter),
+            bottomRow(TO_LETTERS_LABEL, null, inPassword, enter),
         ),
     )
 
@@ -396,16 +423,28 @@ object Layouts {
     }
 
     /**
-     * Where the layer key goes next (D52).
+     * Where a **tap** on the layer key goes (D53).
      *
-     * A ring rather than a pair, which is the cost of the number layer: getting
-     * back to the letters from the symbols is two presses now instead of one.
-     * Paid deliberately — the alternative is a second key for the third layer,
-     * and D16 exists to stop exactly that.
+     * Letters and symbols, back and forth, exactly as before there was a third
+     * layer — one press each way, which is what the pair is worth. The numbers
+     * are not in this cycle: a ring of three was tried and the second press
+     * back from the symbols is one too many for the trip everybody makes
+     * dozens of times a day.
      */
     fun next(layer: Layer): Layer = when (layer) {
         Layer.LETTERS -> Layer.SYMBOLS
-        Layer.SYMBOLS -> Layer.NUMBERS
-        Layer.NUMBERS -> Layer.LETTERS
+        Layer.SYMBOLS, Layer.NUMBERS -> Layer.LETTERS
     }
+
+    /**
+     * Where a **hold** on the layer key goes (D53): the numbers, and off them
+     * again.
+     *
+     * A hold that landed you somewhere you could not get out of the same way
+     * would be a one-way door, and one that did nothing on the third layer
+     * would be an inert control — which this project has caught itself
+     * shipping twice (D38, D40). So it is a switch: on, and off.
+     */
+    fun held(layer: Layer): Layer =
+        if (layer == Layer.NUMBERS) Layer.LETTERS else Layer.NUMBERS
 }

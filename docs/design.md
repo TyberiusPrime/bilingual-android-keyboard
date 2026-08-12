@@ -2762,18 +2762,60 @@ where every other alternate sits, drawn in the corner (D17). The minus key runs
 the other way — it types the plain hyphen, because a date range, a phone number
 and a hyphenated word all want that one, and the true `−` leads its alternates.
 
-**The layer key is a ring now: letters, symbols, numbers, letters.** Which costs
-one press — getting back to the letters from the symbols is two steps where it
-used to be one. Paid deliberately: the alternative is a second key for the third
-layer, and D16 exists precisely to stop the board growing a switch per
-destination. The label always names what the *next* press gives — `?123`, then
-`123`, then `ABC` — and the `?` falling away between the first two is the
-difference between them, punctuation with digits among it versus digits.
+**How the layer is reached is D53's business**, and the first answer — a ring
+under the layer key, letters to symbols to numbers and round — did not survive
+a day of use.
 
 **A numeric field opens here** rather than on the symbol layer, which is the
 same decision the field-policy check was already making, sent somewhere better.
 A PIN pad gets a PIN pad, and neither one has to show a field nine punctuation
 keys it will not accept.
+
+### D53 — The third layer is behind a hold, not a third step
+
+D52 put the number layer in a ring: one press of the layer key for the symbols,
+two for the numbers, three back to the letters. It reads well and it is wrong,
+and the reason is worth writing down because it is a general one.
+
+**The ring charges every trip for the rarest one.** Letters to symbols and back
+is the walk everybody makes dozens of times a day — a comma, a bracket, a colon,
+and straight back to writing. The numbers are somewhere you go to type a whole
+number and then leave. Making the third layer a third step on the same ring
+takes the two-press round trip that pair had and makes it three, so the common
+journey pays for the rare one on every single lap. The cost does not show up in
+a diagram of the state machine; it shows up in the thumb.
+
+So the two gestures the key already has are split by how often each destination
+is wanted:
+
+- **A tap is the toggle it always was.** Letters and symbols, one press each
+  way. From the numbers a tap also lands on the letters, since that is what
+  "back" means from anywhere that is not the letters.
+- **A hold reaches the numbers, and leaves them.** From either of the other two
+  layers it goes there; from the numbers it comes home. A switch, not a door:
+  a hold that did nothing on the third layer would be the inert control this
+  project has already caught itself shipping twice (D38's toggle, D40's
+  setting), and the rule there was that a control which silently does nothing
+  is worse than one that is absent.
+
+**The hold is advertised in the corner of the key**, which is where every other
+key on this board says what a hold gives (D17). It needed a field of its own —
+`Key.holdHint` — precisely because it is *not* an alternate: putting `123` in
+`longPress` would have drawn the same hint and then opened a popup that typed
+it, and the popup would have raced the layer change. The two things looked
+identical from the outside and are opposites underneath, which is exactly when a
+separate field earns its keep.
+
+The label still names where a *tap* goes, so it now reads `?123` on the letters
+and `ABC` on both of the others. Two layers sharing a label is not the collision
+it looks like: the label is a signpost to a destination, and two rooms can have
+a door to the same hall.
+
+**And the hold fires on the timer, not on release**, like the personal key's
+(D40). The board changes under the finger the moment it is held long enough,
+which is both the confirmation — no buzz needed, the whole keyboard just moved —
+and the reason the release must then produce no tap, or the layer would change
+twice.
 
 ---
 

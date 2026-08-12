@@ -379,6 +379,7 @@ object Layouts {
                 addAll(
                     symbolRow(
                         "." to listOf(":", "…"),
+                        "," to emptyList(),
                         "7" to emptyList(),
                         "8" to emptyList(),
                         "9" to emptyList(),
@@ -386,7 +387,6 @@ object Layouts {
                         // A time is the other thing a number layer is used for,
                         // and 14:30 needs the colon more than it needs an
                         // ellipsis.
-                        "," to emptyList(),
                     ),
                 )
                 add(Key("⌫", KeyAction.Backspace, repeats = true))

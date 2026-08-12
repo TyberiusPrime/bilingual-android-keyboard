@@ -331,26 +331,27 @@ object Layouts {
     private fun buildNumbers(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
         listOf(
             symbolRow(
+                "+" to listOf("±"),
+                "-" to listOf("−", "–", "—"),
                 "1" to emptyList(),
                 "2" to emptyList(),
                 "3" to emptyList(),
-                "+" to listOf("±"),
-                "-" to listOf("−", "–", "—"),
                 "(" to listOf("[", "{", "<"),
                 ")" to listOf("]", "}", ">"),
             ),
             symbolRow(
+                "×" to listOf("*"),
+                "÷" to listOf("/"),
                 "4" to emptyList(),
                 "5" to emptyList(),
                 "6" to emptyList(),
-                "×" to listOf("*"),
-                "÷" to listOf("/"),
                 "%" to listOf("‰", "°"),
                 "=" to listOf("≈", "≠", "≤", "≥"),
             ),
             buildList {
                 addAll(
                     symbolRow(
+                        "." to listOf(":", "…"),
                         "7" to emptyList(),
                         "8" to emptyList(),
                         "9" to emptyList(),
@@ -358,7 +359,6 @@ object Layouts {
                         // A time is the other thing a number layer is used for,
                         // and 14:30 needs the colon more than it needs an
                         // ellipsis.
-                        "." to listOf(":", "…"),
                         "," to emptyList(),
                     ),
                 )

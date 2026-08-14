@@ -2817,6 +2817,37 @@ which is both the confirmation — no buzz needed, the whole keyboard just moved
 and the reason the release must then produce no tap, or the layer would change
 twice.
 
+### D54 — In an address, the stop is not the end of anything
+
+D6's double tap on space writes `". "`, because in prose a full stop is followed
+by a space and the whole point of the gesture is that neither has to be reached
+for. In an address bar it writes the wrong thing: `example. com` is not a
+domain, and the space put there to tidy the sentence up is the one character
+that breaks the address in two. So in a field that holds an address, the same
+gesture writes the stop alone.
+
+**Same character, different job.** `example.com` and `john@coonabibba.de` have
+full stops inside them joining the parts of one unbroken token. Nothing ends at
+one, which is also why **no capital is armed** afterwards there — `www.` must
+not be followed by `Example`. The two halves of D6's behaviour, the trailing
+space and the re-armed shift, are both consequences of a sentence having ended,
+and both come off together where none has.
+
+**Which fields.** URI, and the two email-address variations. The email fields
+were not in the report and are in for the identical reason: an address with
+stops in it, where a space after one is never wanted. It is one entry in a
+`when` if that turns out to be wrong.
+
+**Not the same question as whether to suggest.** D39c deliberately lets a URI
+field keep its suggestions — on a phone the address bar is the search bar, and
+people type far more searches into it than addresses — so this could not reuse
+`suggestionsAllowed` and does not. That one is about whether to *offer* words.
+This is about what a single keystroke *writes*, and it is a keystroke nobody
+presses in the middle of a search: a double tap on space ends a sentence, and a
+search is not one. The two questions look alike and have opposite answers for
+the same field, which is the third time this document has had to separate a pair
+like that (D40's learning from suggesting, D49's action from the flag).
+
 ---
 
 ## Architecture

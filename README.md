@@ -96,6 +96,11 @@ names.
 
 ### Unreleased
 
+- **The double tap on space writes just the stop in an address field** (D54).
+  `". "` is right in prose and wrong in an address bar: `example. com` is not a
+  domain. In URL and email fields the gesture now writes `.` alone, and arms no
+  capital either, since nothing has ended — `www.` must not be followed by
+  `Example`.
 - **A number layer, behind a hold on `?123`** (D52, D53). A calculator: ten
   digits in a block of equal, generously wide keys, `+ - × ÷ = % ( )` beside
   them, and both decimal separators — German and English disagree about which

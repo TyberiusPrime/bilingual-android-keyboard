@@ -93,6 +93,12 @@ class BilingualKeyboardService : InputMethodService() {
     private var lineSteeringAllowed = false
 
     /**
+     * Whether this field holds an address rather than prose (D54), which
+     * changes what a double tap on space writes — see [sentenceEnd].
+     */
+    private var addressField = false
+
+    /**
      * What the enter key is in this field: a newline, one of the editor
      * actions, or nothing at all (D49). Decided when focus arrives, because it
      * changes both what the key does and whether it is drawn.
@@ -241,6 +247,7 @@ class BilingualKeyboardService : InputMethodService() {
         passwordField = isPassword
         showTrail = KeyboardPrefs.showTrail(this, isPassword)
         lineSteeringAllowed = FieldPolicy.isMultiLine(info.inputType)
+        addressField = FieldPolicy.isAddressField(info.inputType)
         applyTrailVisibility()
 
         // A new field is a new context: nothing typed here yet.
@@ -731,6 +738,11 @@ class BilingualKeyboardService : InputMethodService() {
      *
      * Only when a word actually precedes the space — after punctuation, a
      * newline, or nothing at all, a second space is just a space.
+     *
+     * **In an address field it writes the stop alone** (D54). `example.com` and
+     * `john@coonabibba.de` are one token with full stops inside them, so the
+     * space the gesture exists to tidy away would break the address in half —
+     * and nothing has ended, so no capital is armed either.
      */
     private fun sentenceEnd(ic: InputConnection, key: Key) {
         val spaces = TextEdits.spacesBeforeSentenceEnd(ic.getTextBeforeCursor(SENTENCE_LOOKBEHIND, 0))
@@ -738,24 +750,28 @@ class BilingualKeyboardService : InputMethodService() {
             insertSpace(ic, key)
             return
         }
+        val written = if (addressField) SENTENCE_END_IN_ADDRESS else SENTENCE_END
 
         ic.beginBatchEdit()
         ic.deleteSurroundingText(spaces, 0)
-        ic.commitText(SENTENCE_END, 1)
+        ic.commitText(written, 1)
         ic.endBatchEdit()
 
-        if (expectedCursor >= 0) expectedCursor += SENTENCE_END.length - spaces
+        if (expectedCursor >= 0) expectedCursor += written.length - spaces
         popTrail()
         if (keyboardView.trailEnabled) {
             trail.addFirst(TrailEntry(key, alternate = false))
             publishTrail()
         }
 
-        // The spaces that were there are gone and a full stop and space stand
-        // in their place; either way the word ended.
-        word.insert(SENTENCE_END)
+        // The spaces that were there are gone and a full stop stands in their
+        // place; either way the word ended.
+        word.insert(written)
         refreshSuggestions()
 
+        // The stop between two parts of an address is not the end of anything,
+        // so `www.` must not be followed by `Example`.
+        if (addressField) return
         shifted = true
         keyboardView.shifted = true
     }
@@ -1514,6 +1530,12 @@ class BilingualKeyboardService : InputMethodService() {
 
         /** What a double tap on space writes. */
         const val SENTENCE_END = ". "
+
+        /**
+         * And what it writes in a field holding an address (D54), where the
+         * stop joins two parts of one token rather than closing a sentence.
+         */
+        const val SENTENCE_END_IN_ADDRESS = "."
 
         /**
          * Enough to see the spaces a double tap should swallow and the

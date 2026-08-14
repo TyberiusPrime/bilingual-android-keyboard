@@ -378,15 +378,15 @@ object Layouts {
             buildList {
                 addAll(
                     symbolRow(
+                        // A time is the other thing a number layer is used for,
+                        // so the stop leads with a colon: 14:30 needs one more
+                        // than it needs an ellipsis.
                         "." to listOf(":", "…"),
                         "," to emptyList(),
                         "7" to emptyList(),
                         "8" to emptyList(),
                         "9" to emptyList(),
                         "0" to emptyList(),
-                        // A time is the other thing a number layer is used for,
-                        // and 14:30 needs the colon more than it needs an
-                        // ellipsis.
                     ),
                 )
                 add(Key("⌫", KeyAction.Backspace, repeats = true))

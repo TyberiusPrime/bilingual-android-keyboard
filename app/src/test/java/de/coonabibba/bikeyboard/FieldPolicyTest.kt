@@ -205,6 +205,46 @@ class FieldPolicyTest {
         )
     }
 
+    // -- addresses, where a full stop is not the end of anything (D54) --------
+
+    /**
+     * The double tap on space writes `". "` in prose. Here the same character
+     * separates the parts of one token, and the space would break the address
+     * in half.
+     */
+    @Test
+    fun `a URL or an email address is an address, not prose`() {
+        listOf(
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+        ).forEach { assertTrue("variation $it", FieldPolicy.isAddressField(text(it))) }
+    }
+
+    @Test
+    fun `ordinary prose fields are not addresses`() {
+        assertFalse(FieldPolicy.isAddressField(text()))
+        assertFalse(FieldPolicy.isAddressField(multiLine))
+        assertFalse(FieldPolicy.isAddressField(text(InputType.TYPE_TEXT_VARIATION_LONG_MESSAGE)))
+        assertFalse(FieldPolicy.isAddressField(text(InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)))
+        assertFalse(FieldPolicy.isAddressField(InputType.TYPE_CLASS_NUMBER))
+        assertFalse(FieldPolicy.isAddressField(InputType.TYPE_CLASS_PHONE))
+    }
+
+    /**
+     * A different question from [FieldPolicy.suggestionsAllowed], which lets a
+     * URI field through on purpose: on a phone the address bar is the search
+     * bar (D39c), so words are offered there. What one keystroke *writes* is
+     * not the same as whether to offer words, and this is a keystroke nobody
+     * presses mid-search.
+     */
+    @Test
+    fun `the address bar still gets its suggestions`() {
+        val uri = text(InputType.TYPE_TEXT_VARIATION_URI)
+        assertTrue(FieldPolicy.isAddressField(uri))
+        assertTrue(FieldPolicy.suggestionsAllowed(uri))
+    }
+
     // -- what the enter key is in this field (D49) ----------------------------
 
     private val multiLine = text(InputType.TYPE_TEXT_FLAG_MULTI_LINE)

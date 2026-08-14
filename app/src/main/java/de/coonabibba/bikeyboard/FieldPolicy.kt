@@ -118,6 +118,35 @@ object FieldPolicy {
         else -> "→"
     }
 
+    /**
+     * Whether what goes in this field is an **address** rather than prose — a
+     * URL or an email address (D54).
+     *
+     * Asked because of the full stop. In prose a full stop ends a sentence and
+     * a space follows it, which is what D6's double tap on space writes. In
+     * `example.com` and `john@coonabibba.de` the very same character separates
+     * the parts of one unbroken token, and a space after it does not tidy the
+     * text up — it breaks the address in half.
+     *
+     * Deliberately not the same question as [suggestionsAllowed], which lets a
+     * URI field through on purpose (D39c: on a phone the address bar is the
+     * search bar, and people type far more searches into it than addresses).
+     * That is about whether to *offer* words. This is about what one keystroke
+     * writes, and it is a keystroke nobody presses mid-search: a double tap on
+     * space is for ending a sentence, and a search is not one.
+     */
+    fun isAddressField(inputType: Int): Boolean {
+        if (inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
+        return when (inputType and InputType.TYPE_MASK_VARIATION) {
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+            -> true
+
+            else -> false
+        }
+    }
+
     fun isNumeric(inputType: Int): Boolean =
         when (inputType and InputType.TYPE_MASK_CLASS) {
             InputType.TYPE_CLASS_NUMBER,

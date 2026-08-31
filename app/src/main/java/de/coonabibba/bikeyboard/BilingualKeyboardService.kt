@@ -1539,9 +1539,11 @@ class BilingualKeyboardService : InputMethodService() {
 
         /**
          * Enough to see the spaces a double tap should swallow and the
-         * character in front of them.
+         * character in front of them: two spaces at most, and one code point,
+         * which is two chars when it is an emoji (D55). Three sufficed while
+         * only a letter could end a sentence, and cut every emoji in half.
          */
-        const val SENTENCE_LOOKBEHIND = 3
+        const val SENTENCE_LOOKBEHIND = 4
 
         /**
          * Enough to see a sentence mark, any closing quotes after it, and the

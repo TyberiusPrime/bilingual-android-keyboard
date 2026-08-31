@@ -2848,6 +2848,67 @@ search is not one. The two questions look alike and have opposite answers for
 the same field, which is the third time this document has had to separate a pair
 like that (D40's learning from suggesting, D49's action from the flag).
 
+### D55 — `hi 🙂` is a finished sentence
+
+The double tap did nothing after an emoji. The test for "is there something
+here to put a stop after" read one `Char` and asked whether it was a letter or
+a digit — and an emoji is *two* chars, so what it read was the second half of a
+surrogate pair. Half a surrogate is not a letter, so the gesture declined, and
+declined silently, which is the worst way for a gesture to fail: nothing appears
+and there is nothing to work out from.
+
+Two things were wrong and both are worth naming, because the first is the kind
+of bug that hides behind the second.
+
+**A `Char` is not a character.** Anything asking "what sort of thing is this" of
+text out of a real field has to ask it of a **code point**. `codePointBefore`
+costs nothing and is right for every alphabet, not only for emoji: the same
+line now also answers correctly for anything outside the basic plane. And the
+window the service reads back had to grow from three characters to four, since
+three is one short of two swallowed spaces plus a two-char code point — a
+narrow window that silently cut the very thing being asked about.
+
+**Letter-or-digit was too small a question.** Even read properly, an emoji is
+not a letter — Unicode files it as a symbol. The rule is now letters, digits, a
+full stop, and pictographs, where pictographs are named by Unicode *category*
+rather than by ranges, because emoji are not one range and the ranges move with
+every revision.
+
+The categories are `OTHER_SYMBOL` for the pictograph itself, and then the kinds
+of piece a *sequence* can end with, since only its last code point is ever
+looked at: a skin tone is a `MODIFIER_SYMBOL`, a variation selector a
+`NON_SPACING_MARK`, a keycap ring an `ENCLOSING_MARK`, and the tag terminator
+that closes 🏴󠁧󠁢󠁳󠁣󠁴󠁿 a `FORMAT`. Those pieces are accepted outright rather than
+walked back to the base they attach to: a mark that attaches to something means
+what that something means, and a combining accent after a letter is a letter
+either way. It lets a few strays in — `^`, a backtick and an acute are modifier
+symbols too — and that is a fair price for never having to know how any
+particular emoji is spelled.
+
+**Where the gesture fires, in full.** `TextEditsTest` holds this same list, so
+it is checked rather than described:
+
+| After | Double tap on space |
+|---|---|
+| a letter or digit, in any script — `wort`, `2024`, `λόγος`, `Straße` | `. ` |
+| any emoji, in any of its shapes — `🙂`, `👍🏽`, `☀️`, `1️⃣`, `🇩🇪`, `👨‍👩‍👧`, `🏴󠁧󠁢󠁳󠁣󠁴󠁿` | `. ` |
+| another pictograph — `20°`, `©`, `™` | `. ` |
+| a full stop already there | `. ` again, so three taps spell `...` |
+| a sentence mark — `!`, `?`, `…` | nothing; a plain space |
+| a mark a sentence carries on after — `,`, `;`, `:` | nothing |
+| a closing bracket or quote — `)`, `"`, `”` | nothing |
+| `%`, `€`, `$`, `#`, `/`, `=`, `+`, `-`, `_` | nothing |
+| a newline, the start of the field, or three or more spaces | nothing |
+
+And in a URL or email field it writes `.` rather than `. `, with no capital
+armed after it (D54).
+
+**The closing bracket and the closing quote are the line's one soft spot.**
+`(beiseite) ` and `"zitat" ` would both take a stop in real writing, and neither
+gets one. Left as it was rather than widened on the way past: this decision was
+about emoji, the change would touch text this keyboard handles constantly, and
+it is one entry in a list when somebody wants it.
+
 ---
 
 ## Architecture

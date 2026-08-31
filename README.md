@@ -96,6 +96,13 @@ names.
 
 ### Unreleased
 
+- **The double tap on space works after an emoji** (D55). It read one `Char`
+  and asked whether it was a letter; an emoji is two chars, so it was reading
+  half a surrogate pair and quietly declining. It reads a code point now, and
+  the question widened from "letter or digit" to "letter, digit, full stop or
+  pictograph" — every shape of emoji included, skin tones, flags, keycaps and
+  joined families. `docs/design.md` D55 has the full table of what does and
+  does not take a stop.
 - **The double tap on space writes just the stop in an address field** (D54).
   `". "` is right in prose and wrong in an address bar: `example. com` is not a
   domain. In URL and email fields the gesture now writes `.` alone, and arms no

@@ -33,8 +33,13 @@ object TextEdits {
      * three double taps spell `...` — otherwise a trip to the symbol layer for
      * something people type constantly.
      *
-     * Zero after other punctuation, after a newline, after a deliberate run of
+     * Zero after a sentence mark, after a newline, after a deliberate run of
      * three or more spaces, or at the very start. `!.` is not a thing.
+     *
+     * What counts as something to put a stop after is [endsAWord], and it is
+     * asked about a **code point** rather than a `Char` (D55) — an emoji is two
+     * chars, and reading only the second of them found half a surrogate pair,
+     * which is not a letter, so `hi 🙂 ` refused the gesture.
      */
     fun spacesBeforeSentenceEnd(before: CharSequence?): Int {
         if (before == null) return 0
@@ -46,11 +51,72 @@ object TextEdits {
             spaces++
         }
         if (spaces == 0) return 0
-        val index = before.length - spaces - 1
-        if (index < 0) return 0
-        val preceding = before[index]
-        return if (preceding.isLetterOrDigit() || preceding == '.') spaces else 0
+        val end = before.length - spaces
+        if (end <= 0) return 0
+        return if (endsAWord(Character.codePointBefore(before, end))) spaces else 0
     }
+
+    /**
+     * Whether a full stop belongs after [codePoint] (D6, D55).
+     *
+     * Three kinds of thing, and the third is why this exists:
+     *
+     * - **A letter or digit**, in any script — `Character.isLetterOrDigit`
+     *   takes a code point, so this is not only ASCII and not only the Latin
+     *   alphabet.
+     * - **A full stop**, which is what makes the gesture repeat into `...`.
+     * - **An emoji**, or anything else pictographic. `hi 🙂` is a finished
+     *   sentence in every way that matters, and the stop after it is the one
+     *   people were reaching for.
+     *
+     * The emoji test is by Unicode category rather than by a range list,
+     * because emoji are not one range and the ranges move with every Unicode
+     * revision. One category is the pictograph itself — `OTHER_SYMBOL`, which
+     * is 😀 and ☀ and a flag's regional indicators, and also °, © and ™, which
+     * end a sentence just as well. The other four are the kinds of piece an
+     * emoji *sequence* can end with, since the test only ever sees its last
+     * code point: a skin tone (`MODIFIER_SYMBOL`), a variation selector
+     * (`NON_SPACING_MARK`), a keycap ring (`ENCLOSING_MARK`), and the tag
+     * terminator that closes 🏴󠁧󠁢󠁳󠁣󠁴󠁿 and its two siblings (`FORMAT`).
+     *
+     * Accepting the pieces outright, rather than walking back to the base they
+     * attach to, is deliberate: a mark that attaches to something means what
+     * that something means, and a combining accent after a letter is a letter
+     * either way. It brings a few strays with it — `^`, a backtick and an acute
+     * are modifier symbols too — which is a fair price for never having to know
+     * how any particular emoji is spelled.
+     *
+     * **A closing bracket or a quote counts too** (D56). `(beiseite) ` and
+     * `„zitat“ ` are finished sentences with something wrapped round the end of
+     * them, and the stop goes outside the bracket. Brackets are a category —
+     * `END_PUNCTUATION`, so `)`, `]` and `}` and nothing that opens — but
+     * quotes cannot be, because on this keyboard they have no fixed side:
+     * [QUOTES] already says why, and `“` that closes a German quotation opens
+     * an English one. So every quote is accepted, whichever end it usually
+     * belongs to, and the cost is that a quotation *opened* and then abandoned
+     * before a double tap gets a stop it did not want. That costs a keystroke;
+     * refusing every German closing quote would cost the feature.
+     */
+    private fun endsAWord(codePoint: Int): Boolean = when {
+        Character.isLetterOrDigit(codePoint) -> true
+        codePoint == '.'.code -> true
+        codePoint in QUOTE_CODE_POINTS -> true
+        else -> Character.getType(codePoint) in TYPES_THAT_END_A_WORD
+    }
+
+    private val TYPES_THAT_END_A_WORD: Set<Int> = setOf(
+        // The pictographs, and the pieces an emoji sequence can end with (D55).
+        Character.OTHER_SYMBOL,
+        Character.MODIFIER_SYMBOL,
+        Character.NON_SPACING_MARK,
+        Character.ENCLOSING_MARK,
+        Character.FORMAT,
+        // What closes a bracket, and only what closes one (D56).
+        Character.END_PUNCTUATION,
+    ).map { it.toInt() }.toSet()
+
+    /** [QUOTES], plus the apostrophe that ends an English plural possessive. */
+    private val QUOTE_CODE_POINTS: Set<Int> = (QUOTES.toList() + '\'').map { it.code }.toSet()
 
     /** A run longer than this was typed on purpose and is left alone. */
     private const val MAX_SWALLOWED_SPACES = 2

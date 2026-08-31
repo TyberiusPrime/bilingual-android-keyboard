@@ -2601,6 +2601,337 @@ context-ranked strip (D47) overtook it — but this is the fix that would have
 been needed either way, since the space bar finishes a word exactly as a stroke
 does.
 
+### D49 — The enter key belongs to the field, and says what it will do
+
+**Enter in a chat box hid the keyboard instead of starting a new line.** In
+Telegram, and in every other app whose message box is an ordinary multi-line
+`EditText`. The key read `imeOptions & IME_MASK_ACTION`, found
+`IME_ACTION_DONE`, and performed it.
+
+The action was really there. What was also there, and was not read, is
+`IME_FLAG_NO_ENTER_ACTION` — which `TextView` sets on **every** multi-line
+field while still filling in `DONE` or `NEXT`, because the two are answers to
+different questions. The action is what the *action button* does. The flag is
+whether the *enter key* is allowed to do it. A multi-line field says: put an
+action on your button if you have one, and put a line break in my text when
+enter is pressed. Reading half of that pair is reading the field wrong, and it
+is a mistake with an unusually bad failure mode, because "submit" in a chat app
+means the half-finished message is sent.
+
+So the field is asked one question when focus arrives — what is the enter key
+here? — and it has three answers:
+
+- **`IME_FLAG_NO_ENTER_ACTION`, and lines to put a break in: a newline.** The
+  flag wins over any action the field also advertises. This is the chat box,
+  and it is the common case that was broken.
+- **A real action: perform it**, and *label the key with it*. `↵` on a search
+  box is a lie: nothing about that keystroke adds a line, and the picture of a
+  line being added is the only thing on the key. So the glyph becomes the act —
+  `→` to hand the text over, `✓` to finish, `⇥` and `⇤` to move between fields.
+  Words would say more and do not fit on a key this size, quite apart from D2
+  leaving no one language to write them in. Go, search and send share `→`
+  because they are one act: give it up and expect the screen to change.
+- **Neither: no key at all**, and its width goes to the space bar.
+
+**The third answer is deliberately narrow, and the instinct behind it was to go
+wider.** The tempting rule is "no enter key on single-line fields" — nothing
+there can hold a line break, and a key that inserts one is the D38 trap: an
+event the field cannot consume does not stop, it becomes focus navigation, the
+focus leaves, and the keyboard goes with it. That is very nearly the reported
+bug from the other end.
+
+It is still the wrong rule, because on a single-line field the enter key is not
+a newline key at all — it is the only way this keyboard can submit a search, a
+login or a web form. Two thirds of those do not even show up as an action:
+Chromium hands over `IME_ACTION_NONE` for a great many single-line inputs and
+the page listens for the key press itself, which is also why the newline branch
+sends `KEYCODE_ENTER` rather than committing a `"\n"` — a field with an editor
+action listener hears the first and not the second. Taking the key away there
+would trade a bug that sends a message early for one that cannot send anything
+at all.
+
+What is left for the third answer is the case with genuinely nothing in it: a
+single-line field that has set `NO_ENTER_ACTION`, forbidding the action, while
+having no line to break. Rare, and the only place where removing the key costs
+nothing.
+
+**The decision is taken once, when focus arrives, and the key is drawn from
+it** — rather than the label coming from one reading of the field and the
+behaviour from another. That is the shape of the original bug and it is now
+unrepresentable: `FieldPolicy.enterKey` returns the label and the action id
+together or returns nothing.
+
+### D50 — A long suggestion loses its front, not its end
+
+A candidate too wide for its slot was cut at the end: `Geschwindigkeitsbe…`.
+Which throws away the only part that is news. **The front of a suggestion is
+what you have already typed** — you are looking at it in the field above, you
+just pressed the keys — and the tail is the keyboard's entire contribution.
+Eliding the tail leaves three slots showing the same prefix back to you.
+
+So the ellipsis moves to the front: `…digkeitsbegrenzung`. Between two long
+candidates sharing a prefix, which is the case that produces long candidates in
+the first place, this is also the only version that tells them apart.
+
+**The plus on the add-word offer is not part of the word and does not go.**
+That slot (D40) says "remember this", and the entries it says it about are
+addresses and paths — the longest things the strip ever holds, so the elision
+lands there more than anywhere. A `…coonabibba.de` where a `+ …coonabibba.de`
+belongs reads as a candidate, and tapping a candidate replaces your text.
+`StripEntry` therefore splits into a marker that cannot be elided and a body
+that can, rather than the view being asked to know which entries begin with
+something special.
+
+### D51 — A second door into the personal store, for the things with spaces in
+
+D40 settled what the personal key remembers: **whatever is between the spaces**,
+because the eye's delimiter is the right one for `john@coonabibba.de` and the
+word tokeniser's is not. That is still right, and it has a consequence that only
+shows up once the store is in daily use — **a phrase cannot be asked for at
+all.** `Anna Maria`, `mit freundlichen Grüßen`, a street name with a space in
+it: the gesture is a hold on one key while typing one word, and there is no
+version of it that means "and the last two words as well".
+
+So the launcher screen, which already lists the store and can take things out
+of it, gets a field that puts things in. Typed there, an entry goes in as it
+stands.
+
+**It does not loosen D8.** Nothing is absorbed silently; this is somebody typing
+a thing and pressing Add, which is a request in the same sense a hold on the
+personal key is. Nor does it loosen D40's rule for the key itself, which is
+still the fast path and still stops at the space.
+
+**The quick tick is on the field, not only on the row it produces.** Putting the
+entry on the + key's menu is the usual reason for typing one in — a phrase is
+precisely the thing you want inserted whole rather than completed towards — and
+the list below is alphabetical, so hunting for the entry you added a second ago
+in order to tick a box is a step with nothing in it. Unticked takes nothing off
+the menu, though: that is what the row is for, and a field that quietly undid a
+setting because the box happened to be empty would be a trap.
+
+**What the format cannot carry is turned into a space rather than refused.** An
+entry is a line, and the quick marker sits behind a tab, so a pasted line break
+would come back as two entries with one of them nonsense, and a pasted tab would
+name half the phrase a marker. `PersonalStore.clean` collapses every run of
+whitespace to one space and trims the ends — one door, one rule, and the store's
+own format decides it rather than the screen.
+
+**A phrase behaves as a long word everywhere else, which was checked rather than
+hoped.** It completes from its opening in the strip, since `completions` matches
+a folded prefix and a space folds to itself. It can never be *substituted* on
+space: corrections come from the lexicon scan alone (D28), and the personal
+store is only ever a source of candidates. And a swipe cannot produce one — the
+gesture decoder has no key for a space, so the stroke never matches.
+
+### D52 — A third layer, which is a calculator
+
+The digits were reachable two ways and neither was any good for typing an actual
+number. On the letter layer they are long-presses (D17), which is right for the
+stray `7` in a sentence and wrong for a phone number — ten holds. On the symbol
+layer they are a cramped top row above nine keys of punctuation, at letter
+width, with the arithmetic scattered through the two rows below: `+` next to
+`-`, `%` three keys away, `×` and `÷` only behind a hold on `+`.
+
+So there is a third layer, and it is a **calculator**:
+
+```
+1 2 3   +  -   (  )
+4 5 6   ×  ÷   %  =
+7 8 9   0  .   ,  ⌫
+```
+
+**Three rows of seven equal keys, so the columns line up.** That is the whole
+argument for a layer of its own rather than a rearranged symbol layer: a digit
+here is nearly half as wide again as one on the symbol row, and the ten of them
+form a block the thumb can find without looking.
+
+**Dialpad order, not calculator order.** `1 2 3` on top is what every phone
+shows and what dialling has taught the thumb; `7 8 9` on top belongs to a
+machine with a numeric keypad beside its keyboard, and this is not one. What the
+calculator lends is its *symbols* — the arithmetic gathered in one place — not
+its geometry.
+
+**Both decimal separators, side by side.** D2 has German and English live in the
+same paragraph and they do not agree on which of `.` and `,` splits a number.
+`12.50` and `12,50` are the same price, so neither can be the one behind a hold.
+
+**`×` and `÷` lead; `*` and `/` are one hold behind.** The glyphs are what
+arithmetic looks like written down and are what most things that parse a sum
+will take. The ASCII pair is what a spreadsheet or a shell wants, so it sits
+where every other alternate sits, drawn in the corner (D17). The minus key runs
+the other way — it types the plain hyphen, because a date range, a phone number
+and a hyphenated word all want that one, and the true `−` leads its alternates.
+
+**How the layer is reached is D53's business**, and the first answer — a ring
+under the layer key, letters to symbols to numbers and round — did not survive
+a day of use.
+
+**A numeric field opens here** rather than on the symbol layer, which is the
+same decision the field-policy check was already making, sent somewhere better.
+A PIN pad gets a PIN pad, and neither one has to show a field nine punctuation
+keys it will not accept.
+
+### D53 — The third layer is behind a hold, not a third step
+
+D52 put the number layer in a ring: one press of the layer key for the symbols,
+two for the numbers, three back to the letters. It reads well and it is wrong,
+and the reason is worth writing down because it is a general one.
+
+**The ring charges every trip for the rarest one.** Letters to symbols and back
+is the walk everybody makes dozens of times a day — a comma, a bracket, a colon,
+and straight back to writing. The numbers are somewhere you go to type a whole
+number and then leave. Making the third layer a third step on the same ring
+takes the two-press round trip that pair had and makes it three, so the common
+journey pays for the rare one on every single lap. The cost does not show up in
+a diagram of the state machine; it shows up in the thumb.
+
+So the two gestures the key already has are split by how often each destination
+is wanted:
+
+- **A tap is the toggle it always was.** Letters and symbols, one press each
+  way. From the numbers a tap also lands on the letters, since that is what
+  "back" means from anywhere that is not the letters.
+- **A hold reaches the numbers, and leaves them.** From either of the other two
+  layers it goes there; from the numbers it comes home. A switch, not a door:
+  a hold that did nothing on the third layer would be the inert control this
+  project has already caught itself shipping twice (D38's toggle, D40's
+  setting), and the rule there was that a control which silently does nothing
+  is worse than one that is absent.
+
+**The hold is advertised in the corner of the key**, which is where every other
+key on this board says what a hold gives (D17). It needed a field of its own —
+`Key.holdHint` — precisely because it is *not* an alternate: putting `123` in
+`longPress` would have drawn the same hint and then opened a popup that typed
+it, and the popup would have raced the layer change. The two things looked
+identical from the outside and are opposites underneath, which is exactly when a
+separate field earns its keep.
+
+The label still names where a *tap* goes, so it now reads `?123` on the letters
+and `ABC` on both of the others. Two layers sharing a label is not the collision
+it looks like: the label is a signpost to a destination, and two rooms can have
+a door to the same hall.
+
+**And the hold fires on the timer, not on release**, like the personal key's
+(D40). The board changes under the finger the moment it is held long enough,
+which is both the confirmation — no buzz needed, the whole keyboard just moved —
+and the reason the release must then produce no tap, or the layer would change
+twice.
+
+### D54 — In an address, the stop is not the end of anything
+
+D6's double tap on space writes `". "`, because in prose a full stop is followed
+by a space and the whole point of the gesture is that neither has to be reached
+for. In an address bar it writes the wrong thing: `example. com` is not a
+domain, and the space put there to tidy the sentence up is the one character
+that breaks the address in two. So in a field that holds an address, the same
+gesture writes the stop alone.
+
+**Same character, different job.** `example.com` and `john@coonabibba.de` have
+full stops inside them joining the parts of one unbroken token. Nothing ends at
+one, which is also why **no capital is armed** afterwards there — `www.` must
+not be followed by `Example`. The two halves of D6's behaviour, the trailing
+space and the re-armed shift, are both consequences of a sentence having ended,
+and both come off together where none has.
+
+**Which fields.** URI, and the two email-address variations. The email fields
+were not in the report and are in for the identical reason: an address with
+stops in it, where a space after one is never wanted. It is one entry in a
+`when` if that turns out to be wrong.
+
+**Not the same question as whether to suggest.** D39c deliberately lets a URI
+field keep its suggestions — on a phone the address bar is the search bar, and
+people type far more searches into it than addresses — so this could not reuse
+`suggestionsAllowed` and does not. That one is about whether to *offer* words.
+This is about what a single keystroke *writes*, and it is a keystroke nobody
+presses in the middle of a search: a double tap on space ends a sentence, and a
+search is not one. The two questions look alike and have opposite answers for
+the same field, which is the third time this document has had to separate a pair
+like that (D40's learning from suggesting, D49's action from the flag).
+
+### D55 — `hi 🙂` is a finished sentence
+
+The double tap did nothing after an emoji. The test for "is there something
+here to put a stop after" read one `Char` and asked whether it was a letter or
+a digit — and an emoji is *two* chars, so what it read was the second half of a
+surrogate pair. Half a surrogate is not a letter, so the gesture declined, and
+declined silently, which is the worst way for a gesture to fail: nothing appears
+and there is nothing to work out from.
+
+Two things were wrong and both are worth naming, because the first is the kind
+of bug that hides behind the second.
+
+**A `Char` is not a character.** Anything asking "what sort of thing is this" of
+text out of a real field has to ask it of a **code point**. `codePointBefore`
+costs nothing and is right for every alphabet, not only for emoji: the same
+line now also answers correctly for anything outside the basic plane. And the
+window the service reads back had to grow from three characters to four, since
+three is one short of two swallowed spaces plus a two-char code point — a
+narrow window that silently cut the very thing being asked about.
+
+**Letter-or-digit was too small a question.** Even read properly, an emoji is
+not a letter — Unicode files it as a symbol. The rule is now letters, digits, a
+full stop, and pictographs, where pictographs are named by Unicode *category*
+rather than by ranges, because emoji are not one range and the ranges move with
+every revision.
+
+The categories are `OTHER_SYMBOL` for the pictograph itself, and then the kinds
+of piece a *sequence* can end with, since only its last code point is ever
+looked at: a skin tone is a `MODIFIER_SYMBOL`, a variation selector a
+`NON_SPACING_MARK`, a keycap ring an `ENCLOSING_MARK`, and the tag terminator
+that closes 🏴󠁧󠁢󠁳󠁣󠁴󠁿 a `FORMAT`. Those pieces are accepted outright rather than
+walked back to the base they attach to: a mark that attaches to something means
+what that something means, and a combining accent after a letter is a letter
+either way. It lets a few strays in — `^`, a backtick and an acute are modifier
+symbols too — and that is a fair price for never having to know how any
+particular emoji is spelled.
+
+**Where the gesture fires, in full.** `TextEditsTest` holds this same list, so
+it is checked rather than described:
+
+| After | Double tap on space |
+|---|---|
+| a letter or digit, in any script — `wort`, `2024`, `λόγος`, `Straße` | `. ` |
+| any emoji, in any of its shapes — `🙂`, `👍🏽`, `☀️`, `1️⃣`, `🇩🇪`, `👨‍👩‍👧`, `🏴󠁧󠁢󠁳󠁣󠁴󠁿` | `. ` |
+| another pictograph — `20°`, `©`, `™` | `. ` |
+| a full stop already there | `. ` again, so three taps spell `...` |
+| a closing bracket, or any quote — `)`, `]`, `}`, `"`, `“`, `»`, `'` (D56) | `. ` |
+| a sentence mark — `!`, `?`, `…` | nothing; a plain space |
+| a mark a sentence carries on after — `,`, `;`, `:` | nothing |
+| an opening bracket — `(`, `[`, `{` | nothing |
+| `%`, `€`, `$`, `#`, `/`, `=`, `+`, `-`, `_`, `>` | nothing |
+| a newline, the start of the field, or three or more spaces | nothing |
+
+And in a URL or email field it writes `.` rather than `. `, with no capital
+armed after it (D54).
+
+### D56 — The stop goes outside the bracket
+
+D55's table had one line that read wrong: `(beiseite) ` and `„zitat“ ` are
+finished sentences with something wrapped round the end of them, and both were
+refused. The stop belongs *outside* the bracket in both languages, which is
+exactly the keystroke the gesture exists to save.
+
+**Brackets are a category and quotes are not.** `END_PUNCTUATION` is `)`, `]`
+and `}` and nothing that opens, so a bracket costs one more entry in the same
+list D55 built. Quotes cannot be settled that way, and the reason is already
+written down two functions further along in the same file: **on this keyboard a
+quote has no fixed side.** German writes `„Fairphone“` and English writes
+`“Fairphone”`, so `“` closes one language's quotation and opens the other's, and
+D2 has both live in the same paragraph. Unicode agrees with the English
+convention and files `“` as an *initial* quote, which would refuse every German
+quotation that ever ended.
+
+So every quote is accepted, whichever end it usually belongs to — the same
+answer `tokenAtCursor` reached when it decided to trim quotes off both ends of
+a word (D40), and for the same reason. The apostrophe comes with them, since
+`die Jungs' ` ends a sentence in English too.
+
+**What that costs is stated rather than hidden**, and there is a test that
+holds it: a quotation *opened* and then abandoned before a double tap — `„ ` —
+gets a stop it did not want. One keystroke to undo, in a case nobody types on
+purpose. The alternative is refusing every German closing quote, which is not a
+cost but the absence of the feature.
+
 ---
 
 ## Architecture

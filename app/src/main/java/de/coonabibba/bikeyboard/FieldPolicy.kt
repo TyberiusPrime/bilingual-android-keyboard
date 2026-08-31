@@ -4,6 +4,31 @@ import android.text.InputType
 import android.view.inputmethod.EditorInfo
 
 /**
+ * What the enter key does in the field being typed into, and what it says while
+ * it is there (D49).
+ *
+ * The key is the one key on the board whose job is decided by the app rather
+ * than by this keyboard, so it is the one key that has to be told what it is
+ * before it can be drawn.
+ */
+sealed interface EnterKey {
+
+    /** The glyph on the key. */
+    val label: String
+
+    /** Put a line break in the text. */
+    data object Newline : EnterKey {
+        override val label: String get() = "↵"
+    }
+
+    /**
+     * Perform the field's editor action — go, search, send, done, next — with
+     * a glyph that says which.
+     */
+    data class Action(val id: Int, override val label: String) : EnterKey
+}
+
+/**
  * What the field being typed into permits, decided from its `inputType` alone.
  *
  * Pure integer logic, kept out of the service so it can be tested without an
@@ -37,6 +62,89 @@ object FieldPolicy {
         if (inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
         return inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0 ||
             inputType and InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE != 0
+    }
+
+    /**
+     * What the enter key should do here, or `null` for "nothing, so do not draw
+     * one" (D49).
+     *
+     * Three inputs and, in this order, three answers:
+     *
+     * - **`IME_FLAG_NO_ENTER_ACTION` means the enter key must not perform the
+     *   action**, whatever action the field also advertises for its button. The
+     *   flag reads like an oddity and is not: `TextView` sets it on every
+     *   multi-line field while *still* filling in `IME_ACTION_DONE` or
+     *   `IME_ACTION_NEXT`, because the action belongs to the action button and
+     *   the enter key belongs to the text. Reading the action and ignoring the
+     *   flag is what made enter in a chat box — Telegram's, and every other
+     *   app whose message field is an ordinary multi-line `EditText` — submit
+     *   the field and take the keyboard away instead of starting a new line.
+     * - **Otherwise a real action is performed**, and the key wears its glyph
+     *   rather than a newline symbol it is not going to produce.
+     * - **Otherwise a newline**, but only where there are lines to hold one.
+     *
+     * A single-line field that forbids the action *and* cannot hold a newline
+     * has nothing left for the key to do, so it does not get one. Note how
+     * narrow that is: the key stays on ordinary single-line fields, because
+     * there it is the only way to submit a search, a login or a web form, and
+     * because sending `KEYCODE_ENTER` is how a field with an editor-action
+     * listener hears about it. What changes there is the label.
+     */
+    fun enterKey(inputType: Int, imeOptions: Int): EnterKey? {
+        val newlineOrNothing = if (isMultiLine(inputType)) EnterKey.Newline else null
+        if (imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return newlineOrNothing
+        val action = imeOptions and EditorInfo.IME_MASK_ACTION
+        return when (action) {
+            EditorInfo.IME_ACTION_NONE, EditorInfo.IME_ACTION_UNSPECIFIED -> newlineOrNothing
+            else -> EnterKey.Action(action, actionLabel(action))
+        }
+    }
+
+    /**
+     * A glyph per editor action, all of them from the arrow and dingbat blocks
+     * every Android font since forever has covered.
+     *
+     * Words would say more — "Send", "Suchen" — and are not an option on a key
+     * this size, quite apart from D2 leaving no one language to write them in.
+     * So the distinctions kept are the ones a thumb needs: *this leaves the
+     * field* (→), *this finishes* (✓), and *this moves between fields* (⇥, ⇤).
+     * Go, search and send are one glyph between them because they are one act:
+     * hand the text over and expect the screen to change.
+     */
+    private fun actionLabel(action: Int): String = when (action) {
+        EditorInfo.IME_ACTION_DONE -> "✓"
+        EditorInfo.IME_ACTION_NEXT -> "⇥"
+        EditorInfo.IME_ACTION_PREVIOUS -> "⇤"
+        else -> "→"
+    }
+
+    /**
+     * Whether what goes in this field is an **address** rather than prose — a
+     * URL or an email address (D54).
+     *
+     * Asked because of the full stop. In prose a full stop ends a sentence and
+     * a space follows it, which is what D6's double tap on space writes. In
+     * `example.com` and `john@coonabibba.de` the very same character separates
+     * the parts of one unbroken token, and a space after it does not tidy the
+     * text up — it breaks the address in half.
+     *
+     * Deliberately not the same question as [suggestionsAllowed], which lets a
+     * URI field through on purpose (D39c: on a phone the address bar is the
+     * search bar, and people type far more searches into it than addresses).
+     * That is about whether to *offer* words. This is about what one keystroke
+     * writes, and it is a keystroke nobody presses mid-search: a double tap on
+     * space is for ending a sentence, and a search is not one.
+     */
+    fun isAddressField(inputType: Int): Boolean {
+        if (inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
+        return when (inputType and InputType.TYPE_MASK_VARIATION) {
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+            -> true
+
+            else -> false
+        }
     }
 
     fun isNumeric(inputType: Int): Boolean =

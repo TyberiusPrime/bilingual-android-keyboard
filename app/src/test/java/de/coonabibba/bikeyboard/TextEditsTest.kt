@@ -55,6 +55,92 @@ class TextEditsTest {
         assertEquals(2, TextEdits.spacesBeforeSentenceEnd("word..  "))
     }
 
+    /**
+     * D55: an emoji is two chars, and looking at only the second of them found
+     * half a surrogate pair — which is not a letter, so the gesture refused.
+     * `hi 🙂` is a finished sentence in every way that matters.
+     */
+    @Test
+    fun `double space ends a sentence after an emoji`() {
+        assertEquals("plain", 1, TextEdits.spacesBeforeSentenceEnd("hi 🙂 "))
+        assertEquals("skin tone", 1, TextEdits.spacesBeforeSentenceEnd("👍🏽 "))
+        assertEquals("variation selector", 1, TextEdits.spacesBeforeSentenceEnd("☀️ "))
+        assertEquals("keycap", 1, TextEdits.spacesBeforeSentenceEnd("1️⃣ "))
+        assertEquals("flag", 1, TextEdits.spacesBeforeSentenceEnd("🇩🇪 "))
+        assertEquals("joined family", 1, TextEdits.spacesBeforeSentenceEnd("👨‍👩‍👧 "))
+        // And it repeats from there like anything else does.
+        assertEquals("repeat", 2, TextEdits.spacesBeforeSentenceEnd("🙂.  "))
+    }
+
+    /**
+     * The window the service reads has to be wide enough to hold the widest
+     * thing this looks at: two swallowed spaces and a two-char code point.
+     */
+    @Test
+    fun `an emoji is still whole in the last few characters of the field`() {
+        val emoji = "🙂"
+        assertEquals("an emoji is two chars", 2, emoji.length)
+        // What the service passes in: the last SENTENCE_LOOKBEHIND characters.
+        val window = "hallo $emoji ".takeLast(4)
+        assertEquals(1, TextEdits.spacesBeforeSentenceEnd(window))
+    }
+
+    /**
+     * D56: a quote has no fixed side on this keyboard — `“` closes a German
+     * quotation and opens an English one — so every quote character is taken
+     * as a closing one. The cost is a quotation opened and abandoned before a
+     * double tap, which is a keystroke; the alternative refuses every German
+     * closing quote, which is the feature.
+     */
+    @Test
+    fun `a quote is a closing quote whichever end it usually belongs to`() {
+        assertEquals("german", 1, TextEdits.spacesBeforeSentenceEnd("„zitat“ "))
+        assertEquals("english", 1, TextEdits.spacesBeforeSentenceEnd("“quote” "))
+        assertEquals("guillemets", 1, TextEdits.spacesBeforeSentenceEnd("»zitat« "))
+        // What that costs, stated so a change to it is a decision and not a
+        // surprise: an opening quote before a double tap takes a stop too.
+        assertEquals("the price", 1, TextEdits.spacesBeforeSentenceEnd("„ "))
+    }
+
+    /** Any script, since the test is a code point and not an ASCII range. */
+    @Test
+    fun `double space ends a sentence after a letter of any script`() {
+        assertEquals("greek", 1, TextEdits.spacesBeforeSentenceEnd("λόγος "))
+        assertEquals("cyrillic", 1, TextEdits.spacesBeforeSentenceEnd("слово "))
+        assertEquals("umlaut", 1, TextEdits.spacesBeforeSentenceEnd("Straße "))
+    }
+
+    /**
+     * The whole rule in one place, because "where does this actually fire?" is
+     * a question worth being able to answer by reading one test (D55).
+     */
+    @Test
+    fun `the full list of what a double tap will put a stop after`() {
+        val fires = listOf(
+            "hallo", "WORD", "2024", // letters and digits
+            "Straße", "café", "λόγος", "слово", // any script, accents and all
+            "🙂", "👍🏽", "☀️", "1️⃣", "🇩🇪", "👨‍👩‍👧", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", // every shape of emoji
+            "20°", "©", "™", // the other pictographs
+            "ende.", // a stop already there: this is what repeats into ...
+            "(beiseite)", "[so]", "{oder}", // brackets, closed
+            "\"zitat\"", "„zitat“", "»zitat«", "‘quote’", "die Jungs'", // and quotes
+            "(really!)", // the mark inside the bracket is inside it
+        )
+        val refuses = listOf(
+            "oh!", "was?", "hm…", // sentence marks: !. is not a thing
+            "erstens,", "so:", "dann;", // the marks a sentence carries on after
+            "(", "[", "{", // an opening bracket is not the end of anything
+            "50%", "12€", "5$", "c#", "a/", "x=", "1+", "e-", "a_", "a>", // the rest
+        )
+
+        fires.forEach {
+            assertEquals("a stop belongs after $it", 1, TextEdits.spacesBeforeSentenceEnd("$it "))
+        }
+        refuses.forEach {
+            assertEquals("no stop after $it", 0, TextEdits.spacesBeforeSentenceEnd("$it "))
+        }
+    }
+
     @Test
     fun `double space does not end a sentence without a word before it`() {
         assertEquals("nothing at all", 0, TextEdits.spacesBeforeSentenceEnd(null))

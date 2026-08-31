@@ -20,7 +20,7 @@ puts it back. The design is being worked out in
 | `app/src/main/java/.../KeyboardLayout.kt` | layout definitions |
 | `app/src/main/java/.../SuggestionStripView.kt` | the suggestion strip |
 | `app/src/main/java/.../DictionarySuggestions.kt` | both languages, one ranking |
-| `app/src/main/java/.../SetupActivity.kt` | setup, and the learned-word list |
+| `app/src/main/java/.../SetupActivity.kt` | setup, and the learned words: add, tick, forget |
 | `app/src/main/java/.../TouchModel.kt` | what each tap nearly hit |
 | `app/src/main/java/.../SpatialEditDistance.kt` | distance in slips, not edits |
 | `app/src/main/java/.../SettingsActivity.kt` | sizes, timings, correction, vibration |
@@ -87,6 +87,62 @@ so the install instructions above work unchanged on a locally built one. The
 release app derives its `versionCode` from the version the same way the
 workflow does, and signs with the committed debug key unless the four
 `RELEASE_*` variables are set — again as the workflow does.
+
+## Changelog
+
+Newest first. Nothing is tagged yet, so everything is unreleased; the reasoning
+behind each entry is in [`docs/design.md`](docs/design.md) under the decision it
+names.
+
+### Unreleased
+
+- **The double tap on space works after a closing bracket or a quote** (D56).
+  `(beiseite) ` and `„zitat“ ` take their stop outside the bracket, as they
+  should. Every quote character counts as a closing one, because on this
+  keyboard they have no fixed side — `“` closes a German quotation and opens an
+  English one.
+- **The double tap on space works after an emoji** (D55). It read one `Char`
+  and asked whether it was a letter; an emoji is two chars, so it was reading
+  half a surrogate pair and quietly declining. It reads a code point now, and
+  the question widened from "letter or digit" to "letter, digit, full stop or
+  pictograph" — every shape of emoji included, skin tones, flags, keycaps and
+  joined families. `docs/design.md` D55 has the full table of what does and
+  does not take a stop.
+- **The double tap on space writes just the stop in an address field** (D54).
+  `". "` is right in prose and wrong in an address bar: `example. com` is not a
+  domain. In URL and email fields the gesture now writes `.` alone, and arms no
+  capital either, since nothing has ended — `www.` must not be followed by
+  `Example`.
+- **A number layer, behind a hold on `?123`** (D52, D53). A calculator: ten
+  digits in a block of equal, generously wide keys, `+ - × ÷ = % ( )` beside
+  them, and both decimal separators — German and English disagree about which
+  of `.` and `,` splits a number, so neither hides behind a hold. `*` and `/`
+  are one hold behind `×` and `÷`. **Tapping** the layer key still swaps
+  letters and symbols one press each way; **holding** it goes to the numbers
+  and holding it again comes back, with `123` in the key's corner to say so. A
+  numeric field opens on it, so a PIN pad is a PIN pad.
+- **A field on the launcher screen adds anything to the personal store, spaces
+  and all** (D51). Holding the + key remembers whatever lies between two spaces
+  (D40), which cannot express a phrase — `Anna Maria`, `mit freundlichen
+  Grüßen`, a street with a space in it. Typed into the new field it goes in as
+  it stands, and the Quick tick beside it puts it straight on the menu the +
+  key opens. A pasted line break or tab becomes a space, since an entry is one
+  line of a file.
+- **The enter key does what the field actually asked for, and says so** (D49).
+  In a chat box — Telegram, and anything else built on a multi-line `EditText`
+  — pressing it submitted the field and hid the keyboard instead of starting a
+  new line, because the field's `IME_ACTION_DONE` was read and its
+  `IME_FLAG_NO_ENTER_ACTION` was not. The flag wins now. Where the key really
+  does perform an action it wears that action's glyph (`→`, `✓`, `⇥`, `⇤`)
+  rather than a `↵` it is not going to honour, and where a field will neither
+  take a newline nor perform an action the key is left off and the space bar
+  takes its width. It stays on ordinary single-line fields: there it is the
+  only way to submit a search, a login or a web form.
+- **A suggestion too long for its slot loses its front, not its end** (D50).
+  `…digkeitsbegrenzung` rather than `Geschwindigkeitsbe…`: the front is what
+  you already typed and can see, the tail is what the keyboard is telling you.
+  The `+` on the add-word offer is exempt — it says what the slot does, so it
+  cannot be the thing that gets cut.
 
 ## Licence
 

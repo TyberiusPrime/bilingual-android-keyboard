@@ -45,8 +45,14 @@
     <string name="action_select">2. Select as active keyboard</string>
     <string name="status_enabled">Status: enabled.</string>
     <string name="status_not_enabled">Status: not enabled yet.</string>
+    <string name="add_word_title">Add a word or phrase</string>
+    <string name="add_word_explanation">Goes in exactly as typed, spaces and all. Holding the + key while typing can only remember a single word \u2014 it takes whatever lies between two spaces \u2014 so this is the way in for a name, a phrase or an address with a space in it.</string>
+    <string name="add_word_hint">Word, phrase or address</string>
+    <string name="action_add">Add</string>
+    <string name="add_word_added">Added %1$s.</string>
+    <string name="add_word_known">%1$s was already known.</string>
     <string name="learned_title">Learned words (%1$d)</string>
-    <string name="learned_empty">Nothing learned yet. Hold the + key while typing a word to remember it, or take the suggestion strip\u2019s offer when it appears.</string>
+    <string name="learned_empty">Nothing learned yet. Hold the + key while typing a word to remember it, take the suggestion strip\u2019s offer when it appears, or type one into the field above.</string>
     <string name="action_forget">Forget</string>
     <string name="settings_section_trace">Typing trace</string>
     <string name="setting_show_trace">Show what was just typed</string>

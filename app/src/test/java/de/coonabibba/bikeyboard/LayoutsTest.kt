@@ -1,6 +1,7 @@
 package de.coonabibba.bikeyboard
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -217,11 +218,160 @@ class LayoutsTest {
         }
     }
 
+    // -- the three layers and the one key that reaches them (D16, D52, D53) ---
+
+    private fun toggleKeyOn(layer: Layer): Key =
+        Layouts.forLayer(layer).rows.flatten().first { it.action == KeyAction.ToggleLayer }
+
+    /**
+     * A tap is the two-way toggle it always was. The numbers are not in this
+     * cycle: a ring of three put the symbols two presses from the letters, and
+     * that is the trip made dozens of times a day.
+     */
     @Test
-    fun `toggling twice returns to the starting layer`() {
+    fun `a tap swaps letters and symbols, and leaves the numbers`() {
+        assertEquals(Layer.SYMBOLS, Layouts.next(Layer.LETTERS))
+        assertEquals(Layer.LETTERS, Layouts.next(Layer.SYMBOLS))
+        assertEquals(Layer.LETTERS, Layouts.next(Layer.NUMBERS))
+    }
+
+    /** A hold is a switch: it reaches the numbers from anywhere, and leaves them. */
+    @Test
+    fun `a hold reaches the numbers and gets back out`() {
+        assertEquals(Layer.NUMBERS, Layouts.held(Layer.LETTERS))
+        assertEquals(Layer.NUMBERS, Layouts.held(Layer.SYMBOLS))
+        assertEquals(Layer.LETTERS, Layouts.held(Layer.NUMBERS))
+        // Never inert, wherever it is pressed: a hold that did nothing on the
+        // third layer would be the dead control this project has shipped twice
+        // already (D38, D40).
         Layer.entries.forEach { layer ->
-            assertEquals(layer, Layouts.other(Layouts.other(layer)))
+            assertTrue("the hold does nothing on $layer", Layouts.held(layer) != layer)
         }
+    }
+
+    /** Every layer is reachable, or one of them may as well not exist. */
+    @Test
+    fun `every layer is one gesture away from the letters`() {
+        assertEquals(
+            Layer.entries.toSet(),
+            setOf(Layer.LETTERS, Layouts.next(Layer.LETTERS), Layouts.held(Layer.LETTERS)),
+        )
+    }
+
+    /** The label names where a tap goes, on every layer, or it is decoration. */
+    @Test
+    fun `the layer key says where a tap leads`() {
+        val expected = mapOf(
+            Layer.LETTERS to Layouts.TO_LETTERS_LABEL,
+            Layer.SYMBOLS to Layouts.TO_SYMBOLS_LABEL,
+            Layer.NUMBERS to Layouts.TO_NUMBERS_LABEL,
+        )
+        Layer.entries.forEach { layer ->
+            assertEquals(
+                "the key on $layer",
+                expected.getValue(Layouts.next(layer)),
+                toggleKeyOn(layer).label,
+            )
+        }
+    }
+
+    /**
+     * And the corner says where a hold goes, in the same place every other key
+     * on this board advertises its hold (D17) — except where the hold would
+     * only repeat the tap, which is nothing worth advertising.
+     */
+    @Test
+    fun `the layer key advertises the numbers in its corner`() {
+        listOf(Layer.LETTERS, Layer.SYMBOLS).forEach { layer ->
+            assertEquals("the corner on $layer", Layouts.TO_NUMBERS_LABEL, toggleKeyOn(layer).holdHint)
+        }
+        assertEquals(null, toggleKeyOn(Layer.NUMBERS).holdHint)
+    }
+
+    /**
+     * The hold has to survive the trip through the view, which only starts its
+     * timer for a key with something at the end of it.
+     */
+    @Test
+    fun `the keys with a hold are the ones that say they have one`() {
+        assertTrue(KeyAction.ToggleLayer.hasHold())
+        assertTrue(KeyAction.Personal.hasHold())
+        assertFalse(KeyAction.Space.hasHold())
+        assertFalse(KeyAction.Shift.hasHold())
+        assertFalse(KeyAction.Text("a").hasHold())
+    }
+
+    /**
+     * A hold on this key never opens a popup, so a corner hint must not be an
+     * alternate as well — the two would race and the popup would win.
+     */
+    @Test
+    fun `the layer key carries no alternates to open`() {
+        Layer.entries.forEach { layer ->
+            assertEquals("alternates on $layer", emptyList<String>(), toggleKeyOn(layer).longPress)
+        }
+    }
+
+    // -- the number layer (D52) -----------------------------------------------
+
+    private val numbers = Layouts.forLayer(Layer.NUMBERS).rows.flatten()
+
+    @Test
+    fun `every digit is a key of its own on the number layer`() {
+        val typed = numbers.mapNotNull { (it.action as? KeyAction.Text)?.text }
+        ('0'..'9').forEach { digit ->
+            assertEquals("digit $digit", 1, typed.count { it == digit.toString() })
+        }
+    }
+
+    /** The arithmetic, which is the reason for the layer rather than a bonus. */
+    @Test
+    fun `the calculator symbols are all here`() {
+        val typed = numbers.mapNotNull { (it.action as? KeyAction.Text)?.text }.toSet()
+        listOf("+", "-", "×", "÷", "=", "%", "(", ")").forEach {
+            assertTrue("$it is not on the number layer", it in typed)
+        }
+        // D2: the two languages disagree about which of these splits a number,
+        // so neither can be the one behind a long-press.
+        assertTrue("no decimal point", "." in typed)
+        assertTrue("no decimal comma", "," in typed)
+    }
+
+    /** What a spreadsheet wants is one hold behind what arithmetic looks like. */
+    @Test
+    fun `the ASCII operators are a hold away`() {
+        val byLabel = numbers.associateBy { it.label }
+        assertEquals("*", byLabel.getValue("×").longPress.first())
+        assertEquals("/", byLabel.getValue("÷").longPress.first())
+        // And the minus is the other way round: the hyphen is what a date range
+        // and a phone number want, so it is the tap.
+        assertEquals("−", byLabel.getValue("-").longPress.first())
+    }
+
+    /**
+     * Three rows of seven, so the digits form a block instead of a staircase.
+     * A number layer whose columns do not line up is just the symbol layer with
+     * different characters on it.
+     */
+    @Test
+    fun `the number rows are one grid`() {
+        val rows = Layouts.forLayer(Layer.NUMBERS).rows.dropLast(1)
+        assertEquals(3, rows.size)
+        assertEquals(listOf(7, 7, 7), rows.map { it.size })
+        rows.forEach { row ->
+            row.forEach { assertEquals("${it.label} is not grid-width", 1f, it.widthWeight, 0f) }
+        }
+    }
+
+    @Test
+    fun `the number layer can delete, in the corner it always is`() {
+        val rows = Layouts.forLayer(Layer.NUMBERS).rows
+        // Last key of the last row above the space bar, as on the other two.
+        listOf(Layer.LETTERS, Layer.SYMBOLS, Layer.NUMBERS).forEach { layer ->
+            val above = Layouts.forLayer(layer).rows.dropLast(1).last()
+            assertEquals("$layer", KeyAction.Backspace, above.last().action)
+        }
+        assertTrue(rows.flatten().count { it.action == KeyAction.Backspace } == 1)
     }
 
     // -- the cursor-steering key and the trail toggle (D38) -------------------
@@ -338,6 +488,76 @@ class LayoutsTest {
                 .first { it.action == KeyAction.Personal }
             assertEquals(emptyList<String>(), personal.longPress)
             assertTrue(personal.label.isNotEmpty())
+        }
+    }
+
+    // -- the enter key, which belongs to the field rather than to us (D49) ----
+
+    private fun enterKeyOf(layout: KeyboardLayout): Key? =
+        layout.rows.flatten().singleOrNull { it.action == KeyAction.Enter }
+
+    /**
+     * The key says what it is about to do, because on a single-line field it is
+     * not going to add a line and a newline glyph there is a lie.
+     */
+    @Test
+    fun `the enter key wears the label the field gave it`() {
+        Layer.entries.forEach { layer ->
+            assertEquals(
+                "layer $layer",
+                EnterKey.Newline.label,
+                enterKeyOf(Layouts.forLayer(layer, enter = EnterKey.Newline))?.label,
+            )
+            val send = EnterKey.Action(id = 4, label = "→")
+            assertEquals(
+                "layer $layer",
+                "→",
+                enterKeyOf(Layouts.forLayer(layer, enter = send))?.label,
+            )
+        }
+    }
+
+    /**
+     * A field that will neither take a newline nor perform an action leaves the
+     * key with nothing to do, and a key that does nothing is worse than a gap.
+     * The width goes to the space bar rather than to a hole in the row.
+     */
+    @Test
+    fun `a field with no use for the enter key gets none, and the space bar takes the room`() {
+        Layer.entries.forEach { layer ->
+            val withKey = Layouts.forLayer(layer, enter = EnterKey.Newline)
+            val without = Layouts.forLayer(layer, enter = null)
+            assertEquals("layer $layer", null, enterKeyOf(without))
+
+            val before = rowContainingSpace(withKey)
+            val after = rowContainingSpace(without)
+            assertEquals("layer $layer lost a key other than enter", before.size - 1, after.size)
+            assertEquals(
+                "layer $layer changed width",
+                before.sumOf { it.widthWeight.toDouble() },
+                after.sumOf { it.widthWeight.toDouble() },
+                1e-6,
+            )
+            // D6 still holds: what the space bar now borders is the row's edge.
+            val spaceIndex = after.indexOfFirst { it.action == KeyAction.Space }
+            assertEquals("something followed the space bar", after.size - 1, spaceIndex)
+        }
+    }
+
+    /**
+     * Everything else about the board is the field's business no more than the
+     * enter key is ours: the rest of the row must not move when it changes.
+     */
+    @Test
+    fun `nothing but the enter key changes with the field`() {
+        Layer.entries.forEach { layer ->
+            val newline = Layouts.forLayer(layer, enter = EnterKey.Newline).rows.flatten()
+            val action = Layouts.forLayer(layer, enter = EnterKey.Action(id = 3, label = "→"))
+                .rows.flatten()
+            assertEquals("layer $layer has a different shape", newline.size, action.size)
+            val differences = newline.indices.filter { newline[it] != action[it] }
+            assertEquals("layer $layer differs in $differences", 1, differences.size)
+            assertEquals(KeyAction.Enter, newline[differences.single()].action)
         }
     }
 

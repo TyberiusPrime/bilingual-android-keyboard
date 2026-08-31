@@ -32,7 +32,27 @@ data class Key(
      * before.
      */
     val steersLines: Boolean = false,
+    /**
+     * A label drawn small in the key's corner that is **not** something a hold
+     * will type — what holding the key does instead (D53).
+     *
+     * A key with [longPress] alternates already advertises its first one there
+     * (D17), which is the idiom this borrows: the corner of a key is where it
+     * says what else it can do. This is for the keys whose hold changes the
+     * keyboard rather than inserting anything, and which therefore have no
+     * alternate to put there.
+     */
+    val holdHint: String? = null,
 )
+
+/**
+ * Whether holding this key means something of its own, popup or not.
+ *
+ * Two keys do: the personal key remembers a word (D40) and the layer key
+ * reaches the numbers (D53). Both need the hold timer even though neither has a
+ * popup at the end of it.
+ */
+fun KeyAction.hasHold(): Boolean = this == KeyAction.Personal || this == KeyAction.ToggleLayer
 
 sealed interface KeyAction {
     /** Insert [text] at the cursor. */
@@ -44,9 +64,10 @@ sealed interface KeyAction {
     data object Space : KeyAction
 
     /**
-     * Switch between the letter and symbol layers.
+     * The one key that changes the board: tapped it swaps letters and symbols,
+     * held it reaches the number layer and leaves it again (D52, D53).
      *
-     * Deliberately a toggle rather than "switch to layer X": there is exactly
+     * Deliberately a step rather than "switch to layer X": there is exactly
      * one layer-toggle key, in exactly one position, and encoding it this way
      * makes a second toggle elsewhere unrepresentable rather than merely
      * discouraged. See D16.
@@ -77,7 +98,16 @@ sealed interface KeyAction {
     data object Personal : KeyAction
 }
 
-enum class Layer { LETTERS, SYMBOLS }
+/**
+ * The three boards: two under the layer key's tap, the third under its hold
+ * (D52, D53).
+ *
+ * [NUMBERS] is a calculator rather than a third page of symbols: ten digits in
+ * a dialpad block, the arithmetic beside them, and both decimal separators,
+ * because D2 has German and English live in the same paragraph and they do not
+ * agree on which of `.` and `,` splits a number.
+ */
+enum class Layer { LETTERS, SYMBOLS, NUMBERS }
 
 data class KeyboardLayout(val rows: List<List<Key>>)
 
@@ -174,6 +204,19 @@ object Layouts {
     /** The personal key (D40). Purple, because it is the one key that learns. */
     const val PERSONAL_LABEL = "+"
 
+    /**
+     * What the layer key says (D52, D53).
+     *
+     * Always the name of where a press goes, never of where you are — a key
+     * labelled with the room you are standing in tells you nothing you cannot
+     * see. [TO_NUMBERS_LABEL] is the odd one: it is not the key's label but the
+     * hint in its corner, because the numbers are behind a *hold*, and a corner
+     * hint is how every other key on this board says what a hold gives (D17).
+     */
+    const val TO_SYMBOLS_LABEL = "?123"
+    const val TO_NUMBERS_LABEL = "123"
+    const val TO_LETTERS_LABEL = "ABC"
+
     private fun symbolRow(vararg specs: Pair<String, List<String>>): List<Key> =
         specs.map { (label, alternates) ->
             Key(label = label, action = KeyAction.Text(label), longPress = alternates)
@@ -192,19 +235,33 @@ object Layouts {
      * argument for the personal key is about every other field: under D8 the
      * store is the only way this keyboard learns anything, and the strip could
      * only offer to add a word when it had a slot going spare.
+     *
+     * [enter] is what the field being typed into makes of the enter key (D49),
+     * and `null` is a field that makes nothing of it: the key is left off and
+     * its width goes to the space bar, since a key that does nothing is worse
+     * than a gap and much worse than more space bar.
+     *
+     * [toggleHint] is what a *hold* on the layer key gives (D53), drawn in its
+     * corner. Null on the layer a hold would only take you where the tap
+     * already goes.
      */
-    private fun bottomRow(toggleLabel: String, inPassword: Boolean): List<Key> = listOf(
-        Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f),
+    private fun bottomRow(
+        toggleLabel: String,
+        toggleHint: String?,
+        inPassword: Boolean,
+        enter: EnterKey?,
+    ): List<Key> = listOfNotNull(
+        Key(toggleLabel, KeyAction.ToggleLayer, widthWeight = 1.5f, holdHint = toggleHint),
         if (inPassword) {
             Key(TRAIL_ON_LABEL, KeyAction.ToggleTrail, widthWeight = 1f)
         } else {
             Key(PERSONAL_LABEL, KeyAction.Personal, widthWeight = 1f)
         },
-        Key("", KeyAction.Space, widthWeight = 5f),
-        Key("↵", KeyAction.Enter, widthWeight = 1.5f),
+        Key("", KeyAction.Space, widthWeight = if (enter == null) 6.5f else 5f),
+        enter?.let { Key(it.label, KeyAction.Enter, widthWeight = 1.5f) },
     )
 
-    private fun buildLetters(inPassword: Boolean) = KeyboardLayout(
+    private fun buildLetters(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
         listOf(
             letterRow("qwertyuiop"),
             letterRow("asdfghjkl"),
@@ -213,7 +270,7 @@ object Layouts {
                 addAll(letterRow("zxcvbnm"))
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("?123", inPassword),
+            bottomRow(TO_SYMBOLS_LABEL, TO_NUMBERS_LABEL, inPassword, enter),
         ),
     )
 
@@ -222,7 +279,7 @@ object Layouts {
      * long-press here, which keeps the single-toggle-position rule (D16)
      * intact rather than adding a second toggle to reach them.
      */
-    private fun buildSymbols(inPassword: Boolean) = KeyboardLayout(
+    private fun buildSymbols(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
         listOf(
             symbolRow(
                 "1" to listOf("¹"), "2" to listOf("²"), "3" to listOf("³"),
@@ -258,28 +315,136 @@ object Layouts {
                 )
                 add(Key("⌫", KeyAction.Backspace, widthWeight = 1.5f, repeats = true))
             },
-            bottomRow("ABC", inPassword),
+            bottomRow(TO_LETTERS_LABEL, TO_NUMBERS_LABEL, inPassword, enter),
         ),
     )
 
     /**
-     * The layouts, built once each. Four rather than two since D40, because a
-     * password field carries a different key next to the layer toggle — and a
-     * layout is a handful of immutable objects, so holding both beats
-     * rebuilding one every time focus moves.
+     * The number layer (D52): a calculator, not a third page of symbols.
+     *
+     * **Seven equal keys in each of the three rows, so the columns line up.**
+     * That is the whole reason this is worth having as a layer of its own: a
+     * digit here is nearly half as wide again as one hiding on the symbol
+     * layer's top row, and the block of them sits under the thumb in the shape
+     * everybody already knows.
+     *
+     * ```
+     * 1 2 3   +  -   (  )
+     * 4 5 6   ×  ÷   %  =
+     * 7 8 9   0  .   ,  ⌫
+     * ```
+     *
+     * **Dialpad order, not calculator order.** `1 2 3` on top is what every
+     * phone in the world shows and what the thumb has learned from dialling;
+     * `7 8 9` on top belongs to a machine with a numeric keypad, and this is
+     * not one. What the calculator lends is the *symbols* — the arithmetic in
+     * one place instead of scattered through the punctuation.
+     *
+     * **Both decimal separators, side by side** (D2). `12.50` and `12,50` are
+     * the same price in the two languages this keyboard is for, and neither is
+     * the odd one out here.
+     *
+     * **`×` and `÷` lead, with `*` and `/` a hold away.** The glyphs are what
+     * arithmetic looks like written down, and are what most things that parse
+     * a sum will take; the ASCII pair is what a spreadsheet or a shell wants,
+     * so it is one hold behind and drawn in the corner like every other
+     * alternate (D17). The minus key is the other way round: it types the
+     * ASCII hyphen, because a phone number, a date range and a hyphenated word
+     * all want that one, and the true `−` leads its alternates.
+     *
+     * Backspace keeps the corner it has on the other two layers rather than the
+     * width — a grid with one key in it wider than the rest is not a grid.
      */
-    val letters = buildLetters(inPassword = false)
-    val symbols = buildSymbols(inPassword = false)
-    private val lettersInPassword = buildLetters(inPassword = true)
-    private val symbolsInPassword = buildSymbols(inPassword = true)
+    private fun buildNumbers(inPassword: Boolean, enter: EnterKey?) = KeyboardLayout(
+        listOf(
+            symbolRow(
+                "+" to listOf("±"),
+                "-" to listOf("−", "–", "—"),
+                "1" to emptyList(),
+                "2" to emptyList(),
+                "3" to emptyList(),
+                "(" to listOf("[", "{", "<"),
+                ")" to listOf("]", "}", ">"),
+            ),
+            symbolRow(
+                "×" to listOf("*"),
+                "÷" to listOf("/"),
+                "4" to emptyList(),
+                "5" to emptyList(),
+                "6" to emptyList(),
+                "%" to listOf("‰", "°"),
+                "=" to listOf("≈", "≠", "≤", "≥"),
+            ),
+            buildList {
+                addAll(
+                    symbolRow(
+                        // A time is the other thing a number layer is used for,
+                        // so the stop leads with a colon: 14:30 needs one more
+                        // than it needs an ellipsis.
+                        "." to listOf(":", "…"),
+                        "," to emptyList(),
+                        "7" to emptyList(),
+                        "8" to emptyList(),
+                        "9" to emptyList(),
+                        "0" to emptyList(),
+                    ),
+                )
+                add(Key("⌫", KeyAction.Backspace, repeats = true))
+            },
+            bottomRow(TO_LETTERS_LABEL, null, inPassword, enter),
+        ),
+    )
 
-    fun forLayer(layer: Layer, inPassword: Boolean = false): KeyboardLayout = when (layer) {
-        Layer.LETTERS -> if (inPassword) lettersInPassword else letters
-        Layer.SYMBOLS -> if (inPassword) symbolsInPassword else symbols
+    /**
+     * The layouts, built once each and kept.
+     *
+     * Two, then four with D40's password variant, and now one per distinct
+     * enter key on top of that (D49) — which is still a handful, since a field
+     * either takes a newline, performs one of five actions, or wants no such
+     * key at all. A layout is a few dozen immutable objects and focus moves
+     * far more often than a new combination turns up, so they are memoised
+     * rather than rebuilt.
+     */
+    private val cache = HashMap<Triple<Layer, Boolean, EnterKey?>, KeyboardLayout>()
+
+    val letters = forLayer(Layer.LETTERS)
+    val symbols = forLayer(Layer.SYMBOLS)
+
+    fun forLayer(
+        layer: Layer,
+        inPassword: Boolean = false,
+        enter: EnterKey? = EnterKey.Newline,
+    ): KeyboardLayout = cache.getOrPut(Triple(layer, inPassword, enter)) {
+        when (layer) {
+            Layer.LETTERS -> buildLetters(inPassword, enter)
+            Layer.SYMBOLS -> buildSymbols(inPassword, enter)
+            Layer.NUMBERS -> buildNumbers(inPassword, enter)
+        }
     }
 
-    fun other(layer: Layer): Layer = when (layer) {
+    /**
+     * Where a **tap** on the layer key goes (D53).
+     *
+     * Letters and symbols, back and forth, exactly as before there was a third
+     * layer — one press each way, which is what the pair is worth. The numbers
+     * are not in this cycle: a ring of three was tried and the second press
+     * back from the symbols is one too many for the trip everybody makes
+     * dozens of times a day.
+     */
+    fun next(layer: Layer): Layer = when (layer) {
         Layer.LETTERS -> Layer.SYMBOLS
-        Layer.SYMBOLS -> Layer.LETTERS
+        Layer.SYMBOLS, Layer.NUMBERS -> Layer.LETTERS
     }
+
+    /**
+     * Where a **hold** on the layer key goes (D53): the numbers, and off them
+     * again.
+     *
+     * A hold that landed you somewhere you could not get out of the same way
+     * would be a one-way door, and one that did nothing on the third layer
+     * would be an inert control — which this project has caught itself
+     * shipping twice (D38, D40). So it is a switch: on, and off.
+     */
+    fun held(layer: Layer): Layer =
+        if (layer == Layer.NUMBERS) Layer.LETTERS else Layer.NUMBERS
 }

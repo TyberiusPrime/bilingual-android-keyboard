@@ -79,6 +79,35 @@ class StripEntryTest {
         assertEquals(Language.GERMAN, added.suggestion.language)
     }
 
+    // -- what a slot may lose when it does not fit (D50) ----------------------
+
+    /**
+     * A candidate is nothing but its word, so the whole of it may go if the
+     * slot is too narrow — from the front, which is the part already typed.
+     */
+    @Test
+    fun `a candidate is all elidable`() {
+        val entry = StripEntry.Word(suggestion("Geschwindigkeitsbegrenzung"))
+        assertEquals("", entry.marker)
+        assertEquals("Geschwindigkeitsbegrenzung", entry.body)
+        assertEquals(entry.body, entry.label)
+    }
+
+    /**
+     * The add-word offer is the one entry with something in front of the word
+     * that is not the word. Eliding from the front would eat the plus first,
+     * and the plus is the whole reason the slot is there — the long entries
+     * are exactly the ones this happens to, since addresses and paths are what
+     * people put in the store (D40).
+     */
+    @Test
+    fun `the plus is not part of what an add-word offer may lose`() {
+        val entry = StripEntry.AddWord("john@coonabibba.de")
+        assertEquals("+ ", entry.marker)
+        assertEquals("john@coonabibba.de", entry.body)
+        assertEquals("+ john@coonabibba.de", entry.label)
+    }
+
     /** Exactly one word gets substituted, so exactly one may be purple. */
     @Test
     fun `only the first match is marked`() {

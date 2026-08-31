@@ -96,6 +96,11 @@ names.
 
 ### Unreleased
 
+- **The double tap on space works after a closing bracket or a quote** (D56).
+  `(beiseite) ` and `„zitat“ ` take their stop outside the bracket, as they
+  should. Every quote character counts as a closing one, because on this
+  keyboard they have no fixed side — `“` closes a German quotation and opens an
+  English one.
 - **The double tap on space works after an emoji** (D55). It read one `Char`
   and asked whether it was a letter; an emoji is two chars, so it was reading
   half a surrogate pair and quietly declining. It reads a code point now, and

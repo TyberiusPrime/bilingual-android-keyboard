@@ -85,6 +85,23 @@ class TextEditsTest {
         assertEquals(1, TextEdits.spacesBeforeSentenceEnd(window))
     }
 
+    /**
+     * D56: a quote has no fixed side on this keyboard — `“` closes a German
+     * quotation and opens an English one — so every quote character is taken
+     * as a closing one. The cost is a quotation opened and abandoned before a
+     * double tap, which is a keystroke; the alternative refuses every German
+     * closing quote, which is the feature.
+     */
+    @Test
+    fun `a quote is a closing quote whichever end it usually belongs to`() {
+        assertEquals("german", 1, TextEdits.spacesBeforeSentenceEnd("„zitat“ "))
+        assertEquals("english", 1, TextEdits.spacesBeforeSentenceEnd("“quote” "))
+        assertEquals("guillemets", 1, TextEdits.spacesBeforeSentenceEnd("»zitat« "))
+        // What that costs, stated so a change to it is a decision and not a
+        // surprise: an opening quote before a double tap takes a stop too.
+        assertEquals("the price", 1, TextEdits.spacesBeforeSentenceEnd("„ "))
+    }
+
     /** Any script, since the test is a code point and not an ASCII range. */
     @Test
     fun `double space ends a sentence after a letter of any script`() {
@@ -105,12 +122,15 @@ class TextEditsTest {
             "🙂", "👍🏽", "☀️", "1️⃣", "🇩🇪", "👨‍👩‍👧", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", // every shape of emoji
             "20°", "©", "™", // the other pictographs
             "ende.", // a stop already there: this is what repeats into ...
+            "(beiseite)", "[so]", "{oder}", // brackets, closed
+            "\"zitat\"", "„zitat“", "»zitat«", "‘quote’", "die Jungs'", // and quotes
+            "(really!)", // the mark inside the bracket is inside it
         )
         val refuses = listOf(
             "oh!", "was?", "hm…", // sentence marks: !. is not a thing
             "erstens,", "so:", "dann;", // the marks a sentence carries on after
-            "(beiseite)", "\"zitat\"", "ende”", // closing brackets and quotes
-            "50%", "12€", "5$", "c#", "a/", "x=", "1+", "e-", "a_", // and the rest
+            "(", "[", "{", // an opening bracket is not the end of anything
+            "50%", "12€", "5$", "c#", "a/", "x=", "1+", "e-", "a_", "a>", // the rest
         )
 
         fires.forEach {

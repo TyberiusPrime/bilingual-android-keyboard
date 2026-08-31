@@ -2894,20 +2894,43 @@ it is checked rather than described:
 | any emoji, in any of its shapes — `🙂`, `👍🏽`, `☀️`, `1️⃣`, `🇩🇪`, `👨‍👩‍👧`, `🏴󠁧󠁢󠁳󠁣󠁴󠁿` | `. ` |
 | another pictograph — `20°`, `©`, `™` | `. ` |
 | a full stop already there | `. ` again, so three taps spell `...` |
+| a closing bracket, or any quote — `)`, `]`, `}`, `"`, `“`, `»`, `'` (D56) | `. ` |
 | a sentence mark — `!`, `?`, `…` | nothing; a plain space |
 | a mark a sentence carries on after — `,`, `;`, `:` | nothing |
-| a closing bracket or quote — `)`, `"`, `”` | nothing |
-| `%`, `€`, `$`, `#`, `/`, `=`, `+`, `-`, `_` | nothing |
+| an opening bracket — `(`, `[`, `{` | nothing |
+| `%`, `€`, `$`, `#`, `/`, `=`, `+`, `-`, `_`, `>` | nothing |
 | a newline, the start of the field, or three or more spaces | nothing |
 
 And in a URL or email field it writes `.` rather than `. `, with no capital
 armed after it (D54).
 
-**The closing bracket and the closing quote are the line's one soft spot.**
-`(beiseite) ` and `"zitat" ` would both take a stop in real writing, and neither
-gets one. Left as it was rather than widened on the way past: this decision was
-about emoji, the change would touch text this keyboard handles constantly, and
-it is one entry in a list when somebody wants it.
+### D56 — The stop goes outside the bracket
+
+D55's table had one line that read wrong: `(beiseite) ` and `„zitat“ ` are
+finished sentences with something wrapped round the end of them, and both were
+refused. The stop belongs *outside* the bracket in both languages, which is
+exactly the keystroke the gesture exists to save.
+
+**Brackets are a category and quotes are not.** `END_PUNCTUATION` is `)`, `]`
+and `}` and nothing that opens, so a bracket costs one more entry in the same
+list D55 built. Quotes cannot be settled that way, and the reason is already
+written down two functions further along in the same file: **on this keyboard a
+quote has no fixed side.** German writes `„Fairphone“` and English writes
+`“Fairphone”`, so `“` closes one language's quotation and opens the other's, and
+D2 has both live in the same paragraph. Unicode agrees with the English
+convention and files `“` as an *initial* quote, which would refuse every German
+quotation that ever ended.
+
+So every quote is accepted, whichever end it usually belongs to — the same
+answer `tokenAtCursor` reached when it decided to trim quotes off both ends of
+a word (D40), and for the same reason. The apostrophe comes with them, since
+`die Jungs' ` ends a sentence in English too.
+
+**What that costs is stated rather than hidden**, and there is a test that
+holds it: a quotation *opened* and then abandoned before a double tap — `„ ` —
+gets a stop it did not want. One keystroke to undo, in a case nobody types on
+purpose. The alternative is refusing every German closing quote, which is not a
+cost but the absence of the feature.
 
 ---
 

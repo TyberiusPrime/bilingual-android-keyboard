@@ -33,7 +33,7 @@ object TextEdits {
      * three double taps spell `...` — otherwise a trip to the symbol layer for
      * something people type constantly.
      *
-     * Zero after other punctuation, after a newline, after a deliberate run of
+     * Zero after a sentence mark, after a newline, after a deliberate run of
      * three or more spaces, or at the very start. `!.` is not a thing.
      *
      * What counts as something to put a stop after is [endsAWord], and it is
@@ -85,20 +85,38 @@ object TextEdits {
      * either way. It brings a few strays with it — `^`, a backtick and an acute
      * are modifier symbols too — which is a fair price for never having to know
      * how any particular emoji is spelled.
+     *
+     * **A closing bracket or a quote counts too** (D56). `(beiseite) ` and
+     * `„zitat“ ` are finished sentences with something wrapped round the end of
+     * them, and the stop goes outside the bracket. Brackets are a category —
+     * `END_PUNCTUATION`, so `)`, `]` and `}` and nothing that opens — but
+     * quotes cannot be, because on this keyboard they have no fixed side:
+     * [QUOTES] already says why, and `“` that closes a German quotation opens
+     * an English one. So every quote is accepted, whichever end it usually
+     * belongs to, and the cost is that a quotation *opened* and then abandoned
+     * before a double tap gets a stop it did not want. That costs a keystroke;
+     * refusing every German closing quote would cost the feature.
      */
     private fun endsAWord(codePoint: Int): Boolean = when {
         Character.isLetterOrDigit(codePoint) -> true
         codePoint == '.'.code -> true
-        else -> Character.getType(codePoint) in PICTOGRAPH_TYPES
+        codePoint in QUOTE_CODE_POINTS -> true
+        else -> Character.getType(codePoint) in TYPES_THAT_END_A_WORD
     }
 
-    private val PICTOGRAPH_TYPES: Set<Int> = setOf(
+    private val TYPES_THAT_END_A_WORD: Set<Int> = setOf(
+        // The pictographs, and the pieces an emoji sequence can end with (D55).
         Character.OTHER_SYMBOL,
         Character.MODIFIER_SYMBOL,
         Character.NON_SPACING_MARK,
         Character.ENCLOSING_MARK,
         Character.FORMAT,
+        // What closes a bracket, and only what closes one (D56).
+        Character.END_PUNCTUATION,
     ).map { it.toInt() }.toSet()
+
+    /** [QUOTES], plus the apostrophe that ends an English plural possessive. */
+    private val QUOTE_CODE_POINTS: Set<Int> = (QUOTES.toList() + '\'').map { it.code }.toSet()
 
     /** A run longer than this was typed on purpose and is left alone. */
     private const val MAX_SWALLOWED_SPACES = 2
